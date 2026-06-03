@@ -1,0 +1,104 @@
+"""The bi-temporal data model. See CLAUDE.md §3.1.
+
+The core invariant: contradicted facts are *invalidated*, never hard-deleted. Every Fact tracks two
+independent time axes so we can answer both "what is true now?" and "what did we believe at time T?":
+
+  * valid time      (valid_at / invalid_at)  -- when the fact is true in the world
+  * transaction time (created_at / expired_at) -- when *we* learned / retracted it
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import Optional
+
+from .util import gen_id, now
+
+
+@dataclass
+class Episode:
+    """A raw, lossless turn or event. Never mutated after ingestion (append-only log)."""
+
+    content: str
+    user_id: str = "default"
+    session_id: str = "default"
+    speaker: str = "user"
+    event_time: float = field(default_factory=now)  # when it happened in the world
+    ingested_at: float = field(default_factory=now)  # when we recorded it
+    embedding: Optional[list[float]] = None
+    consolidated: bool = False
+    id: str = field(default_factory=lambda: gen_id("ep"))
+    metadata: dict = field(default_factory=dict)
+
+
+@dataclass
+class Fact:
+    """An atomic (subject, predicate, object) claim with bi-temporal validity + provenance."""
+
+    subject: str
+    predicate: str
+    object: str
+    text: str = ""  # human-readable rendering, e.g. "Wei works_at Moonshot AI"
+    user_id: str = "default"
+    embedding: Optional[list[float]] = None
+
+    salience: float = 1.0  # importance; boosted on access, decayed over time
+    confidence: float = 1.0
+
+    # --- valid time (world) ---
+    valid_at: float = field(default_factory=now)
+    invalid_at: Optional[float] = None  # None => still true in the world
+
+    # --- transaction time (belief) ---
+    created_at: float = field(default_factory=now)
+    expired_at: Optional[float] = None  # None => still believed
+
+    supersedes: Optional[str] = None  # id of the fact this one replaced (the evolution chain)
+    provenance: list[str] = field(default_factory=list)  # source Episode ids
+
+    last_access: float = field(default_factory=now)
+    access_count: int = 0
+    id: str = field(default_factory=lambda: gen_id("ft"))
+
+    def __post_init__(self) -> None:
+        if not self.text:
+            # render the predicate as natural language ("works_at" -> "works at") so embeddings and
+            # lexical matching see real text, not snake_case tokens.
+            readable = self.predicate.replace("_", " ")
+            self.text = f"{self.subject} {readable} {self.object}".strip()
+
+    @property
+    def slot(self) -> tuple[str, str, str]:
+        """The (user, subject, predicate) key. Two facts sharing a slot are candidate conflicts."""
+        return (self.user_id, self.subject.lower(), self.predicate.lower())
+
+    def is_live(self, as_of: Optional[float] = None) -> bool:
+        """True if this fact is both currently believed and valid-in-world at `as_of`."""
+        t = now() if as_of is None else as_of
+        believed = self.expired_at is None or self.expired_at > t
+        valid = self.valid_at <= t and (self.invalid_at is None or self.invalid_at > t)
+        return believed and valid
+
+
+@dataclass
+class Entity:
+    """A node in the semantic graph. Resolved by (user_id, lowercased name) in the reference impl."""
+
+    name: str
+    type: str = "entity"
+    user_id: str = "default"
+    embedding: Optional[list[float]] = None
+    aliases: list[str] = field(default_factory=list)
+    id: str = field(default_factory=lambda: gen_id("en"))
+
+
+@dataclass
+class Relation:
+    """A directed, bi-temporal edge between two entities, backed by a Fact."""
+
+    subject_id: str
+    predicate: str
+    object_id: str
+    fact_id: str
+    valid_at: float = field(default_factory=now)
+    invalid_at: Optional[float] = None
+    id: str = field(default_factory=lambda: gen_id("rel"))

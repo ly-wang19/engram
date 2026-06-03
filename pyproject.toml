@@ -1,0 +1,46 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "engram-memory"
+version = "0.0.1"
+description = "Engram — an open-source long-term memory engine built to be #1 on every public memory benchmark."
+readme = "README.md"
+requires-python = ">=3.10"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+authors = [{ name = "Engram contributors" }]
+keywords = ["memory", "llm", "agents", "rag", "knowledge-graph", "long-term-memory", "bi-temporal"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3 :: Only",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+# CORE HAS ZERO HARD DEPENDENCIES — the offline demo + tests must run on a bare Python.
+dependencies = []
+
+[project.optional-dependencies]
+# Real embedding/LLM/vector/graph backends slot in behind the same interfaces.
+backends = ["lancedb>=0.6", "numpy>=1.24"]
+llm = ["litellm>=1.40"]
+eval = ["numpy>=1.24"]
+dev = ["pytest>=7.0", "ruff>=0.4"]
+all = ["engram-memory[backends,llm,eval,dev]"]
+
+[project.urls]
+Homepage = "https://github.com/your-org/engram"
+Repository = "https://github.com/your-org/engram"
+
+[tool.hatch.build.targets.wheel]
+packages = ["engram"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

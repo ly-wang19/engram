@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.eggs/
+
+# Caches / tooling
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Virtual envs
+.venv/
+venv/
+env/
+
+# Secrets — never commit
+.env
+*.key
+
+# Local data / scratch
+*.log
+.DS_Store
+data/
+external/
+
+# Keep curated benchmark logs (committable evidence)
+!results/
+results/*.tmp

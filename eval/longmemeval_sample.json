@@ -1,0 +1,80 @@
+[
+  {
+    "question_id": "s_user_1",
+    "question_type": "single-session-user",
+    "question": "Where does the user work?",
+    "answer": "Spotify",
+    "question_date": "2023-08-01",
+    "haystack_session_ids": ["sess_a", "sess_b"],
+    "haystack_dates": ["2023-05-10", "2023-06-02"],
+    "answer_session_ids": ["sess_a"],
+    "haystack_sessions": [
+      [
+        {"role": "user", "content": "I just started a new job at Spotify as a data engineer."},
+        {"role": "assistant", "content": "Congratulations on the new role at Spotify!"}
+      ],
+      [
+        {"role": "user", "content": "I watched a great documentary about the ocean last night."},
+        {"role": "assistant", "content": "Nice, which one?"}
+      ]
+    ]
+  },
+  {
+    "question_id": "ku_1",
+    "question_type": "knowledge-update",
+    "question": "Which city does the user currently live in?",
+    "answer": "Denver",
+    "question_date": "2023-09-01",
+    "haystack_session_ids": ["sess_a", "sess_b", "sess_c"],
+    "haystack_dates": ["2023-01-15", "2023-07-20", "2023-03-04"],
+    "answer_session_ids": ["sess_b"],
+    "haystack_sessions": [
+      [
+        {"role": "user", "content": "I live in Boston, near the harbor."}
+      ],
+      [
+        {"role": "user", "content": "Big update: I moved to Denver last month for a new job."},
+        {"role": "assistant", "content": "Exciting! How do you like Denver so far?"}
+      ],
+      [
+        {"role": "user", "content": "I really enjoy hiking on the weekends."}
+      ]
+    ]
+  },
+  {
+    "question_id": "ms_1",
+    "question_type": "multi-session",
+    "question": "What is the profession of the user's sister who moved to Seattle?",
+    "answer": "pediatrician",
+    "question_date": "2023-10-01",
+    "haystack_session_ids": ["sess_a", "sess_b", "sess_c"],
+    "haystack_dates": ["2023-02-10", "2023-08-22", "2023-04-01"],
+    "answer_session_ids": ["sess_a", "sess_b"],
+    "haystack_sessions": [
+      [
+        {"role": "user", "content": "My sister Maya is a pediatrician at a children's hospital."}
+      ],
+      [
+        {"role": "user", "content": "Maya just moved to Seattle for a fellowship."}
+      ],
+      [
+        {"role": "user", "content": "I bought a new espresso machine and it's wonderful."}
+      ]
+    ]
+  },
+  {
+    "question_id": "abs_1_abs",
+    "question_type": "abstention",
+    "question": "What is the user's favorite sport?",
+    "answer": "",
+    "question_date": "2023-09-15",
+    "haystack_session_ids": ["sess_a"],
+    "haystack_dates": ["2023-06-01"],
+    "answer_session_ids": [],
+    "haystack_sessions": [
+      [
+        {"role": "user", "content": "I work at Adobe on the design tools team."}
+      ]
+    ]
+  }
+]
