@@ -1,5 +1,7 @@
 # Engram
 
+**🌐 English | [中文](README.zh-CN.md)**
+
 **An open-source long-term memory engine for LLM agents — built around one principle: every number we
 publish, you can reproduce.**
 
@@ -83,16 +85,61 @@ print(mem.search("Where does Wei work?", user_id="u1").answer())
 # -> "Moonshot AI"  (the contradicted fact is invalidated, not deleted — history is preserved)
 ```
 
-## How it works (one-paragraph tour)
+## How it works
 
-A dual-process design: a hot **write path** (System-1) appends lossless episodes with no LLM on the
-critical path; an async **consolidation path** (System-2) extracts atomic facts, builds a **bi-temporal**
-knowledge graph (every fact carries both *valid time* and *transaction time*), and resolves contradictions
-non-destructively (`supersedes` chains + `invalid_at`, never hard-delete). The **read path** fuses dense
-semantic + BM25 lexical + graph-proximity + recency/salience retrieval, then assembles a date-stamped,
-provenance-tagged context. The validated finding behind the design: **hybrid retrieval (consolidated facts
-+ raw session chunks) beats either alone** — facts add conflict-resolved/temporal signal, chunks restore
-detail. See [`CLAUDE.md`](CLAUDE.md) §3 for the architecture diagram.
+Engram is a **dual-process** memory system, modeled on the human System-1 / System-2 split: a fast write
+path that never blocks on an LLM, and a slow consolidation path that does the heavy structuring offline.
+
+```mermaid
+flowchart TB
+    ADD([add messages]) --> S1
+    subgraph S1 [SYSTEM-1 · hot write path · no LLM · under 50ms]
+        direction LR
+        S1a[append lossless Episode] --> S1b[identity resolution<br/>across sessions/devices] --> S1c[light embed + enqueue]
+    end
+    S1 -. async queue .-> S2
+    subgraph S2 [SYSTEM-2 · async consolidation · seconds]
+        direction LR
+        S2a[extract atomic Facts] --> S2b[build BI-TEMPORAL graph<br/>entities + relations] --> S2c[cheap conflict detect<br/>non-destructive invalidate] --> S2d[salience scoring + decay]
+    end
+    S2 --> TM
+    subgraph TM [TYPED MEMORY · each type = its own store + retrieval policy]
+        direction LR
+        TMa[(Episodic)]
+        TMb[(Semantic<br/>bi-temporal graph)]
+        TMc[(Profile /<br/>Identity)]
+        TMd[(Procedural)]
+    end
+    TM --> R
+    Q([search query]) --> R
+    subgraph R [READ PATH · hybrid retrieval · under 100ms]
+        direction TB
+        Ra[multi-hop query decomposition] --> Rb[parallel retrieve:<br/>dense vector + BM25 lexical + graph n-hop + recency/salience]
+        Rb --> Rc[Reciprocal Rank Fusion + rerank] --> Rd[bi-temporal as-of filter] --> Re[abstention gate] --> Rf[assemble dated, provenance-tagged context]
+    end
+    Rf --> OUT([answer-ready context])
+```
+
+**The write path (System-1)** appends a lossless episode, resolves identity across sessions/devices, embeds
+and enqueues — no LLM on the critical path, so it stays under ~50ms. **The consolidation path (System-2)**
+runs asynchronously: it extracts atomic `(subject, predicate, object)` facts, builds a knowledge graph, and
+resolves contradictions. **The read path** decomposes the question, retrieves through four complementary
+channels in parallel, fuses and re-ranks them, applies a point-in-time temporal filter, and assembles a
+dated, provenance-tagged context.
+
+### What makes it different
+
+| # | Design choice | Why it matters |
+|---|---|---|
+| 1 | **Bi-temporal facts** — every fact carries *valid time* (true in the world) **and** *transaction time* (when we learned it) | Makes "what did we know on date T?" (`as_of`) and knowledge-updates **first-class**, not bolted-on. This is why knowledge-update scores 93% and temporal 87%. |
+| 2 | **Non-destructive conflict resolution** — a contradicted fact is *invalidated* (`invalid_at` + `supersedes` chain), never deleted | No silent memory corruption. Every fact answers "where did this come from?" and "what did it replace?" — full provenance + audit trail. |
+| 3 | **Cheap conflict detection** — slot-match + embedding/NLI heuristics, escalate to an LLM **only** when ambiguous | Zep/Mem0-class temporal correctness **without** an LLM call per fact — the cost win at scale. |
+| 4 | **Hybrid retrieval** — dense semantic + BM25 lexical + graph proximity + recency/salience, fused with RRF | No single retriever wins everywhere. The *validated* finding: **facts + raw chunks beats either alone** — facts add conflict-resolved/temporal signal, chunks restore lost detail. |
+| 5 | **Dual-process split** — fast write, async consolidation | Read path stays sub-100ms while graph-building, dedup, and conflict resolution happen off the critical path. |
+| 6 | **Pluggable everything** — LLM / embedder / vector store / graph store all sit behind interfaces with **zero-dep offline fallbacks** | `quickstart.py` and `pytest` run with **no API keys, no services**. Swap in BGE / LanceDB / Kuzu / any LLM via one config line. |
+| 7 | **The reproducible harness** — one neutral eval, official judge baked in, full-context baseline in every table, raw logs published | In a field where every vendor's number is contested, *being the scoreboard anyone can verify* is the real moat. |
+
+See [`CLAUDE.md`](CLAUDE.md) §3 for the full data model and conflict-resolution rules.
 
 ## Reproduce the benchmark
 
