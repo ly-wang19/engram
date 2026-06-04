@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
 import { api } from '../lib/api'
 import { useAuth } from '../store/auth'
-import type { FactEdit, FactWrite, Focus } from '../types'
+import type { FactEdit, FactWrite, Focus, Policy } from '../types'
 
 // Query keys are namespaced by the signed-in key so switching accounts never bleeds cache.
 const ns = () => useAuth.getState().apiKey ?? 'anon'
@@ -10,6 +10,7 @@ export const qk = {
   memories: () => ['memories', ns()] as const,
   graph: () => ['graph', ns()] as const,
   focus: () => ['focus', ns()] as const,
+  policy: () => ['policy', ns()] as const,
   health: () => ['health'] as const,
 }
 
@@ -80,4 +81,20 @@ export function useSetFocus() {
 export function useForget() {
   const invalidate = useInvalidateMemory()
   return useMutation({ mutationFn: () => api.forget(), onSuccess: invalidate })
+}
+
+export function usePolicy() {
+  const enabled = !!useAuth((s) => s.apiKey)
+  return useQuery({ queryKey: qk.policy(), queryFn: api.policy, enabled, retry: false })
+}
+
+export function useSetPolicy() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (patch: Partial<Policy>) => api.setPolicy(patch),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: qk.policy() })
+      qc.invalidateQueries({ queryKey: qk.memories() }) // persona may change
+    },
+  })
 }

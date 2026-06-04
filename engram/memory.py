@@ -11,7 +11,22 @@ from typing import Callable, Optional
 
 from .config import Config
 from .consolidate import ConsolidationEngine, reinforce
-from .consolidate.summarizer import ProfileBuilder, SessionSummarizer
+from .consolidate.llm_extractor import EXTRACT_SYSTEM
+from .consolidate.summarizer import (
+    PERSONA_SYSTEM,
+    SESSION_SUMMARY_SYSTEM,
+    ProfileBuilder,
+    SessionSummarizer,
+)
+
+# The editable memory-policy prompts (the console's "提示词" / "要记录什么记忆"). Defaults are the
+# built-in prompts; a per-user override (empty string = use default) is stored in Memory.policy.
+POLICY_DEFAULTS = {
+    "extract_instruction": "",  # additive directive: what to record / what to ignore
+    "extract_system": EXTRACT_SYSTEM,
+    "summary_system": SESSION_SUMMARY_SYSTEM,
+    "persona_system": PERSONA_SYSTEM,
+}
 from .embed import Embedder, HashingEmbedder
 from .ingest import IdentityResolver, Ingestor
 from .llm import LLM
@@ -89,6 +104,11 @@ class Memory:
         #     scoring signal (CLAUDE.md §3.3 w_sal) AND exempts them from decay/eviction (they stay hot).
         #   * mute: topics to suppress -> filtered out of the assembled read context and the persona.
         self.focus: dict[str, list[str]] = {"track": [], "mute": []}
+        # Per-user memory policy: editable prompts + a "what to record" directive (the console's 记忆策略
+        # page). Empty string for a prompt means "use the built-in default". Wired into the real extractor /
+        # summarizer / persona via _apply_policy(), and persisted with the snapshot.
+        self.policy: dict[str, str] = {"extract_instruction": "", "extract_system": "",
+                                       "summary_system": "", "persona_system": ""}
         self._persist_path: Optional[str] = None
         self._rewire()
 
@@ -120,7 +140,7 @@ class Memory:
                 "fact_store": self.fact_store, "cold_store": self.cold_store,
                 "summary_vec": self.summary_vec, "graph": self.graph,
                 "resolver": self.resolver, "persona_cache": self._persona_cache,
-                "focus": self.focus,
+                "focus": self.focus, "policy": self.policy,
             }, fh)
 
     @classmethod
@@ -140,6 +160,8 @@ class Memory:
                 mem.summary_vec = blob["summary_vec"]; mem.graph = blob["graph"]
                 mem.resolver = blob["resolver"]; mem._persona_cache = blob["persona_cache"]
                 mem.focus = blob.get("focus") or {"track": [], "mute": []}
+                mem.policy = blob.get("policy") or {"extract_instruction": "", "extract_system": "",
+                                                    "summary_system": "", "persona_system": ""}
             else:  # legacy 8-tuple snapshot (pre-focus)
                 (mem.episodes_doc, mem.episodes_vec, mem.fact_store, mem.cold_store,
                  mem.summary_vec, mem.graph, mem.resolver, mem._persona_cache) = blob
@@ -167,6 +189,7 @@ class Memory:
         """System-2: extract facts + build the bi-temporal graph from `episodes` (default: all pending).
         Invalidates the persona cache since the live fact set just changed."""
         eps = episodes if episodes is not None else self.ingestor.pending()
+        self._apply_policy()  # honor the user's editable extraction prompt / "what to record" directive
         stats = self.engine.consolidate(eps)
         self._persona_cache.clear()  # facts changed -> any cached persona is stale
         return stats
@@ -302,6 +325,37 @@ class Memory:
         nodes = [{"id": eid, "name": ents[eid].name, "type": ents[eid].type} for eid in touched]
         return {"nodes": nodes, "edges": edges}
 
+    # --- memory policy: editable prompts + a "what to record" directive (the 记忆策略 page) ---
+    def get_policy(self) -> dict:
+        """Return the user's overrides AND the built-in defaults, so the console can show what the
+        effective prompt is and let the user edit from it."""
+        return {"policy": dict(self.policy), "defaults": dict(POLICY_DEFAULTS)}
+
+    def set_policy(self, **fields: str) -> dict:
+        """Update policy fields (extract_instruction / extract_system / summary_system / persona_system).
+        An empty string clears an override (falls back to the default). Applied immediately to the
+        extractor/summarizer so the very next consolidation obeys it."""
+        for k, v in fields.items():
+            if k in self.policy and v is not None:
+                self.policy[k] = v
+        self._apply_policy()
+        self._persona_cache.clear()
+        return self.get_policy()
+
+    def _effective(self, key: str) -> str:
+        """The override if set, else the built-in default."""
+        return self.policy.get(key) or POLICY_DEFAULTS[key]
+
+    def _apply_policy(self) -> None:
+        """Push the current policy into the live extractor + summarizer. Called before each consolidation
+        / summarization / persona build, and whenever the policy changes. Guarded so the offline
+        RuleExtractor (no editable prompt) is simply left alone."""
+        ex = getattr(self.engine, "extractor", None)
+        if ex is not None and hasattr(ex, "system") and hasattr(ex, "instruction"):
+            ex.system = self._effective("extract_system")
+            ex.instruction = self.policy.get("extract_instruction", "")
+        self.summarizer.system = self._effective("summary_system")
+
     # --- L2/L3 abstraction (built during consolidation, stored for a lean read) ---
     def summarize_episodes(self, episodes: list[Episode]) -> int:
         """L2: distill each episode into a compact summary and index it in summary_vec for retrieval.
@@ -309,11 +363,14 @@ class Memory:
         can pull a few session digests instead of dragging whole raw sessions into context."""
         from concurrent.futures import ThreadPoolExecutor
 
+        self._apply_policy()  # honor the user's editable summary prompt
         todo = [ep for ep in episodes if not ep.summary]
         if not todo:
             return 0
         if self.llm is not None and len(todo) > 1:
-            with ThreadPoolExecutor(max_workers=min(8, len(todo))) as pool:
+            import os
+            _sw = int(os.environ.get("ENGRAM_SUMMARIZE_WORKERS", "8"))
+            with ThreadPoolExecutor(max_workers=min(_sw, len(todo))) as pool:
                 summaries = list(pool.map(self.summarizer.summarize, todo))
         else:
             summaries = [self.summarizer.summarize(ep) for ep in todo]
@@ -420,7 +477,8 @@ class Memory:
         mute = self.focus.get("mute", [])
         live = [f for f in self.fact_store.values()
                 if f.user_id == user and f.is_live() and not self._matches(f, mute)]
-        persona = self.profiles.narrative(subject, live, llm=self.llm) if live else ""
+        persona = (self.profiles.narrative(subject, live, llm=self.llm,
+                                           system=self._effective("persona_system")) if live else "")
         track = self.focus.get("track", [])
         if track:  # surface the user's declared priorities in their profile
             line = "FOCUS AREAS (user asked to prioritize): " + ", ".join(track)

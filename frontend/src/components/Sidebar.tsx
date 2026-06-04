@@ -7,6 +7,7 @@ import {
   Search,
   Share2,
   ShieldCheck,
+  SlidersHorizontal,
   Target,
   X,
 } from 'lucide-react'
@@ -21,6 +22,7 @@ const NAV = [
   { to: '/graph', label: '关系图谱', icon: Share2 },
   { to: '/focus', label: '关注点', icon: Target },
   { to: '/conversations', label: '原始对话', icon: MessagesSquare },
+  { to: '/settings', label: '记忆策略', icon: SlidersHorizontal },
   { to: '/privacy', label: '隐私与数据', icon: ShieldCheck },
 ]
 

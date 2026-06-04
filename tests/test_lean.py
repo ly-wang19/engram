@@ -466,3 +466,35 @@ def test_graph_data_has_no_dangling_edges():
     for e in g["edges"]:
         assert e["source"] in ids and e["target"] in ids, "no dangling edge endpoints"
         assert "predicate" in e and "live" in e
+
+
+def test_memory_policy_edits_extraction_and_persists(tmp_path):
+    """The 记忆策略 page is real wiring: a user's 'what to record' directive is appended to the extraction
+    system prompt, full prompt overrides replace the defaults (and clear back to default with ''), and the
+    whole policy survives a save/open round-trip."""
+    class FakeLLM:
+        def complete(self, prompt, system=""):
+            return "[]"
+
+    from engram.consolidate.llm_extractor import EXTRACT_SYSTEM
+    m = Memory(llm=FakeLLM())
+
+    # additive 'what to record' directive flows into the extractor's effective system prompt
+    m.set_policy(extract_instruction="只记录与工作相关的事实")
+    ex = m.engine.extractor
+    assert ex.instruction == "只记录与工作相关的事实"
+    assert "只记录与工作相关的事实" in ex._effective_system()
+    assert EXTRACT_SYSTEM in ex._effective_system()  # default still present, directive appended
+
+    # full override replaces the default, and "" resets to default
+    m.set_policy(extract_system="CUSTOM PROMPT")
+    assert m.engine.extractor.system == "CUSTOM PROMPT"
+    m.set_policy(extract_system="")
+    assert m.engine.extractor.system == EXTRACT_SYSTEM
+
+    # get_policy exposes overrides + the built-in defaults; policy persists
+    gp = m.get_policy()
+    assert set(gp) == {"policy", "defaults"} and len(gp["defaults"]) == 4
+    p = str(tmp_path / "u.pkl")
+    m.save(p)
+    assert Memory.open(p).get_policy()["policy"]["extract_instruction"] == "只记录与工作相关的事实"

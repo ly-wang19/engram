@@ -58,9 +58,14 @@ class ConsolidationEngine:
         # call (no shared state). Cap concurrency at 4: with multiple bench workers each calling this,
         # an 8-wide pool meant ~24 simultaneous relay calls → throttling/backoff that was SLOWER overall.
         # 4 keeps the relay healthy while still collapsing 8 serial waits into ~2 rounds.
+        # Default cap is 4 (keeps the relay healthy under many concurrent bench workers); raise via
+        # ENGRAM_EXTRACT_WORKERS for bulk one-off jobs like seeding a console with a whole dataset, where
+        # this is the only caller and the relay can take the extra fan-out.
+        import os
+        _xw = int(os.environ.get("ENGRAM_EXTRACT_WORKERS", "4"))
         ep_facts: dict[str, list] = {}
         if len(chrono) > 1:
-            with ThreadPoolExecutor(max_workers=min(4, len(chrono))) as pool:
+            with ThreadPoolExecutor(max_workers=min(_xw, len(chrono))) as pool:
                 futs = {pool.submit(self.extractor.extract, ep): ep for ep in chrono}
                 for fut in as_completed(futs):
                     ep = futs[fut]

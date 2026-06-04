@@ -47,6 +47,9 @@ class SessionSummarizer:
     def __init__(self, llm: Optional[LLM] = None, max_excerpt: int = 400) -> None:
         self.llm = llm
         self.max_excerpt = max_excerpt
+        # The active summary system prompt. Defaults to the built-in; a Memory may swap in a per-user
+        # override from its policy (the editable "提示词" in the console).
+        self.system = _SESSION_SUMMARY_SYSTEM
 
     def summarize(self, episode: Episode) -> str:
         if self.llm is None:
@@ -56,7 +59,7 @@ class SessionSummarizer:
         date = episode.metadata.get("date", "")
         prompt = f"Date: {date}\nConversation:\n{episode.content}\n\nDigest:"
         try:
-            out = self.llm.complete(prompt, system=_SESSION_SUMMARY_SYSTEM)
+            out = self.llm.complete(prompt, system=self.system)
             return out.strip() or episode.content[: self.max_excerpt]
         except Exception:  # noqa: BLE001 -- never let summarization break consolidation
             return episode.content[: self.max_excerpt]
@@ -77,9 +80,11 @@ class ProfileBuilder:
                 profile[f.predicate] = f.object
         return profile
 
-    def narrative(self, subject: str, live_facts: list[Fact], llm: Optional[LLM] = None) -> str:
+    def narrative(self, subject: str, live_facts: list[Fact], llm: Optional[LLM] = None,
+                  system: Optional[str] = None) -> str:
         """L3 persona as prose. LLM-synthesized from the live facts when available; otherwise a readable
-        rendering of the deterministic profile dict + the salient facts."""
+        rendering of the deterministic profile dict + the salient facts. `system` overrides the persona
+        prompt (the editable per-user policy)."""
         user_facts = [f for f in live_facts if f.subject.lower() == subject.lower()]
         if not user_facts:
             user_facts = live_facts
@@ -92,11 +97,16 @@ class ProfileBuilder:
             return "\n".join(dict.fromkeys(lines))  # dedupe, preserve order
         facts_block = "\n".join(f"- {f.text}" for f in user_facts[:120])
         try:
-            return self.llm_complete(llm, facts_block)
+            return self.llm_complete(llm, facts_block, system)
         except Exception:  # noqa: BLE001
             return "\n".join(f.text for f in user_facts[:20])
 
     @staticmethod
-    def llm_complete(llm: LLM, facts_block: str) -> str:
-        out = llm.complete(f"User facts:\n{facts_block}\n\nUSER PROFILE:", system=_PERSONA_SYSTEM)
+    def llm_complete(llm: LLM, facts_block: str, system: Optional[str] = None) -> str:
+        out = llm.complete(f"User facts:\n{facts_block}\n\nUSER PROFILE:", system=system or _PERSONA_SYSTEM)
         return out.strip()
+
+
+# Public aliases so the Memory policy layer can expose the built-in prompts as editable defaults.
+SESSION_SUMMARY_SYSTEM = _SESSION_SUMMARY_SYSTEM
+PERSONA_SYSTEM = _PERSONA_SYSTEM

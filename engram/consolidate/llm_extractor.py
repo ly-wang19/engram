@@ -60,13 +60,23 @@ class LLMExtractor:
         self.llm = llm
         self.system = system
         self.template = template
+        # Optional per-user directive appended to the system prompt: WHAT the user wants recorded (or not).
+        # Set from Memory.policy["extract_instruction"] — the headline "要记录什么记忆" knob in the console.
+        self.instruction = ""
         self.self_name: dict[str, str] = {}
 
     def self_of(self, user_id: str) -> str:
         return self.self_name.get(user_id, user_id)
 
+    def _effective_system(self) -> str:
+        if self.instruction.strip():
+            return (self.system + "\n\nADDITIONAL USER DIRECTIVE on what to record — obey it, but still "
+                    "output ONLY the JSON array described above:\n" + self.instruction.strip())
+        return self.system
+
     def extract(self, ep: Episode) -> list[Fact]:
-        raw = self.llm.complete(self.template.format(speaker=ep.speaker, content=ep.content), system=self.system)
+        raw = self.llm.complete(self.template.format(speaker=ep.speaker, content=ep.content),
+                                system=self._effective_system())
         facts: list[Fact] = []
         for item in parse_json_facts(raw):
             subj = str(item.get("subject", "")).strip()

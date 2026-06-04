@@ -10,6 +10,7 @@ import TimelinePage from './pages/TimelinePage'
 import GraphPage from './pages/GraphPage'
 import FocusPage from './pages/Focus'
 import Conversations from './pages/Conversations'
+import Settings from './pages/Settings'
 import Privacy from './pages/Privacy'
 
 export default function App() {
@@ -34,6 +35,7 @@ export default function App() {
         <Route path="graph" element={<GraphPage />} />
         <Route path="focus" element={<FocusPage />} />
         <Route path="conversations" element={<Conversations />} />
+        <Route path="settings" element={<Settings />} />
         <Route path="privacy" element={<Privacy />} />
       </Route>
       <Route path="/login" element={<Navigate to="/" replace />} />

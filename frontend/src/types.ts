@@ -93,3 +93,15 @@ export interface Health {
   service: string
   users_hot: number
 }
+
+export interface Policy {
+  extract_instruction: string
+  extract_system: string
+  summary_system: string
+  persona_system: string
+}
+
+export interface PolicyResponse {
+  policy: Policy // user overrides ("" = use default)
+  defaults: Policy // built-in prompts
+}

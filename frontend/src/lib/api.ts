@@ -6,6 +6,8 @@ import type {
   GraphData,
   Health,
   MemoryDump,
+  Policy,
+  PolicyResponse,
   RecallResult,
   RememberResult,
 } from '../types'
@@ -83,6 +85,11 @@ export const api = {
 
   setFocus: (focus: Partial<Focus>) =>
     request<{ ok: boolean; focus: Focus }>('/v1/focus', { method: 'PUT', body: json(focus) }),
+
+  policy: () => request<PolicyResponse>('/v1/policy'),
+
+  setPolicy: (patch: Partial<Policy>) =>
+    request<{ ok: boolean } & PolicyResponse>('/v1/policy', { method: 'PUT', body: json(patch) }),
 
   forget: () => request<{ ok: boolean; message: string }>('/v1/forget', { method: 'POST', body: json({}) }),
 

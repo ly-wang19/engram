@@ -376,6 +376,33 @@ def put_focus(req: FocusReq, user: str = Depends(auth)):
         return {"ok": True, "focus": focus}
 
 
+# --- memory policy: editable prompts + "what to record" directive (the 记忆策略 page) ---
+class PolicyReq(BaseModel):
+    extract_instruction: Optional[str] = None  # None = leave unchanged; "" = reset to default
+    extract_system: Optional[str] = None
+    summary_system: Optional[str] = None
+    persona_system: Optional[str] = None
+
+
+@app.get("/v1/policy")
+def get_policy(user: str = Depends(auth)):
+    """The user's prompt overrides AND the built-in defaults (so the console can show/edit either)."""
+    return mgr().get(user).get_policy()
+
+
+@app.put("/v1/policy")
+def put_policy(req: PolicyReq, user: str = Depends(auth)):
+    """Set the editable extraction/summary/persona prompts and the 'what to record' directive. Takes
+    effect on the next remember()/consolidation."""
+    m = mgr()
+    with m.lock(user):
+        mem = m.get(user)
+        fields = {k: v for k, v in req.dict().items() if v is not None}
+        result = mem.set_policy(**fields)
+        mem.save()
+        return {"ok": True, **result}
+
+
 # --- ② semantic graph for the 关系图谱 visualization ---
 @app.get("/v1/graph")
 def graph(user: str = Depends(auth)):
