@@ -23,11 +23,18 @@ _SESSION_SUMMARY_SYSTEM = (
     "taken from the digest alone. 1-4 sentences, no preamble, no fluff."
 )
 
+# Structured 4-layer persona, adopted from Tencent Agent-Memory's L3 "deep scan" (Anchors → Interest
+# graph → Interaction protocol → Cognitive core). A structured profile grounds preference/recommendation
+# answers far better than a flat fact dump — it's where Hunyuan/Tencent banked their big preference gains.
 _PERSONA_SYSTEM = (
-    "You maintain a concise USER PROFILE for a long-term memory system. From the user's known facts, write "
-    "a compact profile capturing their identity, stated preferences and dislikes, habits, possessions/tools, "
-    "interests, skills, goals and constraints — with specifics (names, brands, places). Short labeled lines. "
-    "Only what is supported by the facts; do not invent."
+    "You maintain a concise, STRUCTURED user profile for a long-term memory system. From the user's known "
+    "facts, write these compact labeled sections (omit a section if nothing supports it):\n"
+    "  IDENTITY & ANCHORS: name, role/work, location, key relationships, notable possessions/tools.\n"
+    "  INTERESTS & PREFERENCES: hobbies, likes/dislikes, habits, favorite brands/genres/styles — note "
+    "active vs past where the dates show it.\n"
+    "  CONSTRAINTS & GOALS: needs, limits, allergies, current plans, what they're working toward.\n"
+    "  STYLE: how they prefer to be helped / standing instructions, if stated.\n"
+    "Specifics only (names, brands, places, numbers); only what the facts support — do not invent. Tight."
 )
 
 

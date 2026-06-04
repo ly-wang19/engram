@@ -268,7 +268,7 @@ class Memory:
         n_chunks: int = 2,
         persona: bool = True,
         agentic: bool = False,
-        cascade: bool = True,
+        cascade: bool = False,  # _S-optimal off; it's the _M/10M scaling primitive (coarse->fine drill)
         char_budget: int = 60_000,
     ) -> str:
         """The scalable read path (CLAUDE.md Bet A/E): assemble a SMALL, well-organized context from
