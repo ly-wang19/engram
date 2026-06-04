@@ -37,6 +37,10 @@ _ZH: dict[str, str] = {
     "studies": "学 {o}", "learns": "学 {o}", "learning": "在学 {o}", "drives": "开 {o}",
     "practices": "练 {o}", "eats": "吃 {o}", "drinks": "喝 {o}", "cooks": "做 {o}",
     "mentioned": "提到 {o}", "asked": "问过 {o}", "recommends": "推荐 {o}", "considering": "在考虑 {o}",
+    "follows": "关注 {o}", "frequents": "常去 {o}", "frequently_visits": "常去 {o}", "visits": "去 {o}",
+    "uses": "用 {o}", "uses_video_platform": "用 {o}", "uses_platform": "用 {o}", "enrolled_in": "就读 {o}",
+    "had": "做过 {o}", "won": "中了 {o}", "habits": "习惯 {o}", "habit": "习惯 {o}", "wants_to": "想 {o}",
+    "going_to": "要去 {o}", "plans_to_travel": "计划去 {o}", "appointment": "预约 {o}",
 }
 
 # favorite_<x> -> "最喜欢的<x 的中文>是 {o}"
