@@ -8,14 +8,14 @@ version = "0.0.1"
 description = "Engram — an open-source long-term memory engine built to be #1 on every public memory benchmark."
 readme = "README.md"
 requires-python = ">=3.10"
-license = "Apache-2.0"
+license = "AGPL-3.0-only"
 license-files = ["LICENSE"]
 authors = [{ name = "Engram contributors" }]
 keywords = ["memory", "llm", "agents", "rag", "knowledge-graph", "long-term-memory", "bi-temporal"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: Apache Software License",
+    "License :: OSI Approved :: GNU Affero General Public License v3",
     "Programming Language :: Python :: 3 :: Only",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]

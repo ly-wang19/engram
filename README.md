@@ -226,4 +226,13 @@ number we published, that's a bug — open an issue.
 
 ## License
 
-Apache-2.0.
+Engram is **dual-licensed** — pick the arm that fits your use:
+
+- **Open source — [GNU AGPL-3.0](LICENSE).** Free to use, study, modify, and self-host. Note AGPL §13: if
+  you run a modified Engram to provide a network service, you must offer that service's complete source to
+  its users under the AGPL. Internal use, research, and education are unaffected.
+- **Commercial — a separate paid license.** To use Engram in a proprietary/closed-source product or a
+  hosted/SaaS offering *without* the AGPL's source-disclosure obligations, you need a commercial license.
+  See **[`COMMERCIAL-LICENSE.md`](COMMERCIAL-LICENSE.md)**.
+
+In short: **open source is free; commercial use that won't comply with the AGPL requires authorization.**
