@@ -423,3 +423,46 @@ def test_type_weighting_is_relevance_gated_and_embedder_gated():
     mem = build()
     ans = mem.search("Where do I work?", user_id="u1").answer().lower()
     assert "tencent" in ans, "relevance must win — a preference fact must not outrank the employer"
+
+
+def test_focus_track_boosts_salience_and_mute_hides():
+    """The 关注点 panel is REAL wiring, not a label (CLAUDE.md §3.3): a tracked topic boosts a fact's
+    salience (a retrieval-scoring + decay-exemption signal), and a muted topic is dropped from both the
+    assembled read context and the synthesized persona."""
+    mem = Memory()
+    mem.add_fact("user", "uses", "Python", user_id="u1")
+    mem.add_fact("user", "plays", "guitar", user_id="u1")
+    py = next(f for f in mem.fact_store.values() if "python" in f.text.lower())
+    before = py.salience
+
+    mem.set_focus(track=["python"], mute=["guitar"])
+    assert py.salience > before, "tracked topic must boost salience"
+
+    ctx = mem.lean_context("what do I do", user_id="u1", n_chunks=0).lower()
+    assert "python" in ctx, "tracked fact should remain in the read context"
+    assert "guitar" not in ctx, "muted topic must be hidden from the read context"
+
+    persona = mem.build_persona("u1")
+    assert "FOCUS AREAS" in persona, "tracked topics should surface in the profile"
+    assert "guitar" not in persona.lower(), "muted topic must not appear in the persona"
+
+
+def test_focus_persists_across_save_open(tmp_path):
+    mem = Memory()
+    mem.add_fact("user", "uses", "Python", user_id="u1")
+    mem.set_focus(track=["python", "work"], mute=["weight"])
+    p = str(tmp_path / "u.pkl")
+    mem.save(p)
+    assert Memory.open(p).get_focus() == {"track": ["python", "work"], "mute": ["weight"]}
+
+
+def test_graph_data_has_no_dangling_edges():
+    """graph_data() feeds the 关系图谱 view: every edge endpoint must be a returned node, and orphan
+    entities (no surviving edge) are dropped so the picture is about relationships."""
+    mem = build()
+    g = mem.graph_data("u1")
+    assert g["nodes"] and g["edges"], "a consolidated history should yield a non-empty graph"
+    ids = {n["id"] for n in g["nodes"]}
+    for e in g["edges"]:
+        assert e["source"] in ids and e["target"] in ids, "no dangling edge endpoints"
+        assert "predicate" in e and "live" in e

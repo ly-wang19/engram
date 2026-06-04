@@ -84,6 +84,11 @@ class Memory:
         # Working memory: the small, currently-attended set assembled for the latest query (the OS-paging
         # "hot" context). Populated by lean_context; inspectable, transient — distinct from the durable stores.
         self.working_set: list[Fact] = []
+        # User-customized focus areas (the "关注点" panel). NOT cosmetic — genuinely wired:
+        #   * track: topics the user wants emphasized -> salience boost, which is a first-class retrieval
+        #     scoring signal (CLAUDE.md §3.3 w_sal) AND exempts them from decay/eviction (they stay hot).
+        #   * mute: topics to suppress -> filtered out of the assembled read context and the persona.
+        self.focus: dict[str, list[str]] = {"track": [], "mute": []}
         self._persist_path: Optional[str] = None
         self._rewire()
 
@@ -108,8 +113,15 @@ class Memory:
             raise ValueError("no path to save to")
         os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
         with open(path, "wb") as fh:
-            pickle.dump((self.episodes_doc, self.episodes_vec, self.fact_store, self.cold_store,
-                         self.summary_vec, self.graph, self.resolver, self._persona_cache), fh)
+            # Dict format (was a fixed tuple): lets us add fields like `focus` without breaking old
+            # snapshots. open() reads both shapes.
+            pickle.dump({
+                "episodes_doc": self.episodes_doc, "episodes_vec": self.episodes_vec,
+                "fact_store": self.fact_store, "cold_store": self.cold_store,
+                "summary_vec": self.summary_vec, "graph": self.graph,
+                "resolver": self.resolver, "persona_cache": self._persona_cache,
+                "focus": self.focus,
+            }, fh)
 
     @classmethod
     def open(cls, path: str, **kwargs) -> "Memory":
@@ -121,8 +133,16 @@ class Memory:
         mem = cls(**kwargs)
         if os.path.exists(path):
             with open(path, "rb") as fh:
+                blob = pickle.load(fh)
+            if isinstance(blob, dict):  # current format
+                mem.episodes_doc = blob["episodes_doc"]; mem.episodes_vec = blob["episodes_vec"]
+                mem.fact_store = blob["fact_store"]; mem.cold_store = blob["cold_store"]
+                mem.summary_vec = blob["summary_vec"]; mem.graph = blob["graph"]
+                mem.resolver = blob["resolver"]; mem._persona_cache = blob["persona_cache"]
+                mem.focus = blob.get("focus") or {"track": [], "mute": []}
+            else:  # legacy 8-tuple snapshot (pre-focus)
                 (mem.episodes_doc, mem.episodes_vec, mem.fact_store, mem.cold_store,
-                 mem.summary_vec, mem.graph, mem.resolver, mem._persona_cache) = pickle.load(fh)
+                 mem.summary_vec, mem.graph, mem.resolver, mem._persona_cache) = blob
             mem._rewire()
         mem._persist_path = path
         return mem
@@ -223,6 +243,64 @@ class Memory:
         self.cold_store.delete(fact_id)
         self._persona_cache.clear()
         return existed
+
+    # --- focus areas: the "关注点" customization (what memory should emphasize / suppress) ---
+    def set_focus(self, track: Optional[list[str]] = None, mute: Optional[list[str]] = None) -> dict:
+        """Customize what memory prioritizes. Real wiring, not a label:
+          * `track` topics get a salience boost — and salience is a first-class retrieval-scoring signal
+            (CLAUDE.md §3.3 w_sal) and a decay/eviction exemption, so tracked topics genuinely rank higher
+            and stay in the hot tier.
+          * `mute` topics are suppressed from the assembled read context (lean_context) and the persona.
+        Passing None leaves that list unchanged; passing [] clears it."""
+        if track is not None:
+            self.focus["track"] = [t.strip() for t in track if t.strip()]
+        if mute is not None:
+            self.focus["mute"] = [m.strip() for m in mute if m.strip()]
+        self.apply_focus()
+        self._persona_cache.clear()
+        return self.get_focus()
+
+    def get_focus(self) -> dict:
+        return {"track": list(self.focus.get("track", [])), "mute": list(self.focus.get("mute", []))}
+
+    @staticmethod
+    def _matches(f: Fact, terms: list[str]) -> bool:
+        if not terms:
+            return False
+        hay = f.text.lower()
+        return any(t.lower() in hay for t in terms)
+
+    def apply_focus(self, boost: float = 0.5, cap: float = 5.0) -> int:
+        """Boost the salience of every stored fact matching a tracked topic so the user's declared
+        priorities actually rank higher and resist decay/eviction. Capped so repeated edits saturate
+        instead of inflating without bound. Returns the number of facts boosted."""
+        track = self.focus.get("track", [])
+        if not track:
+            return 0
+        n = 0
+        for f in list(self.fact_store.values()) + list(self.cold_store.values()):
+            if self._matches(f, track):
+                f.salience = min(cap, f.salience + boost)
+                n += 1
+        return n
+
+    def graph_data(self, user_id: str = "default", as_of: Optional[float] = None) -> dict:
+        """Export the semantic graph as nodes + edges for the 关系图谱 visualization. Entities are nodes;
+        relations are edges carrying their predicate and bi-temporal (live/superseded) status. Orphan
+        entities (no surviving edge) are dropped so the picture stays about relationships."""
+        user = self.resolver.resolve(user_id)
+        ents = {e.id: e for e in self.graph.entities.values() if e.user_id == user}
+        edges, touched = [], set()
+        for r in self.graph.relations():
+            if r.subject_id not in ents or r.object_id not in ents:
+                continue
+            live = r.invalid_at is None or (as_of is not None and r.invalid_at > as_of)
+            edges.append({"source": r.subject_id, "target": r.object_id,
+                          "predicate": r.predicate.replace("_", " "), "live": live})
+            touched.add(r.subject_id)
+            touched.add(r.object_id)
+        nodes = [{"id": eid, "name": ents[eid].name, "type": ents[eid].type} for eid in touched]
+        return {"nodes": nodes, "edges": edges}
 
     # --- L2/L3 abstraction (built during consolidation, stored for a lean read) ---
     def summarize_episodes(self, episodes: list[Episode]) -> int:
@@ -339,8 +417,14 @@ class Memory:
         if user in self._persona_cache:
             return self._persona_cache[user]
         subject = self.engine.self_name(user)
-        live = [f for f in self.fact_store.values() if f.user_id == user and f.is_live()]
+        mute = self.focus.get("mute", [])
+        live = [f for f in self.fact_store.values()
+                if f.user_id == user and f.is_live() and not self._matches(f, mute)]
         persona = self.profiles.narrative(subject, live, llm=self.llm) if live else ""
+        track = self.focus.get("track", [])
+        if track:  # surface the user's declared priorities in their profile
+            line = "FOCUS AREAS (user asked to prioritize): " + ", ".join(track)
+            persona = (persona + "\n" + line).strip() if persona else line
         self._persona_cache[user] = persona
         return persona
 
@@ -395,6 +479,10 @@ class Memory:
         for f in self._graph_related_facts(query, user, as_of, limit=n_facts):
             fact_map.setdefault(f.id, f)
         all_facts = list(fact_map.values())
+        # Focus "mute": drop facts on topics the user asked to suppress from the read context.
+        mute = self.focus.get("mute", [])
+        if mute:
+            all_facts = [f for f in all_facts if not self._matches(f, mute)]
         # Optional cross-encoder rerank over the FACT pool. Unlike reranking whole sessions (which the
         # cross-encoder truncates to 512 and mis-ranks — a known _S regression), facts are short, so the
         # reranker sharpens fact selection without truncation loss.

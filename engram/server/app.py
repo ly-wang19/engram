@@ -140,10 +140,21 @@ def health():
     return {"ok": True, "service": "engram", "users_hot": len(mgr()._hot)}
 
 
+# The production console (the React app in frontend/) is served at /ui once built; "/" redirects
+# there. When it ISN'T built (fresh clone, tests, the zero-setup demo) we fall back to the tiny inline
+# dashboard below — so the server is always usable with no build step (CLAUDE.md zero-setup invariant).
+_DIST = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "frontend", "dist")
+
+
+def _spa_built() -> bool:
+    return os.path.isfile(os.path.join(_DIST, "index.html"))
+
+
 @app.get("/")
-def viewer():
-    """A tiny built-in dashboard: enter your key, see/manage your own memory in the browser."""
-    from fastapi.responses import HTMLResponse
+def root():
+    from fastapi.responses import HTMLResponse, RedirectResponse
+    if _spa_built():
+        return RedirectResponse(url="/ui/")
     return HTMLResponse(_VIEWER_HTML)
 
 
@@ -168,6 +179,23 @@ input{flex:1}button{cursor:pointer;background:linear-gradient(90deg,#22d3ee,#a78
 .ib:hover{border-color:#22d3ee}.ib.del:hover{border-color:#fb7185;color:#fb7185}
 .lock{font-size:11px;color:#fbbf24;margin-left:6px}
 .addf{display:flex;gap:6px;margin-top:10px}.addf input{flex:1;font-size:13px;padding:7px 10px}
+.tabs{display:flex;gap:6px;margin:18px 0 4px;flex-wrap:wrap}
+.tab{padding:8px 16px;font-size:13.5px;border-radius:10px;background:rgba(255,255,255,.05);font-weight:600;border:1px solid rgba(255,255,255,.1)}
+.tab.on{background:linear-gradient(90deg,#22d3ee,#a78bfa);color:#04121a;border:none}
+.tl{position:relative}.tl:before{content:"";position:absolute;left:90px;top:6px;bottom:6px;width:2px;background:rgba(255,255,255,.1)}
+.tlrow{display:flex;gap:12px;align-items:baseline;padding:8px 0;position:relative}
+.tldate{min-width:74px;color:#22d3ee;font-size:11.5px;text-align:right;flex:none}
+.tldot{width:9px;height:9px;border-radius:50%;background:#34d399;flex:none;align-self:center;z-index:1;box-shadow:0 0 0 3px #070b14}
+.tlrow.superseded .tldot{background:#475569}.tlrow.superseded .tltext{color:#8a97b8;text-decoration:line-through}
+.tltext{font-size:14.5px}
+.upd{font-size:10px;color:#c4b5fd;border:1px solid rgba(167,139,250,.4);border-radius:6px;padding:1px 6px;margin-left:6px;text-decoration:none}
+.old2{font-size:10px;color:#8a97b8;margin-left:6px;text-decoration:none}
+.tags{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0}
+.tag{background:rgba(34,211,238,.14);color:#67e8f9;border-radius:8px;padding:4px 10px;font-size:13px;display:inline-flex;gap:7px;align-items:center}
+.tag.mute{background:rgba(251,113,133,.14);color:#fda4af}
+.tag b{cursor:pointer;opacity:.6;font-weight:400}.tag b:hover{opacity:1}
+.pbtn{margin:6px 10px 6px 0;padding:10px 16px}
+svg text{font-family:system-ui,sans-serif}
 </style></head><body>
 <h1>🧠 我的记忆 <span class=dim>Engram</span></h1>
 <p class=dim>输入你的 API key,看 / 编辑 / 删除你自己的记忆。你手动改的会被锁定 🔒,不会被自动覆盖。</p>
@@ -262,6 +290,7 @@ def memories(user: str = Depends(auth)):
             "invalid_at": fmt_date(f.invalid_at) if f.invalid_at else None,
             "status": "live" if f.is_live() else "superseded",
             "source": f.source,
+            "supersedes": f.supersedes,
             "salience": round(f.salience, 2), "provenance": f.provenance,
         } for f in facts],
         "episodes": [{"date": ep.metadata.get("date") or fmt_date(ep.event_time),
@@ -322,3 +351,85 @@ def remove_fact(fact_id: str, user: str = Depends(auth)):
         ok = mem.delete_fact(fact_id)
         mem.save()
         return {"ok": ok}
+
+
+# --- ③ focus areas: customize what memory emphasizes (track) or suppresses (mute) ---
+class FocusReq(BaseModel):
+    track: Optional[list[str]] = None  # None = leave unchanged; [] = clear
+    mute: Optional[list[str]] = None
+
+
+@app.get("/v1/focus")
+def get_focus(user: str = Depends(auth)):
+    return mgr().get(user).get_focus()
+
+
+@app.put("/v1/focus")
+def put_focus(req: FocusReq, user: str = Depends(auth)):
+    """Set the user's tracked / muted topics. Tracked topics gain salience (rank higher, stay hot);
+    muted topics are hidden from recall + profile."""
+    m = mgr()
+    with m.lock(user):
+        mem = m.get(user)
+        focus = mem.set_focus(track=req.track, mute=req.mute)
+        mem.save()
+        return {"ok": True, "focus": focus}
+
+
+# --- ② semantic graph for the 关系图谱 visualization ---
+@app.get("/v1/graph")
+def graph(user: str = Depends(auth)):
+    """Nodes (entities) + edges (bi-temporal relations) of this user's semantic graph."""
+    return mgr().get(user).graph_data(user)
+
+
+# --- ④ privacy: full data export (GDPR-style portability); erase is POST /v1/forget ---
+@app.get("/v1/export")
+def export(user: str = Depends(auth)):
+    """Download EVERYTHING stored for this user as a single JSON (data portability). Full fidelity:
+    every fact's bi-temporal stamps + provenance, raw episodes, summaries, profile, and focus."""
+    from fastapi.responses import JSONResponse
+
+    from ..util import fmt_date
+    mem = mgr().get(user)
+    data = {
+        "engram_export_version": 1,
+        "user": user,
+        "profile": mem.build_persona(user),
+        "focus": mem.get_focus(),
+        "facts": [{
+            "id": f.id, "subject": f.subject, "predicate": f.predicate, "object": f.object,
+            "text": f.text, "source": f.source, "status": "live" if f.is_live() else "superseded",
+            "salience": round(f.salience, 3), "confidence": f.confidence,
+            "valid_at": f.valid_at, "valid_at_h": fmt_date(f.valid_at),
+            "invalid_at": f.invalid_at, "invalid_at_h": fmt_date(f.invalid_at) if f.invalid_at else None,
+            "created_at": f.created_at, "expired_at": f.expired_at,
+            "supersedes": f.supersedes, "provenance": f.provenance,
+        } for f in sorted(mem.fact_store.values(), key=lambda x: x.valid_at, reverse=True)],
+        "episodes": [{
+            "id": ep.id, "session_id": ep.session_id, "speaker": ep.speaker,
+            "event_time": ep.event_time, "date": ep.metadata.get("date") or fmt_date(ep.event_time),
+            "content": ep.content, "summary": ep.summary,
+        } for ep in mem.episodes_doc.values()],
+        "graph": mem.graph_data(user),
+    }
+    fname = f"engram_{''.join(c for c in user if c.isalnum()) or 'me'}_export.json"
+    return JSONResponse(data, headers={"Content-Disposition": f'attachment; filename="{fname}"'})
+
+
+# --- serve the production console (frontend/dist) as a single-page app under /ui ---
+# Hashed assets come from /ui/assets via StaticFiles; every other /ui path returns index.html so
+# client-side routes (e.g. /ui/facts) survive a hard refresh. Only wired when the SPA is built.
+if _spa_built():
+    from fastapi.responses import FileResponse
+    from fastapi.staticfiles import StaticFiles
+
+    app.mount("/ui/assets", StaticFiles(directory=os.path.join(_DIST, "assets")), name="assets")
+
+    @app.get("/ui")
+    @app.get("/ui/{path:path}")
+    def spa(path: str = ""):
+        candidate = os.path.join(_DIST, path)
+        if path and os.path.isfile(candidate):  # favicon, etc.
+            return FileResponse(candidate)
+        return FileResponse(os.path.join(_DIST, "index.html"))
