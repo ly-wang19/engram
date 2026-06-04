@@ -108,9 +108,9 @@ export default function Ask() {
           </div>
 
           {blocks.length ? (
-            <div className="space-y-4">
+            <div className="gap-4 md:columns-2 xl:columns-3">
               {blocks.map((b, i) => (
-                <Card key={i}>
+                <Card key={i} className="mb-4 break-inside-avoid">
                   <div className="mb-2 text-xs font-semibold uppercase tracking-wider text-brand-cyan">
                     {b.key ? t.ask[b.key] : b.rawLabel}
                   </div>

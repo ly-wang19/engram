@@ -83,7 +83,7 @@ export default function Profile() {
       {data.basic.length > 0 && (
         <Card>
           <CardTitle hint={t.profile.basicHint}>{t.profile.basicTitle}</CardTitle>
-          <div className="grid grid-cols-2 gap-x-6 gap-y-3 sm:grid-cols-3">
+          <div className="grid grid-cols-2 gap-x-6 gap-y-3 sm:grid-cols-3 lg:grid-cols-4">
             {data.basic.map((b) => (
               <div key={b.field}>
                 <div className="text-xs text-ghost">{b.label}</div>

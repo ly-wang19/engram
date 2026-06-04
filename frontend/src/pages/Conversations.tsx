@@ -93,12 +93,12 @@ export default function Conversations() {
       <Card>
         <CardTitle hint={t.conversations.episodesHint(data.episodes.length)}>{t.conversations.episodesTitle}</CardTitle>
         {data.episodes.length ? (
-          <ul className="space-y-3">
+          <ul className="gap-3 md:columns-2">
             {data.episodes
               .slice()
               .reverse()
               .map((e, i) => (
-                <li key={i} className="rounded-xl border border-line bg-white/[0.02] p-4">
+                <li key={i} className="mb-3 break-inside-avoid rounded-xl border border-line bg-white/[0.02] p-4">
                   <div className="mb-1.5 flex items-center gap-2 text-[11px] text-ghost">
                     <span className="rounded bg-white/5 px-1.5 py-px tabular-nums text-brand-cyan">{e.date}</span>
                     <span className="rounded bg-white/5 px-1.5 py-px font-mono">{e.session}</span>

@@ -57,33 +57,35 @@ export default function FocusPage() {
         }
       />
 
-      <Card>
-        <CardTitle hint={t.focus.trackHint}>
-          <span className="inline-flex items-center gap-2">
-            <Star className="h-4 w-4 text-brand-amber" /> {t.focus.trackTitle}
-          </span>
-        </CardTitle>
-        <p className="mb-3 text-sm text-ghost">
-          {t.focus.trackDescPre}
-          <span className="text-slate-200">{t.focus.trackDescEmph}</span>
-          {t.focus.trackDescPost}
-        </p>
-        <TagInput tags={track} onChange={(n) => update('track', n)} placeholder={t.focus.trackPlaceholder} tone="cyan" />
-      </Card>
+      <div className="grid gap-6 lg:grid-cols-2">
+        <Card>
+          <CardTitle hint={t.focus.trackHint}>
+            <span className="inline-flex items-center gap-2">
+              <Star className="h-4 w-4 text-brand-amber" /> {t.focus.trackTitle}
+            </span>
+          </CardTitle>
+          <p className="mb-3 text-sm text-ghost">
+            {t.focus.trackDescPre}
+            <span className="text-slate-200">{t.focus.trackDescEmph}</span>
+            {t.focus.trackDescPost}
+          </p>
+          <TagInput tags={track} onChange={(n) => update('track', n)} placeholder={t.focus.trackPlaceholder} tone="cyan" />
+        </Card>
 
-      <Card>
-        <CardTitle hint={t.focus.muteHint}>
-          <span className="inline-flex items-center gap-2">
-            <BellOff className="h-4 w-4 text-brand-rose" /> {t.focus.muteTitle}
-          </span>
-        </CardTitle>
-        <p className="mb-3 text-sm text-ghost">
-          {t.focus.muteDescPre}
-          <span className="text-slate-200">{t.focus.muteDescEmph}</span>
-          {t.focus.muteDescPost}
-        </p>
-        <TagInput tags={mute} onChange={(n) => update('mute', n)} placeholder={t.focus.mutePlaceholder} tone="rose" />
-      </Card>
+        <Card>
+          <CardTitle hint={t.focus.muteHint}>
+            <span className="inline-flex items-center gap-2">
+              <BellOff className="h-4 w-4 text-brand-rose" /> {t.focus.muteTitle}
+            </span>
+          </CardTitle>
+          <p className="mb-3 text-sm text-ghost">
+            {t.focus.muteDescPre}
+            <span className="text-slate-200">{t.focus.muteDescEmph}</span>
+            {t.focus.muteDescPost}
+          </p>
+          <TagInput tags={mute} onChange={(n) => update('mute', n)} placeholder={t.focus.mutePlaceholder} tone="rose" />
+        </Card>
+      </div>
     </div>
   )
 }
