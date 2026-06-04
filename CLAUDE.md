@@ -260,6 +260,11 @@ extras that slot in behind the same interfaces. We never break the zero-setup de
 - **Every benchmark claim ships with the command to reproduce it.** (Bet D, applied to ourselves.)
 - **Comments explain *why*, not *what*.** The bi-temporal invariants and conflict rules are the kind of
   non-obvious thing that deserves a comment; getters do not.
+- **Numbers, public messaging, commits, and privacy follow [`CONTRIBUTING.md`](CONTRIBUTING.md)** (applies
+  to agents too): every published number traces to a committed `results/*.jsonl` log and stays consistent
+  across README ×2 + RESULTS.md + the landing page; don't name-drop competitors or make unbenchmarked
+  claims ("1M", "SOTA", "#1") in public copy; no AI-attribution trailers in commit messages; never commit
+  real personal data, names, or secrets (use synthetic placeholders).
 
 ---
 
