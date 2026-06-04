@@ -84,4 +84,9 @@ def render_display(subject: str, predicate: str, obj: str, text: str = "", lang:
 
 
 def display_of(fact, lang: str = "auto") -> str:
+    # Prefer the extractor's native-language phrasing (recorded in the source language for ANY predicate);
+    # fall back to localizing the canonical predicate for old facts / offline extraction.
+    native = (getattr(fact, "display", "") or "").strip()
+    if native:
+        return native
     return render_display(fact.subject, fact.predicate, fact.object, getattr(fact, "text", ""), lang)

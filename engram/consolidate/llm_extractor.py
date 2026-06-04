@@ -14,7 +14,7 @@ EXTRACT_SYSTEM = (
     "From a multi-turn conversation, extract the atomic, durable facts it states about the user and the "
     "people/things they mention (identities, attributes, preferences, relationships, possessions, "
     "goals/plans, and events with their times). Output ONLY a JSON array of objects, each with keys "
-    "\"subject\", \"predicate\", \"object\". Use short snake_case predicates (e.g. works_at, lives_in, "
+    "\"subject\", \"predicate\", \"object\", \"text\". Use short snake_case predicates (e.g. works_at, lives_in, "
     "favorite_color, owns, married_to, born_in, visited). Capture PREFERENCES explicitly and completely "
     "with predicates like likes, dislikes, prefers, avoids, allergic_to, favorite_<thing> "
     "(e.g. likes/'spicy food', dislikes/'crowds', prefers/'window seat', allergic_to/'peanuts'). "
@@ -25,6 +25,10 @@ EXTRACT_SYSTEM = (
     "LANGUAGE: keep subject and object VALUES (names, places, brands, products, free text) in the SAME "
     "language the user used — do NOT translate them (keep e.g. \"字节跳动\", not \"ByteDance\"). Only the "
     "predicate stays English snake_case as specified above. "
+    "\"text\" is a natural one-sentence statement of the fact written in the SAME language as the "
+    "conversation (Chinese conversation -> Chinese sentence, English -> English), so the record reads "
+    "naturally in the user's own language. Example: "
+    "{\"subject\":\"李雷\",\"predicate\":\"works_at\",\"object\":\"字节跳动\",\"text\":\"李雷在字节跳动工作\"}. "
     "Do NOT infer or invent facts that are not stated. If there are no durable facts, output []."
 )
 
@@ -109,6 +113,9 @@ class LLMExtractor:
                     subject=subj,
                     predicate=pred,
                     object=obj,
+                    # native-language phrasing from the model (Chinese in -> Chinese record); shown in the
+                    # UI. The canonical English-predicate `text` is still built for embedding/retrieval.
+                    display=str(item.get("text", "")).strip(),
                     user_id=ep.user_id,
                     valid_at=ep.event_time,
                     created_at=ep.ingested_at,
