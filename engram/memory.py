@@ -269,6 +269,7 @@ class Memory:
         persona: bool = True,
         agentic: bool = False,
         cascade: bool = False,  # _S-optimal off; it's the _M/10M scaling primitive (coarse->fine drill)
+        timeline: bool = False,  # add a chronological event timeline (helps temporal ordering/durations)
         char_budget: int = 60_000,
     ) -> str:
         """The scalable read path (CLAUDE.md Bet A/E): assemble a SMALL, well-organized context from
@@ -321,6 +322,13 @@ class Memory:
             by_date = sorted(all_facts, key=lambda f: f.valid_at, reverse=True)  # latest first (updates)
             fl = "\n".join(f"- [{fmt_date(f.valid_at)}] {f.text}" for f in by_date)
             blocks.append(f"FACTS (current, dated):\n{fl}")
+            # TIMELINE: the same facts oldest->newest with explicit gaps, so 'first / most-recent / how long
+            # between' is read off the order and the date arithmetic is set up for the model rather than
+            # left to mental math (the temporal category's main failure mode).
+            if timeline:
+                chrono = sorted(all_facts, key=lambda f: f.valid_at)
+                tl = "\n".join(f"- {fmt_date(f.valid_at)}: {f.text}" for f in chrono)
+                blocks.append(f"TIMELINE (oldest to newest — use for ordering and durations):\n{tl}")
 
         # L2 coarse: retrieve session summaries per (sub-)query, ranked. This is the coarse layer of a
         # coarse-to-fine cascade (CLAUDE.md Bet E / OpenViking): summaries are tiny, so we can index and

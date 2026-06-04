@@ -159,6 +159,36 @@ def test_date_terms_makes_dates_searchable():
     assert "11" in terms
 
 
+def test_weight_tuner_runs_and_scores():
+    """The fusion-weight tuner (CLAUDE.md §4) computes recall@k for a weight set and grid-searches —
+    offline, deterministic. This is what makes 'tuned on the harness' true instead of hand-waved."""
+    from engram.types import Fact
+    from eval.tune_weights import grid_search, mean_recall_at_k
+
+    mem = build()
+    facts = [f for f in mem.fact_store.values()]
+    assert facts
+    relevant = {facts[0].id}
+    dev = [(mem, "u1", "Where do I work?", relevant)]
+    r = mean_recall_at_k(dev, {"w_sem": 1.0, "w_lex": 0.6, "w_graph": 0.8, "w_rec": 0.3, "w_sal": 0.25}, k=10)
+    assert 0.0 <= r <= 1.0
+    best, best_w, base_r = grid_search(dev, k=10)
+    assert set(best_w) == {"w_sem", "w_lex", "w_graph", "w_rec", "w_sal"}
+    assert best >= base_r  # the grid includes the defaults, so best can't be worse
+
+
+def test_timeline_block_is_chronological():
+    """Temporal aid: with timeline=True the facts appear oldest->newest with dates, so ordering and
+    duration are read off the order rather than mentally computed."""
+    mem = build()
+    ctx = mem.lean_context("When did I travel?", user_id="u1", timeline=True, n_chunks=1)
+    assert "TIMELINE" in ctx
+    tl = ctx.split("TIMELINE")[1]
+    import re
+    dates = re.findall(r"(\d{4}-\d{2}-\d{2})", tl.split("SESSION SUMMARIES")[0])
+    assert dates == sorted(dates), "timeline must be chronological (oldest to newest)"
+
+
 def test_cascade_coarse_to_fine_assembles():
     """Coarse-to-fine cascade: detail is drilled from the top-ranked summaries; both modes assemble."""
     mem = build()

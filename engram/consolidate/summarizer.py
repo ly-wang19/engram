@@ -17,10 +17,13 @@ from ..llm import LLM
 from ..types import Episode, Fact
 
 _SESSION_SUMMARY_SYSTEM = (
-    "You compress one dated conversation into a dense, factual digest for a memory index. Capture every "
-    "concrete thing the user states or that happens: facts, preferences, decisions, events, named "
-    "entities, numbers, and plans — specifically enough that a later question could be answered or a count "
-    "taken from the digest alone. 1-4 sentences, no preamble, no fluff."
+    "You compress one dated conversation into a dense, factual digest for a memory index that a later "
+    "question must be answerable FROM THE DIGEST ALONE. Preserve EVERY specific value VERBATIM — never "
+    "generalize or round: exact numbers, quantities, prices, durations, dates/times, proper nouns (people, "
+    "places, brands, products, titles), and counts. List each distinct item the user mentions (so a later "
+    "'how many' can be counted from the digest). Capture preferences, decisions, events and plans. "
+    "Omit only filler and chit-chat. Be terse but COMPLETE on specifics — losing a number or name is the "
+    "one failure that matters. No preamble."
 )
 
 # Structured 4-layer persona, adopted from Tencent Agent-Memory's L3 "deep scan" (Anchors → Interest

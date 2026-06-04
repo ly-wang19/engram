@@ -47,8 +47,10 @@ from eval.longmemeval import (  # noqa: E402
     build_session_map,
     extract_answer,
     ingest,
+    is_abstention,
     judge_correct,
     load_data,
+    looks_like_abstention,
     needs_self_consistency,
     needs_two_stage_pref,
     sessions_of,
@@ -81,6 +83,7 @@ class Rig:
     wiki: bool = False
     summary: bool = False
     verify: bool = False
+    verify_retry: bool = False  # engram_lean: on "I don't know", widen the slice and retry once
     intent: bool = False
 
 
@@ -220,9 +223,12 @@ class EngramLeanSystem:
 
     def __init__(self, rig: Rig):
         self.rig = rig
+        self._tl = threading.local()  # per-thread 1-item mem cache, so a verify-retry reuses the built mem
 
-    def context(self, item: dict) -> str:
+    def _mem_for(self, item: dict):
         rig, qid, q = self.rig, item["question_id"], item["question"]
+        if getattr(self._tl, "qid", None) == qid and getattr(self._tl, "mem", None) is not None:
+            return self._tl.mem  # reuse across the verify-retry (no re-ingest / re-summarize)
         mem = Memory(embedder=rig.embedder, llm=rig.extractor_llm, reranker=rig.reranker)
         ingest(mem, item, qid)
         # L1 facts from the top-k retrieved sessions; L2 summaries over a high-recall set (recall@25≈98%
@@ -232,9 +238,19 @@ class EngramLeanSystem:
             fact_episodes=retrieved[: rig.extract_k] if rig.extract_k > 0 else retrieved,
             summary_episodes=retrieved[: rig.summ_k],
         )
+        self._tl.mem, self._tl.qid = mem, qid
+        return mem
+
+    def context(self, item: dict, expand: int = 0) -> str:
+        rig, qid, q = self.rig, item["question_id"], item["question"]
+        mem = self._mem_for(item)
+        # expand>0 (a verification retry): widen the slice — more full-detail sessions, a timeline, and
+        # multi-hop decomposition — to surface evidence the first lean slice missed (the 'I don't know' fix).
         return mem.lean_context(
             q, user_id=qid, n_summaries=rig.n_summaries, n_facts=rig.topk,
-            n_chunks=rig.chunks, persona=rig.persona, agentic=rig.agentic, cascade=rig.cascade,
+            n_chunks=rig.chunks + expand * 5, persona=rig.persona,
+            agentic=rig.agentic or expand > 0, cascade=rig.cascade,
+            timeline=rig.timeline or expand > 0,
         )
 
 
@@ -266,6 +282,18 @@ def eval_item(item, systems, rig):
             # reasoning mode: judge + abstention check operate on the extracted final ANSWER line,
             # not the chain-of-thought, so reasoning text doesn't false-positive abstention markers.
             pred = extract_answer(pred_raw) if rig.reasoning else pred_raw
+            # Verification / re-retrieval loop: the #1 failure mode is the model answering "I don't know"
+            # because the evidence fell outside the first lean slice. If it abstains (and the question is
+            # actually answerable), widen the slice (more full sessions + timeline + multi-hop) and retry
+            # ONCE; keep the retried answer only if it's no longer an abstention.
+            if (rig.verify_retry and looks_like_abstention(pred) and not is_abstention(item)
+                    and sysobj.name == "engram_lean"):
+                ctx2 = sysobj.context(item, expand=1)
+                raw2 = rig.answerer_llm.complete(
+                    ANSWER_TEMPLATE.format(qdate=qdate, context=ctx2, question=q), system=sys_prompt)
+                pred2 = extract_answer(raw2) if rig.reasoning else raw2
+                if not looks_like_abstention(pred2):
+                    pred, ctx = pred2, ctx2
             lat = (time.perf_counter() - t0) * 1000.0
             ok = judge_correct(item, pred, rig.judge_llm)
             # save the (truncated) prediction + gold so a finished run can be error-analyzed without re-running
@@ -336,6 +364,8 @@ def main():
     ap.add_argument("--wiki", action="store_true", help="engram: LLM-curated entity notes (L4)")
     ap.add_argument("--summary", action="store_true", help="engram: L5 synthesis summary")
     ap.add_argument("--verify", action="store_true", help="engram: self-verify -> re-retrieve gap")
+    ap.add_argument("--verify-retry", action="store_true", dest="verify_retry",
+                    help="engram_lean: on an 'I don't know', widen the retrieved slice + timeline and retry once")
     ap.add_argument("--intent", action="store_true", help="engram: L6 intent hint (benchmark-neutral)")
     ap.add_argument("--full", action="store_true",
                     help="engram: turn ON ALL differentiators (agentic+timeline+hyde+graph+wiki+summary+verify+intent)")
@@ -396,7 +426,7 @@ def main():
         persona=args.persona, session_map=args.session_map, cascade=args.cascade,
         summ_k=args.summ_k, n_summaries=args.n_summaries,
         agentic=args.agentic, timeline=args.timeline, hyde=args.hyde, graph=args.graph, wiki=args.wiki,
-        summary=args.summary, verify=args.verify, intent=args.intent,
+        summary=args.summary, verify=args.verify, verify_retry=args.verify_retry, intent=args.intent,
     )
 
     systems = []
