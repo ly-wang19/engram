@@ -104,7 +104,7 @@ core and a multi-hop read path.
                       │  1. query understanding + MULTI-HOP decomposition (planner)   │
                       │  2. parallel retrieve: dense vec + BM25 lexical + graph n-hop │
                       │     + recency/salience scoring                                │
-                      │  3. fusion: Reciprocal Rank Fusion + cross-encoder rerank     │
+                      │  3. fusion: Reciprocal Rank Fusion + optional rerank          │
                       │  4. BI-TEMPORAL "as-of" filtering (what we believed at T)     │
                       │  5. ABSTENTION gate (answer not in memory → say so)           │
                       │  6. assemble context: dedup, provenance-tagged, token-budgeted│

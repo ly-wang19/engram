@@ -200,7 +200,7 @@ flowchart TB
 and enqueues — no LLM on the critical path, so it stays under ~50ms. **The consolidation path (System-2)**
 runs asynchronously: it extracts atomic `(subject, predicate, object)` facts, builds a knowledge graph, and
 resolves contradictions. **The read path** decomposes the question, retrieves through four complementary
-channels in parallel, fuses and re-ranks them, applies a point-in-time temporal filter, and assembles a
+channels in parallel, fuses them with RRF (optional cross-encoder rerank), applies a point-in-time temporal filter, and assembles a
 dated, provenance-tagged context.
 
 ### What makes it different
