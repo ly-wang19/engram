@@ -97,6 +97,7 @@ export interface RememberResult {
 export interface RecallResult {
   context: string
   tokens_est: number
+  answer?: string // the answer an agent would give from this memory (LLM over the lean context)
 }
 
 export interface FactWrite {

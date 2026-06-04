@@ -60,6 +60,10 @@ class MemoryManager:
         self.embedder = make_embedder(os.environ.get("ENGRAM_EMBEDDER", "bge-small"))
         llm_name = os.environ.get("ENGRAM_LLM", "")
         self.llm = make_llm(llm_name) if llm_name else None  # no LLM -> deterministic rule extractor
+        # answerer for /v1/recall (the console's 问答) — a stronger model than the extractor when set;
+        # otherwise reuse the main LLM. Lets the Ask page show a real answer, not just the context.
+        answerer_name = os.environ.get("ENGRAM_ANSWERER", "")
+        self.answerer = make_llm(answerer_name) if answerer_name else self.llm
         from ..config import Config
         self.config = Config()
         # opt-in System-2 LLM conflict detection -> the detect->confirm loop (needs an LLM)
@@ -267,12 +271,29 @@ def remember(req: RememberReq, user: str = Depends(auth)):
                 "total_facts": len([f for f in mem.fact_store.values() if f.is_live()])}
 
 
+_ANSWER_SYSTEM = (
+    "你是用户的记忆助手。只依据下面提供的【记忆】回答用户的问题,简洁、准确、口语化。"
+    "带日期的事实里最新的优先(这是知识更新);如果记忆里确实没有相关信息,就直接说「记忆里暂时没有这条」。"
+)
+
+
+def _answer_from_memory(answerer, query: str, ctx: str) -> str:
+    """Generate an answer from the assembled lean context — what an agent using this memory would say."""
+    if answerer is None or not ctx.strip():
+        return ""
+    try:
+        return answerer.complete(f"【记忆】\n{ctx}\n\n【问题】{query}", system=_ANSWER_SYSTEM).strip()
+    except Exception:  # noqa: BLE001 -- never let answering break recall
+        return ""
+
+
 @app.post("/v1/recall")
 def recall(req: RecallReq, user: str = Depends(auth)):
     mem = mgr().get(user)
     if req.lean:
         ctx = mem.lean_context(req.query, user_id=user, n_chunks=req.n_chunks, session_id=req.session_id)
-        return {"context": ctx, "tokens_est": len(ctx.split())}
+        return {"context": ctx, "tokens_est": len(ctx.split()),
+                "answer": _answer_from_memory(mgr().answerer, req.query, ctx)}
     res = mem.search(req.query, user_id=user)
     return {"answer": res.answer(), "facts": [f.text for f in res.facts[:10]]}
 

@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from 'react'
-import { Search, Sparkles, Zap } from 'lucide-react'
+import { MessageSquare, Search, Sparkles, Zap } from 'lucide-react'
 
 import { Button, Card, EmptyState, ErrorState, PageHeader, Spinner } from '../components/ui'
 import { useRecall } from '../hooks/queries'
@@ -68,6 +68,16 @@ export default function Ask() {
 
       {result && (
         <>
+          {result.answer && (
+            <Card className="!border-brand-mint/30 !bg-brand-mint/[0.06]">
+              <div className="mb-1.5 flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-brand-mint">
+                <MessageSquare className="h-4 w-4" /> 回答
+              </div>
+              <p className="whitespace-pre-wrap text-[15px] leading-relaxed text-slate-100">{result.answer}</p>
+              <p className="mt-2 text-xs text-ghost">由答题模型基于下面这片记忆上下文生成。</p>
+            </Card>
+          )}
+
           <div className="flex items-center gap-3 rounded-xl border border-brand-cyan/20 bg-brand-cyan/5 p-4">
             <Zap className="h-5 w-5 text-brand-cyan" />
             <div className="text-sm">
