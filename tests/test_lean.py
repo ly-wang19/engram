@@ -582,3 +582,24 @@ def test_classification_and_sensitivity_redaction_preserves_recall():
     assert "acme" in redacted.lower(), "non-sensitive facts stay"
     # recall invariant: redaction is a view filter, not deletion — the fact is still stored & live
     assert any(f.object == "diabetes" for f in m.fact_store.values() if f.is_live())
+
+
+def test_ephemeral_remember_keeps_dated_episode_but_creates_no_durable_fact():
+    """Corrected ① model (the user's catch): ephemeral != deleted. Transient state goes to working memory
+    AND is kept as a dated EPISODE (so 'when did my throat hurt?' is answerable from history), but it does
+    NOT become a durable profile fact (so it never lingers as a current attribute)."""
+    m = Memory()
+    r = m.remember("today my throat is uncomfortable", user_id="u", session_id="s1")
+    assert r["scope"] == "working"
+
+    # the EVENT is retained in the dated episodic log -> historically queryable
+    eps = m.retrieve_episodes("throat uncomfortable", user_id="u", k=3)
+    assert any("throat" in e.content.lower() for e in eps), "dated episode must remain retrievable"
+    # current-session working memory holds it too
+    assert any("throat" in w.content.lower() for w in m.working_memory("u", session_id="s1"))
+
+    # but NO durable profile fact — and a later consolidate must not pick the ephemeral episode up
+    m.remember("I work at Acme", user_id="u", session_id="s1")
+    m.consolidate()
+    assert not any("throat" in f.text.lower() for f in m.fact_store.values()), \
+        "transient state must not become a durable profile fact"

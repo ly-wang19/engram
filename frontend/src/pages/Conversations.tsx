@@ -19,7 +19,7 @@ export default function Conversations() {
       onSuccess: (r) => {
         setText('')
         working.refetch()
-        if (r.scope === 'working') toast.info('这是临时状态 → 存入本次会话的工作记忆（不进长期）')
+        if (r.scope === 'working') toast.info('临时状态 → 已记入历史（可日后查询）+ 本次会话工作记忆，但不写进长期画像')
         else if (r.degraded) toast.info('已存为原始记忆（抽取暂时降级）')
         else toast.success(`已记住，抽取出 ${r.extracted} 条新事实`)
       },
@@ -73,7 +73,7 @@ export default function Conversations() {
             }
           >
             <span className="inline-flex items-center gap-2">
-              <Hourglass className="h-4 w-4 text-brand-amber" /> 工作记忆 · 临时状态（不进长期）
+              <Hourglass className="h-4 w-4 text-brand-amber" /> 工作记忆 · 本次会话临时状态（历史已另存，可查询）
             </span>
           </CardTitle>
           <ul className="space-y-1.5">

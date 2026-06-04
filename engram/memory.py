@@ -190,6 +190,26 @@ class Memory:
             self.consolidate()
         return ep
 
+    def remember(self, content: str, user_id: str = "default", session_id: str = "default",
+                 scope: str = "auto") -> dict:
+        """High-level write with ephemeral routing. KEY: it ALWAYS stores the lossless, dated episode, so
+        'when did X happen?' is answerable from history regardless of routing. For transient STATE
+        ('today my throat hurts') it additionally adds a working-memory item AND marks the episode so no
+        durable profile FACT is extracted from it — the *event* is remembered (dated, retrievable), but
+        the *state* never lingers as a current profile attribute. Durable content is left pending for the
+        caller to consolidate() into long-term facts. Returns a dict describing the routing.
+
+        This is the corrected model: ephemeral != deleted. Only the durable-profile promotion is skipped;
+        the episodic record (CLAUDE.md L0) is always kept."""
+        ephemeral = scope == "working" or (scope == "auto" and self.is_ephemeral(content))
+        ep = self.add(content, user_id=user_id, session_id=session_id)
+        if ephemeral:
+            ep.consolidated = True  # stays in the dated episodic log, but yields no durable fact
+            ep.metadata["ephemeral"] = True
+            wm = self.remember_working(content, user_id=user_id, session_id=session_id)
+            return {"scope": "working", "episode_id": ep.id, "working_id": wm.id, "kind": wm.kind}
+        return {"scope": "long", "episode_id": ep.id}
+
     def consolidate(self, episodes: Optional[list[Episode]] = None) -> dict[str, int]:
         """System-2: extract facts + build the bi-temporal graph from `episodes` (default: all pending).
         Invalidates the persona cache since the live fact set just changed."""

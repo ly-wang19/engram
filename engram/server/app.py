@@ -239,13 +239,15 @@ def remember(req: RememberReq, user: str = Depends(auth)):
     m = mgr()
     with m.lock(user):
         mem = m.get(user)
-        # Route ephemeral state ("today my throat hurts") to the WORKING-memory tier so it never pollutes
-        # long-term. `scope=auto` decides by heuristic; the caller can force either tier.
-        if req.scope == "working" or (req.scope == "auto" and Memory.is_ephemeral(req.content)):
-            wm = mem.remember_working(req.content, user_id=user, session_id=req.session_id)
+        # Route by ephemerality. EITHER WAY the dated episode is stored (so "when did X happen" stays
+        # answerable from history); transient state additionally goes to working memory and is NOT promoted
+        # into a durable profile fact (so it never lingers as a current attribute). `scope` can force it.
+        routed = mem.remember(req.content, user_id=user, session_id=req.session_id, scope=req.scope)
+        if routed["scope"] == "working":
             mem.save()
-            return {"ok": True, "scope": "working", "id": wm.id, "kind": wm.kind}
-        mem.add(req.content, user_id=user, session_id=req.session_id)
+            return {"ok": True, "scope": "working", "kind": routed["kind"], "id": routed["working_id"],
+                    "episode_id": routed["episode_id"],
+                    "note": "kept in dated history (askable later); not added to the durable profile"}
         # Consolidation/summarization use the LLM; make them BEST-EFFORT so a transient model outage never
         # loses the memory — the raw episode is already stored and recallable either way.
         added = 0
