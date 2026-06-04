@@ -159,7 +159,7 @@
     <a class="b1" href="https://github.com/ly-wang19/engram" target="_blank">★ 在 GitHub 上看</a>
     <a class="b2" href="#how">看看它怎么工作 ↓</a>
   </div>
-  <p class="note rv in d5" style="margin-top:18px">真实数据 · 同款 DeepSeek 判分器 · 每个数字都能自己跑一遍验证</p>
+  <p class="note rv in d5" style="margin-top:18px">真实数据 · 严格的 DeepSeek 判分器 · 每个数字都能自己跑一遍验证</p>
 </div></header>
 
 <!-- PROBLEM -->
@@ -247,7 +247,7 @@
       <h3 style="font-size:18px">⚡ Engram 精简检索</h3>
       <div class="grid" id="gg"></div>
       <div class="vtok" style="color:var(--teal)">9.6k <small>token · 只取相关片</small></div>
-      <div style="margin-top:10px;color:var(--teal)">✓ 更聚焦 · 83.6% 准 · 可扩展到百万字</div>
+      <div style="margin-top:10px;color:var(--teal)">✓ 更聚焦 · 83.6% 准 · 历史再长成本也不涨</div>
     </div>
   </div>
 </div></section>
@@ -266,7 +266,7 @@
     <tr class="winrow"><td><b>Engram</b>(本项目)</td><td class="sc hl">83.6%</td><td style="text-align:right">9.6k</td><td>✅ AGPL-3.0</td></tr>
     <tr><td>裸塞全文(同 backbone)</td><td class="sc">73.2%</td><td style="text-align:right">79k</td><td>—</td></tr>
   </table>
-  <p class="note rv d3"><b>它的定位:</b>Engram 远超裸全文(<b>+10.4 分</b>)且省约 8 倍 token,<b>全开源、可复现、可扩展到百万字</b>。500 题官方判分 ≈83.6%,每题原始日志公开。</p>
+  <p class="note rv d3"><b>它的定位:</b>Engram 远超裸全文(<b>+10.4 分</b>)且省约 8 倍 token,<b>全开源、可复现、历史再长成本也不涨</b>。500 题官方判分 ≈83.6%,每题原始日志公开。</p>
   <div class="repro rv d4">
 <span class="c1"># 每个数字都能自己跑一遍验证:</span><br>
 git clone https://github.com/ly-wang19/engram && cd engram<br>
@@ -279,7 +279,7 @@ python eval/bench.py --data s --limit 500 --systems engram_lean,full_context ...
 <section id="sources" style="background:linear-gradient(180deg,transparent,rgba(34,211,238,.04),transparent)"><div class="wrap">
   <div class="eyebrow rv">完整架构 · 每个声称都有代码 + 测试</div>
   <h2 class="rv d1">不是单点技巧,是<span class="hl">一整套记忆引擎</span></h2>
-  <p class="lead rv d2">从写入、固化到检索,逐层设计、可复现、可扩展到百万字 —— 每个能力都有对应的代码和单元测试。</p>
+  <p class="lead rv d2">从写入、固化到检索,逐层设计、可复现、成本随历史增长保持平稳 —— 每个能力都有对应的代码和单元测试。</p>
   <div class="chips">
     <div class="chip rv d2"><b>双过程写入 / 固化</b> · System-1 热写入(不调 LLM、&lt;50ms)+ System-2 异步抽取建图</div>
     <div class="chip rv d2"><b>双时间轴事实</b> · 有效时间 + 事务时间,<b>as-of 时点查询</b>、知识更新一等公民</div>
@@ -315,7 +315,7 @@ curl -X POST $B/v1/recall -H "Authorization: Bearer $K" -d '{"query":"我喜欢�
   <div class="pill" style="margin-bottom:18px">⭐ 开源 · AGPL-3.0 · 商用需授权 · 可复现</div>
   <div style="font-size:20px;font-weight:800;color:var(--ink);margin-bottom:8px">Engram — 让 AI 真正记住你</div>
   <a href="https://github.com/ly-wang19/engram" target="_blank" style="color:var(--cyan)">github.com/ly-wang19/engram</a>
-  <p style="margin-top:18px;font-size:12.5px">数字基于 LongMemEval_S · doubao-seed-2.0-pro 作答 · DeepSeek-V3.2 判分 · 500 题验证中</p>
+  <p style="margin-top:18px;font-size:12.5px">数字基于 LongMemEval_S · doubao-seed-2.0-pro 作答 · DeepSeek-V3.2 判分 · 500 题全集 · 每题原始日志公开</p>
 </div></footer>
 
 <script>
