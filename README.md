@@ -30,38 +30,46 @@ In a field where every number is contested, *being the scoreboard everyone can v
 
 Measured on the real [LongMemEval_S](https://github.com/xiaowu0162/LongMemEval) benchmark (500 questions,
 ~50 sessions / ~115k tokens of haystack per question), graded by the **official category-specific
-LongMemEval judge prompts** so the number is leaderboard-comparable.
+LongMemEval judge prompts**. Answerer **doubao-seed-2.0-pro**, judge **DeepSeek-V3.2** — the *same judge
+family Hunyuan reports against*, so this is a fair, comparable number, not a friendly one.
 
-| System | Overall | How |
-|---|---|---|
-| **Engram** (`engram_full`, gemini-2.5-pro answerer) | **86.0%** | full 500, official judge, 0 errors |
-| Hunyuan Hy-Memory (closed; self-reported) | 85.2% | — |
-| Mem0-2026 (self-reported) | 94.4% | — |
-| OMEGA (self-reported) | 95.4% | — |
+**The headline system is `engram_lean`: it answers from a small *retrieved* slice, never the full history.**
+This is the real test of a memory system — and the project's core thesis (beat full-context on accuracy at
+a fraction of the tokens):
 
-Per-category (Engram, full 500, 0 errors):
+| System | Overall | Avg tokens | Notes |
+|---|---:|---:|---|
+| **Engram** (`engram_lean`) | **78.8%** | **5.7k** | retrieves a lean slice; 0 errors / 500 |
+| full-context baseline (same answerer+judge) | 74.8% | 79k | stuffs the whole haystack in the prompt |
+| Hunyuan Hy-Memory (closed; self-reported) | 85.2% | — | same DeepSeek judge family |
+| Mem0-2026 / OMEGA (self-reported) | 94.4 / 95.4 | — | their own answer+judge pipelines |
+
+**Engram beats the full-context baseline by +4.0 points while using ~14× fewer tokens** (5.7k vs 79k) — the
+filtered slice is *more* accurate than the noisy full window, and the cost stays flat as history grows
+(full-context can't). Per-category (`engram_lean`, full 500):
 
 | Category | Score | n |
 |---|---|---|
-| single-session-assistant | 96.4% | 56 |
-| single-session-user | 95.3% | 64 |
-| knowledge-update | 93.1% | 72 |
-| temporal-reasoning | 87.4% | 127 |
-| multi-session | 83.5% | 121 |
-| abstention | 70.0% | 30 |
-| single-session-preference | 50.0% | 30 |
+| single-session-assistant | 100.0% | 56 |
+| abstention | 86.7% | 30 |
+| knowledge-update | 86.1% | 72 |
+| single-session-user | 85.9% | 64 |
+| temporal-reasoning | 73.2% | 127 |
+| multi-session | 67.8% | 121 |
+| single-session-preference | 66.7% | 30 |
 
-**Honest standing:** Engram clears the closest open baseline (Hunyuan, 85.2) and is genuinely competitive,
-but it is **not** at the top of the leaderboard — OMEGA (95.4) and Mem0-2026 (94.4) are ahead. The gap is
-concentrated in two known-hard categories (preference and multi-session reasoning); preference is hard
-*industry-wide* (frontier LLMs score 37–48% on comparable PersonaMem tasks). We report this openly rather
-than cherry-picking a slice or a friendlier judge. Closing that gap is the active roadmap — in public,
-with reproducible updates.
+**Honest standing:** at **78.8%** Engram beats the full-context baseline decisively and at a fraction of the
+tokens, but it is **below** Hunyuan (85.2) on the comparable judge and well below OMEGA/Mem0 (94–95, their
+own backbones). The remaining gap is concentrated in multi-session reasoning and temporal aggregation. We
+report this openly — no cherry-picked slice, no friendlier judge. Where Engram leads today is **token
+efficiency, scalability, and reproducibility**; closing the accuracy gap is the public roadmap.
 
-> Comparability note: the self-reported competitor numbers use their own answer/judge pipelines. Our
-> number uses a gemini-2.5-pro answerer + the official LongMemEval judge prompts. The harness applies the
-> *same* answerer and judge to every system it runs (including the full-context baseline), so comparisons
-> *within* this repo are apples-to-apples; cross-paper comparisons carry the usual caveats.
+> Note on a prior number: an earlier table cited 86.0% for a system (`engram_full`) that prepended facts to
+> the *entire* conversation history (~80k tokens). That system *contains* full-context, so it can't really
+> lose to it — it doesn't validate the memory architecture. We replaced it as the headline with
+> `engram_lean`, which retrieves a small slice and is the honest test of the thesis. The techniques borrowed
+> from each leading system (ByteDance, Alibaba, Tencent, and others) are attributed in
+> [`TECHNIQUES.md`](TECHNIQUES.md).
 
 ## Quickstart (zero setup, no API keys)
 
@@ -150,9 +158,12 @@ pytest
 # 2. retrieval recall on the real haystack (no LLM needed)
 python eval/longmemeval.py --mode recall --data s --limit 500
 
-# 3. full QA benchmark with the official judge (needs model access; see RESULTS.md for provider setup)
-python eval/bench.py --data s --limit 500 --systems engram_full,full_context \
-    --answerer univibe:gemini-2.5-pro --judge univibe:gpt-5.5 --reasoning
+# 3. full QA benchmark with the official judge — the headline engram_lean number + full-context baseline
+#    (needs model access; any OpenAI-compatible provider works — see RESULTS.md for setup)
+python eval/bench.py --data s --limit 500 --systems engram_lean,full_context \
+    --answerer volcano:doubao-seed-2-0-pro-260215 --judge volcano:deepseek-v3-2-251201 \
+    --extractor volcano:doubao-seed-1-6-flash-250615 --reasoning --persona \
+    --chunks 2 --topk 15 --extract-k 8 --summ-k 28 --n-summaries 28
 ```
 
 Raw per-question logs for the headline number live in [`RESULTS.md`](RESULTS.md). If you can't reproduce a
