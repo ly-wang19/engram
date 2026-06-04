@@ -11,6 +11,7 @@ export const qk = {
   graph: () => ['graph', ns()] as const,
   focus: () => ['focus', ns()] as const,
   policy: () => ['policy', ns()] as const,
+  profile: () => ['profile', ns()] as const,
   health: () => ['health'] as const,
 }
 
@@ -40,7 +41,13 @@ function useInvalidateMemory() {
     qc.invalidateQueries({ queryKey: qk.memories() })
     qc.invalidateQueries({ queryKey: qk.graph() })
     qc.invalidateQueries({ queryKey: qk.focus() })
+    qc.invalidateQueries({ queryKey: qk.profile() })
   }
+}
+
+export function useStructuredProfile() {
+  const enabled = !!useAuth((s) => s.apiKey)
+  return useQuery({ queryKey: qk.profile(), queryFn: api.structuredProfile, enabled, retry: false })
 }
 
 export function useRemember() {

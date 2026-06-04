@@ -468,6 +468,16 @@ class Memory:
                 and (f.predicate.lower() in self._INSTRUCTION_PREDS
                      or any(f.predicate.lower().startswith(p + "_") for p in ("wants", "prefers", "remind")))]
 
+    def structured_profile(self, user_id: str = "default") -> dict:
+        """L2 structured profile: the user's live facts grouped into basic info / preferences / habits,
+        split into confirmed vs tentative for DISPLAY. This is a read-only derived view — it never filters
+        the fact store or the retrieval path, so recall is unaffected (search/lean_context see all facts)."""
+        from .consolidate.structured import build_structured_profile
+        user = self.resolver.resolve(user_id)
+        subject = self.engine.self_name(user)
+        live = [f for f in self.fact_store.values() if f.user_id == user and f.is_live()]
+        return build_structured_profile(live, subject, user)
+
     def build_persona(self, user_id: str = "default") -> str:
         """L3: a compact narrative profile (preferences/habits/possessions) synthesized from live facts."""
         user = self.resolver.resolve(user_id)

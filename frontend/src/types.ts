@@ -105,3 +105,44 @@ export interface PolicyResponse {
   policy: Policy // user overrides ("" = use default)
   defaults: Policy // built-in prompts
 }
+
+// --- L2 structured profile (feature ③) ---
+export interface Evidence {
+  kind: 'user' | 'mentions' | 'reinforced'
+  count: number
+}
+
+export interface ProfileBasic {
+  field: string
+  label: string
+  value: string
+  evidence: Evidence
+  source: FactSource
+  fact_id: string
+}
+
+export interface ProfileItem {
+  item: string
+  polarity: 'like' | 'dislike'
+  category: string
+  evidence: Evidence
+  source: FactSource
+  fact_id: string
+  subject: string
+  predicate: string
+  object: string
+}
+
+export interface ProfileHabit {
+  text: string
+  evidence: Evidence
+  fact_id: string
+}
+
+export interface StructuredProfile {
+  basic: ProfileBasic[]
+  preferences: Record<string, ProfileItem[]>
+  habits: ProfileHabit[]
+  tentative: ProfileItem[]
+  counts: { basic: number; preferences: number; tentative: number; habits: number }
+}

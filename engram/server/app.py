@@ -269,6 +269,13 @@ def profile(user: str = Depends(auth)):
             "facts": [f.text for f in mem.fact_store.values() if f.is_live()][:50]}
 
 
+@app.get("/v1/profile/structured")
+def structured_profile(user: str = Depends(auth)):
+    """L2 structured profile: basic info + preferences (by category) + habits, split into confirmed vs
+    待确认 (tentative). Display-only tiering — does NOT affect what recall/search can see."""
+    return mgr().get(user).structured_profile(user)
+
+
 @app.get("/v1/memories")
 def memories(user: str = Depends(auth)):
     """See EVERYTHING stored for this user — the raw episodes, the extracted bi-temporal facts (live and

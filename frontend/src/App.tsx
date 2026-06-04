@@ -4,6 +4,7 @@ import Layout from './components/Layout'
 import { useAuth } from './store/auth'
 import Login from './pages/Login'
 import Dashboard from './pages/Dashboard'
+import Profile from './pages/Profile'
 import Ask from './pages/Ask'
 import Facts from './pages/Facts'
 import TimelinePage from './pages/TimelinePage'
@@ -29,6 +30,7 @@ export default function App() {
     <Routes>
       <Route element={<Layout />}>
         <Route index element={<Dashboard />} />
+        <Route path="profile" element={<Profile />} />
         <Route path="ask" element={<Ask />} />
         <Route path="facts" element={<Facts />} />
         <Route path="timeline" element={<TimelinePage />} />

@@ -10,6 +10,7 @@ import type {
   PolicyResponse,
   RecallResult,
   RememberResult,
+  StructuredProfile,
 } from '../types'
 
 // Same-origin by default (FastAPI serves the SPA + API together). Override with
@@ -85,6 +86,8 @@ export const api = {
 
   setFocus: (focus: Partial<Focus>) =>
     request<{ ok: boolean; focus: Focus }>('/v1/focus', { method: 'PUT', body: json(focus) }),
+
+  structuredProfile: () => request<StructuredProfile>('/v1/profile/structured'),
 
   policy: () => request<PolicyResponse>('/v1/policy'),
 

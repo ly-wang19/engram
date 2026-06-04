@@ -498,3 +498,32 @@ def test_memory_policy_edits_extraction_and_persists(tmp_path):
     p = str(tmp_path / "u.pkl")
     m.save(p)
     assert Memory.open(p).get_policy()["policy"]["extract_instruction"] == "只记录与工作相关的事实"
+
+
+def test_structured_profile_tiers_display_only_and_preserves_recall():
+    """The L2 structured profile (feature ③, reasonable version): basic/preferences/habits grouped, with
+    a DISPLAY-ONLY confirmed↔tentative split and HONEST evidence (no fabricated weights). The critical
+    invariant: the tentative split is presentation only — a tentative fact must STILL be in the fact store
+    and retrievable (recall is never gated by the profile view)."""
+    from engram.types import Fact
+    m = Memory()
+    m.add_fact("user", "favorite_music", "周杰伦", user_id="u")     # explicit favorite -> confirmed
+    casual = Fact(subject="user", predicate="likes", object="jazz", user_id="u",
+                  source="extracted", provenance=["ep1"])          # single casual mention -> tentative
+    casual.embedding = m.embedder.embed(casual.text)
+    m.fact_store.upsert(casual.id, casual.embedding, casual)
+
+    p = m.structured_profile("u")
+    conf_items = [it["item"] for items in p["preferences"].values() for it in items]
+    tent_items = [t["item"] for t in p["tentative"]]
+    assert "周杰伦" in conf_items and "jazz" not in conf_items, "explicit favorite confirmed, casual not"
+    assert "jazz" in tent_items, "single casual mention must be shown as 待确认, not confirmed"
+
+    # honest evidence, never a fabricated numeric weight
+    for items in p["preferences"].values():
+        for it in items:
+            assert "weight" not in it and it["evidence"]["kind"] in {"user", "mentions", "reinforced"}
+
+    # RECALL INVARIANT: the tentative fact is display-tiered, NOT removed — still in the store and live
+    assert m.fact_store.get(casual.id) is not None and casual.is_live()
+    assert any(f.object == "jazz" for f in m.fact_store.values() if f.is_live())
