@@ -25,10 +25,20 @@ dependencies = []
 [project.optional-dependencies]
 # Real embedding/LLM/vector/graph backends slot in behind the same interfaces.
 backends = ["lancedb>=0.6", "numpy>=1.24"]
+embeddings = ["sentence-transformers>=2.2"]  # local BGE embeddings (ENGRAM_EMBEDDER=bge-*; no API key)
 llm = ["litellm>=1.40"]
+# Serving / adoption layer (CLAUDE.md §6).
+server = ["fastapi>=0.110", "uvicorn>=0.27", "pydantic>=2"]   # the multi-tenant HTTP API + console
+mcp = ["mcp>=1.2", "httpx>=0.27"]                              # the MCP server (httpx for remote-proxy mode)
+# One-shot install for running the hosted product: HTTP API + MCP + real embeddings + an LLM backend.
+serve = ["engram-memory[server,mcp,embeddings,llm]"]
 eval = ["numpy>=1.24"]
-dev = ["pytest>=7.0", "ruff>=0.4"]
-all = ["engram-memory[backends,llm,eval,dev]"]
+dev = ["pytest>=7.0", "pytest-asyncio>=0.23", "ruff>=0.4"]
+all = ["engram-memory[server,mcp,embeddings,backends,llm,eval,dev]"]
+
+[project.scripts]
+engram-mcp = "engram.mcp.__main__:main"            # run the MCP server
+engram-import = "engram.connectors.__main__:main"  # import a chat/history export
 
 [project.urls]
 Homepage = "https://github.com/your-org/engram"
@@ -44,3 +54,5 @@ target-version = "py310"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"

@@ -67,8 +67,17 @@ def make_llm(name: str, **overrides):
 
 
 def make_embedder(name: str = "bge-small", **overrides):
-    """bge-small | bge-m3 | bge-large | st:<model> (sentence-transformers) | openai:<model> (LiteLLM)."""
+    """hashing (zero-dep offline) | bge-small | bge-m3 | bge-large | st:<model> (sentence-transformers)
+    | openai:<model> (LiteLLM)."""
     n = name.strip()
+    # The deterministic, dependency-free fallback — lets the server/MCP run with NO model download
+    # (ENGRAM_EMBEDDER=hashing) and keeps tests offline. Not benchmark-grade; lexical overlap only.
+    if n in ("hashing", "hash", "offline", "none"):
+        from ..config import Config
+        from ..embed import HashingEmbedder
+
+        dim = overrides.get("dim") or Config().embed_dim
+        return HashingEmbedder(dim)
     presets = {
         "bge-small": "BAAI/bge-small-en-v1.5",
         "bge-large": "BAAI/bge-large-en-v1.5",
