@@ -18,7 +18,7 @@ Reference points (all self-reported by their authors, on their own pipelines):
 |---|---:|:---:|
 | OMEGA | 95.4 | no |
 | Mem0-2026 | 94.4 | partial |
-| **Engram (this repo)** | **86.0** | **yes (Apache-2.0)** |
+| **Engram (this repo)** | **86.0** | **yes (AGPL-3.0)** |
 | Hunyuan Hy-Memory | 85.2 | no |
 
 **Where we honestly stand:** Engram clears the closest open baseline (Hunyuan, 85.2). It is *not* at the

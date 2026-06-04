@@ -13,7 +13,8 @@ writing code. It is written for any agent or human contributor walking in cold.
 **Build the best long-term memory system in the world, fully open source, and prove it is #1 on
 every public memory benchmark.**
 
-- **Open-source #1 is the floor, global #1 is the ceiling.** Apache-2.0, reproducible, self-hostable.
+- **Open-source #1 is the floor, global #1 is the ceiling.** Dual-licensed — AGPL-3.0 (open source) + a
+  commercial license for proprietary use; reproducible, self-hostable.
 - **Baselines we must beat** (in priority order): Tencent **Hunyuan Hy-Memory** (the named baseline),
   **Mem0 / Mem0g**, **Zep / Graphiti**, **Letta / MemGPT**, **MIRIX**, **MemoryOS**, **Cognee**,
   **Supermemory**, **OMEGA**, and — the one everybody quietly loses to — the **full-context baseline**.
@@ -217,7 +218,8 @@ Target benchmarks, in order: LongMemEval_S → LongMemEval_M → LOCOMO (correct
 .
 ├── CLAUDE.md                  # this charter (source of truth)
 ├── README.md                  # short public-facing intro
-├── LICENSE                    # Apache-2.0
+├── LICENSE                    # GNU AGPL-3.0 (the open-source arm of the dual license)
+├── COMMERCIAL-LICENSE.md      # commercial license for proprietary/closed-source/SaaS use
 ├── pyproject.toml             # packaging; core has ZERO hard deps, backends are extras
 ├── engram/                    # the library
 │   ├── __init__.py            # public API surface
@@ -254,7 +256,10 @@ extras that slot in behind the same interfaces. We never break the zero-setup de
 - **Lexical:** in-memory BM25 → tantivy / bm25s.
 - **Serving (later):** FastAPI server, Python SDK, OpenAI-memory-compatible API, and an **MCP server**
   (high-leverage for adoption in 2026 agent stacks).
-- **License:** Apache-2.0 (matches every major competitor; maximally permissive for adoption).
+- **License:** **dual-licensed** — GNU **AGPL-3.0** for open-source use, plus a separate **commercial
+  license** for proprietary/closed-source or SaaS use that can't meet AGPL's source-disclosure (§13)
+  terms. Copyleft (deliberately *not* permissive): derivatives stay open, and commercial use without AGPL
+  compliance requires authorization. Commercial terms live in `COMMERCIAL-LICENSE.md`.
 
 ---
 

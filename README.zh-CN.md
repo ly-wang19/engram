@@ -159,4 +159,11 @@ python eval/bench.py --data s --limit 500 --systems engram_full,full_context \
 
 ## 许可证
 
-Apache-2.0。
+Engram 采用**双授权**，按你的用途任选其一：
+
+- **开源 —— [GNU AGPL-3.0](LICENSE)。** 可自由使用、研究、修改、自部署。注意 AGPL 第 13 条：若你以**修改后
+  的 Engram 对外提供网络服务**，须按 AGPL 向服务使用者公开该服务的完整源码。内部使用、科研、教学不受影响。
+- **商业 —— 单独的付费授权。** 若要把 Engram 用于**闭源/专有**产品，或以 **SaaS / 托管**形式提供、且不愿承担
+  AGPL 的源码公开义务，则需获得商业授权。详见 **[`COMMERCIAL-LICENSE.md`](COMMERCIAL-LICENSE.md)**。
+
+一句话：**开源免费；不遵守 AGPL 的商业使用，需要授权。**

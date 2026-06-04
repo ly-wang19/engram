@@ -111,4 +111,8 @@ npm run build       # dual ESM + CJS + .d.ts into dist/
 npm run typecheck
 ```
 
-Apache-2.0.
+## License
+
+Engram is **dual-licensed**: open source under [GNU AGPL-3.0](../../LICENSE), or a separate **commercial
+license** for proprietary/closed-source use. Commercial use that won't comply with the AGPL requires
+authorization — see [`COMMERCIAL-LICENSE.md`](../../COMMERCIAL-LICENSE.md).

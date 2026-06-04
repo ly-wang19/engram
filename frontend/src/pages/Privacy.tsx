@@ -71,7 +71,7 @@ export default function Privacy() {
           <div className="text-sm leading-relaxed text-ghost">
             <p className="font-medium text-slate-200">本地优先、可自托管</p>
             <p className="mt-1">
-              Engram 完全开源（Apache-2.0）。记忆默认以文件形式存放在你自己的服务器上，按 API key 隔离。没有这把 key，谁都看不到你的记忆。
+              Engram 开源（AGPL-3.0；商用需单独授权）。记忆默认以文件形式存放在你自己的服务器上，按 API key 隔离。没有这把 key，谁都看不到你的记忆。
             </p>
           </div>
         </div>
