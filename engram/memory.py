@@ -246,6 +246,7 @@ class Memory:
         n_facts: int = 15,
         n_chunks: int = 2,
         persona: bool = True,
+        agentic: bool = False,
         char_budget: int = 60_000,
     ) -> str:
         """The scalable read path (CLAUDE.md Bet A/E): assemble a SMALL, well-organized context from
@@ -262,6 +263,15 @@ class Memory:
         user = self.resolver.resolve(user_id)
         blocks: list[str] = []
 
+        # Bet B — multi-hop decomposition. For a relational/aggregation question, an LLM splits it into
+        # sub-queries ('who is my colleague' + 'where does <colleague> work'); we then retrieve facts AND
+        # summaries for each angle and union them, so 2nd-hop evidence that the single query can't surface
+        # gets pulled in. This is the field's weak spot (multi-session/multi-hop) and our attack surface.
+        queries = [query]
+        if agentic and self.llm is not None:
+            from .retrieve.agentic import AgenticRetriever
+            queries += AgenticRetriever(self, self.llm)._subqueries(query)
+
         # detail: the few most-relevant sessions in full — their ids are excluded from the summary block.
         detail_eps = self.retrieve_episodes(query, user, n_chunks) if n_chunks else []
         detail_ids = {e.id for e in detail_eps}
@@ -271,14 +281,14 @@ class Memory:
             if p:
                 blocks.append(f"USER PROFILE:\n{p}")
 
-        ranked, _ = self.retriever.retrieve(query, user, as_of, top_k or n_facts)
-        fact_ids = {f.id for f, _ in ranked}
-        # n-hop graph expansion: pull facts about the entities named in the query that hybrid ranking
-        # missed. This is the cross-session discovery mechanism the SOTA credits for multi-session gains —
-        # facts connected to a query entity but not lexically/semantically top-ranked on their own.
-        related = [f for f in self._graph_related_facts(query, user, as_of, limit=n_facts)
-                   if f.id not in fact_ids]
-        all_facts = [f for f, _ in ranked] + related
+        # L1 facts: hybrid retrieval per (sub-)query, unioned; + n-hop graph expansion from query entities.
+        fact_map: dict[str, Fact] = {}
+        for q in queries:
+            for f, _ in self.retriever.retrieve(q, user, as_of, top_k or n_facts)[0]:
+                fact_map.setdefault(f.id, f)
+        for f in self._graph_related_facts(query, user, as_of, limit=n_facts):
+            fact_map.setdefault(f.id, f)
+        all_facts = list(fact_map.values())
         self.working_set = all_facts  # working memory: the active set for this query
         if all_facts:
             for f in all_facts:  # reinforcement-on-access: surfaced facts stay salient (spacing effect)
@@ -287,7 +297,11 @@ class Memory:
             fl = "\n".join(f"- [{fmt_date(f.valid_at)}] {f.text}" for f in by_date)
             blocks.append(f"FACTS (current, dated):\n{fl}")
 
-        summaries = [e for e in self.retrieve_summaries(query, user, n_summaries) if e.id not in detail_ids]
+        summ_map: dict[str, Episode] = {}
+        for q in queries:
+            for e in self.retrieve_summaries(q, user, n_summaries):
+                summ_map.setdefault(e.id, e)
+        summaries = [e for e in summ_map.values() if e.id not in detail_ids]
         if summaries:
             chrono = sorted(summaries, key=lambda e: e.event_time)
             sm = "\n".join(

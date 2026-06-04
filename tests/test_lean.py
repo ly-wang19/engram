@@ -159,6 +159,26 @@ def test_date_terms_makes_dates_searchable():
     assert "11" in terms
 
 
+def test_agentic_multihop_decomposition():
+    """Bet B: with an LLM, lean_context decomposes the question into sub-queries and unions their
+    retrieval; without an LLM it degrades gracefully to the single query."""
+    mem = build()  # offline facts extracted
+
+    # graceful: agentic=True but no llm -> still returns a usable context
+    ctx0 = mem.lean_context("Which cities did I visit?", user_id="u1", agentic=True, n_chunks=1)
+    assert ctx0.strip()
+
+    # with an llm that decomposes, the path runs and still produces a context
+    class FakeLLM:
+        def complete(self, prompt, system=None, **k):
+            return '["cities I traveled to", "trips"]'
+
+    mem.llm = FakeLLM()
+    ctx1 = mem.lean_context("Which cities did I visit and how many trips?", user_id="u1",
+                            agentic=True, n_chunks=1)
+    assert ctx1.strip() and "SESSION SUMMARIES" in ctx1
+
+
 def test_procedural_memory_surfaces_instructions():
     """Procedural memory: a distinct typed view returning the user's standing how-to/instruction facts."""
     from engram.types import Fact

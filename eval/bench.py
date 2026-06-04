@@ -233,7 +233,7 @@ class EngramLeanSystem:
         )
         return mem.lean_context(
             q, user_id=qid, n_summaries=rig.n_summaries, n_facts=rig.topk,
-            n_chunks=rig.chunks, persona=rig.persona,
+            n_chunks=rig.chunks, persona=rig.persona, agentic=rig.agentic,
         )
 
 
