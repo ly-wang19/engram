@@ -164,15 +164,20 @@ input{flex:1}button{cursor:pointer;background:linear-gradient(90deg,#22d3ee,#a78
 .dt{color:#22d3ee;font-size:11px;min-width:78px}.stat{display:inline-block;margin-right:16px;font-size:13px;color:#8a97b8}
 .stat b{color:#eaf0ff;font-size:18px}pre{white-space:pre-wrap;font-size:13.5px;line-height:1.6}
 .add{display:flex;gap:8px;margin-top:8px}.add input{flex:1}
+.act{margin-left:auto;display:flex;gap:6px}.ib{font-size:12px;padding:3px 9px;border-radius:7px;cursor:pointer;border:1px solid rgba(255,255,255,.14);background:rgba(255,255,255,.05);color:#eaf0ff}
+.ib:hover{border-color:#22d3ee}.ib.del:hover{border-color:#fb7185;color:#fb7185}
+.lock{font-size:11px;color:#fbbf24;margin-left:6px}
+.addf{display:flex;gap:6px;margin-top:10px}.addf input{flex:1;font-size:13px;padding:7px 10px}
 </style></head><body>
 <h1>🧠 我的记忆 <span class=dim>Engram</span></h1>
-<p class=dim>输入你的 API key,看/管理你自己存的记忆。</p>
+<p class=dim>输入你的 API key,看 / 编辑 / 删除你自己的记忆。你手动改的会被锁定 🔒,不会被自动覆盖。</p>
 <div class=bar><input id=key placeholder="API key(开放模式下随便填,比如 wei)" value="wei">
 <button onclick=load()>查看我的记忆</button></div>
 <div class=add><input id=msg placeholder="存一条新记忆,例如:我下周要去东京出差">
 <button onclick=remember()>记住</button></div>
 <div id=out></div>
 <script>
+const esc=s=>(s||'').replace(/"/g,'&quot;').replace(/</g,'&lt;');
 const api=(p,m,b)=>fetch(p,{method:m||'GET',headers:{'Authorization':'Bearer '+key.value,'Content-Type':'application/json'},body:b?JSON.stringify(b):undefined}).then(r=>r.json());
 async function load(){
   const d=await api('/v1/memories'); const c=d.counts||{};
@@ -180,14 +185,22 @@ async function load(){
    <span class=stat><b>${c.facts_superseded||0}</b> 历史</span>
    <span class=stat><b>${c.episodes||0}</b> 对话</span>
    <span class=stat><b>${c.summaries||0}</b> 摘要</span></div>
-   <div class=card><h3>用户画像</h3><pre>${(d.profile||'(空)')}</pre></div>
-   <div class=card><h3>事实 · 双时间轴</h3>${(d.facts||[]).map(f=>
+   <div class=card><h3>用户画像</h3><pre>${esc(d.profile)||'(空)'}</pre></div>
+   <div class=card><h3>事实 · 双时间轴 <span class=dim style="text-transform:none;letter-spacing:0">(✏️改 / 🗑️删,改过即锁定)</span></h3>${(d.facts||[]).map(f=>
      `<div class=f><span class="tg ${f.status=='live'?'live':'old'}">${f.status=='live'?'当前':'历史'}</span>
-      <span class=dt>${f.valid_at}</span><span>${f.text}${f.invalid_at?' <span class=dim>→失效 '+f.invalid_at+'</span>':''}</span></div>`).join('')}</div>
+      <span class=dt>${f.valid_at}</span>
+      <span>${esc(f.text)}${f.source=='user'?'<span class=lock>🔒 我设定</span>':''}${f.invalid_at?' <span class=dim>→失效 '+f.invalid_at+'</span>':''}</span>
+      <span class=act><button class=ib onclick="editFact('${f.id}','${esc(f.subject)}','${esc(f.predicate)}','${esc(f.object)}')">✏️</button>
+      <button class="ib del" onclick="delFact('${f.id}')">🗑️</button></span></div>`).join('')}
+      <div class=addf><input id=ns placeholder="主语(默认 user)"><input id=np placeholder="谓语,如 works_at"><input id=no placeholder="宾语,如 字节跳动">
+      <button onclick=addFact()>＋ 手动加一条</button></div></div>
    <div class=card><h3>原始对话 + 摘要</h3>${(d.episodes||[]).map(e=>
-     `<div class=f><span class=dt>${e.date}</span><span>${e.content}${e.summary?'<br><span class=dim>摘要: '+e.summary+'</span>':''}</span></div>`).join('')}</div>`;
+     `<div class=f><span class=dt>${e.date}</span><span>${esc(e.content)}${e.summary?'<br><span class=dim>摘要: '+esc(e.summary)+'</span>':''}</span></div>`).join('')}</div>`;
 }
 async function remember(){ if(!msg.value)return; await api('/v1/remember','POST',{content:msg.value}); msg.value=''; load(); }
+async function addFact(){ if(!np.value||!no.value)return; await api('/v1/facts','POST',{subject:ns.value||'user',predicate:np.value,object:no.value}); load(); }
+async function editFact(id,s,p,o){ const nv=prompt('改成什么(宾语):',o); if(nv==null||nv===o)return; await api('/v1/facts/'+id,'PATCH',{object:nv}); load(); }
+async function delFact(id){ if(!confirm('永久删除这条记忆?'))return; await api('/v1/facts/'+id,'DELETE'); load(); }
 </script></body></html>"""
 
 
@@ -243,10 +256,12 @@ def memories(user: str = Depends(auth)):
                    "facts_superseded": sum(1 for f in mem.fact_store.values() if not f.is_live()),
                    "summaries": len(mem.summary_vec.values())},
         "facts": [{
+            "id": f.id,
             "text": f.text, "subject": f.subject, "predicate": f.predicate, "object": f.object,
             "valid_at": fmt_date(f.valid_at),
             "invalid_at": fmt_date(f.invalid_at) if f.invalid_at else None,
             "status": "live" if f.is_live() else "superseded",
+            "source": f.source,
             "salience": round(f.salience, 2), "provenance": f.provenance,
         } for f in facts],
         "episodes": [{"date": ep.metadata.get("date") or fmt_date(ep.event_time),
@@ -259,3 +274,51 @@ def memories(user: str = Depends(auth)):
 def forget(user: str = Depends(auth)):
     mgr().forget(user)
     return {"ok": True, "message": f"all memory for '{user}' erased"}
+
+
+# --- user-authored memory management (the editable layer; user assertions are authoritative) ---
+class FactReq(BaseModel):
+    subject: str = "user"
+    predicate: str
+    object: str
+
+
+class FactEdit(BaseModel):
+    subject: Optional[str] = None
+    predicate: Optional[str] = None
+    object: Optional[str] = None
+
+
+@app.post("/v1/facts")
+def add_fact(req: FactReq, user: str = Depends(auth)):
+    """Manually add a fact you assert — it's authoritative and won't be auto-overwritten."""
+    m = mgr()
+    with m.lock(user):
+        mem = m.get(user)
+        f = mem.add_fact(req.subject, req.predicate, req.object, user_id=user)
+        mem.save()
+        return {"ok": True, "id": f.id, "text": f.text}
+
+
+@app.patch("/v1/facts/{fact_id}")
+def edit_fact(fact_id: str, req: FactEdit, user: str = Depends(auth)):
+    """Edit a fact's fields; the edit becomes user-authored and sticks."""
+    m = mgr()
+    with m.lock(user):
+        mem = m.get(user)
+        f = mem.update_fact(fact_id, subject=req.subject, predicate=req.predicate, object=req.object)
+        if f is None:
+            raise HTTPException(404, "fact not found")
+        mem.save()
+        return {"ok": True, "id": f.id, "text": f.text}
+
+
+@app.delete("/v1/facts/{fact_id}")
+def remove_fact(fact_id: str, user: str = Depends(auth)):
+    """Right-to-forget: permanently delete a single fact."""
+    m = mgr()
+    with m.lock(user):
+        mem = m.get(user)
+        ok = mem.delete_fact(fact_id)
+        mem.save()
+        return {"ok": ok}

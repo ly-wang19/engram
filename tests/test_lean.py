@@ -127,6 +127,42 @@ def test_lean_path_works_with_no_summaries():
     assert ctx.strip(), "still produces a usable context from facts + chunks"
 
 
+def test_user_fact_is_authoritative_over_extraction():
+    """The editable-memory invariant: a user-asserted fact owns its slot. Auto-extraction can neither
+    override it nor sit beside it; a user assertion supersedes an existing extracted value."""
+    from engram.consolidate.conflict import ConflictResolver
+    from engram.types import Fact
+
+    r = ConflictResolver()
+    user_fact = Fact(subject="u", predicate="works_at", object="ByteDance", source="user", valid_at=BASE)
+    extracted = Fact(subject="u", predicate="works_at", object="Tencent", source="extracted", valid_at=BASE + 1)
+    action, inv = r.reconcile(extracted, [user_fact])
+    assert action == "duplicate" and not inv, "extracted fact must NOT override a user fact"
+
+    r2 = ConflictResolver()
+    ext = Fact(subject="u", predicate="works_at", object="Tencent", source="extracted", valid_at=BASE)
+    usr = Fact(subject="u", predicate="works_at", object="ByteDance", source="user", valid_at=BASE + 1)
+    action2, inv2 = r2.reconcile(usr, [ext])
+    assert action2 == "add" and ext in inv2, "a user assertion supersedes the extracted value"
+
+
+def test_memory_crud_add_edit_delete():
+    """The management-UI operations: add_fact (user-authored), update_fact (edit + re-author), delete_fact
+    (right-to-forget, hard removal)."""
+    mem = Memory()
+    f = mem.add_fact("user", "works_at", "ByteDance", user_id="u1")
+    assert f.source == "user" and f.text == "user works at ByteDance"
+    assert mem.fact_store.get(f.id) is not None
+
+    edited = mem.update_fact(f.id, object="Moonshot AI")
+    assert edited.object == "Moonshot AI" and edited.source == "user"
+    assert mem.fact_store.get(f.id).text == "user works at Moonshot AI"
+
+    assert mem.delete_fact(f.id) is True
+    assert mem.fact_store.get(f.id) is None
+    assert mem.delete_fact("nonexistent") is False
+
+
 def test_subsumption_drops_contained_fact():
     """MemoryScope contra_repeat: a same-slot fact whose content is a strict subset of a fuller one is
     redundant. Adding the subset is a no-op; adding the superset retires the partial version."""

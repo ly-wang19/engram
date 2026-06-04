@@ -48,6 +48,10 @@ class Fact:
 
     salience: float = 1.0  # importance; boosted on access, decayed over time
     confidence: float = 1.0
+    # provenance class: "extracted" (auto, from conversation) or "user" (manually asserted/edited via the
+    # management UI). A user-asserted fact is AUTHORITATIVE — auto-extraction may never silently override it
+    # (so a manual correction sticks). This is what makes user-facing memory editing trustworthy.
+    source: str = "extracted"
 
     # --- valid time (world) ---
     valid_at: float = field(default_factory=now)

@@ -74,6 +74,11 @@ def _norm(s: str) -> str:
     return s.strip().lower()
 
 
+def _protected(old: Fact, new: Fact) -> bool:
+    """A user-asserted fact is never auto-superseded by an extracted one."""
+    return old.source == "user" and new.source != "user"
+
+
 def _supersede(old: Fact, new: Fact) -> None:
     """Non-destructive invalidation: old stops being valid-in-world at new.valid_at and stops being
     believed at new.created_at; new records what it replaced. History is preserved for as-of queries."""
@@ -122,6 +127,13 @@ class ConflictResolver:
             if _norm(old.object) == _norm(new.object):
                 return ("duplicate", [])
 
+        # USER AUTHORITY: a fact the user asserted/edited by hand owns its slot. An auto-EXTRACTED fact may
+        # neither override it nor sit beside it as a competing value on a single-valued slot — the user's
+        # correction must stick. (Multi-valued slots like `likes` still accumulate normally.)
+        if new.source != "user" and is_single_valued(new.predicate):
+            if any(old.source == "user" for old in same_slot):
+                return ("duplicate", [])
+
         invalidated: list[Fact] = []
 
         # Subsumption / "Contained" (MemoryScope contra_repeat): if the new claim's content words are a
@@ -137,15 +149,15 @@ class ConflictResolver:
                     continue
                 if new_toks < old_toks:  # new ⊂ old: subsumed, nothing gained
                     return ("duplicate", [])
-                if old_toks < new_toks and new.valid_at >= old.valid_at:  # new ⊃ old: more complete
-                    _supersede(old, new)
+                if old_toks < new_toks and new.valid_at >= old.valid_at and not _protected(old, new):
+                    _supersede(old, new)  # new ⊃ old: more complete
                     invalidated.append(old)
 
         if is_single_valued(new.predicate):
             _seen = {id(f) for f in invalidated}  # don't double-invalidate what subsumption already took
             # 1. exact-slot: same (subject, predicate), different object
             for old in same_slot:
-                if id(old) in _seen:
+                if id(old) in _seen or _protected(old, new):
                     continue
                 if _norm(old.object) != _norm(new.object) and new.valid_at >= old.valid_at:
                     _supersede(old, new)
@@ -156,8 +168,8 @@ class ConflictResolver:
             if self.embedder is not None and new.embedding:
                 done = {id(f) for f in invalidated}
                 for old in live:
-                    if id(old) in done or old.slot == new.slot:
-                        continue  # already handled by exact-slot, or it's the identical slot
+                    if id(old) in done or old.slot == new.slot or _protected(old, new):
+                        continue  # already handled by exact-slot, identical slot, or user-protected
                     if _norm(old.subject) != _norm(new.subject) or _norm(old.object) == _norm(new.object):
                         continue
                     if not is_single_valued(old.predicate) or not old.embedding:

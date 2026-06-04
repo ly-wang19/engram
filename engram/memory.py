@@ -25,7 +25,7 @@ from .store import (
 )
 from .retrieve.lexical import bm25_scores, overlap_terms
 from .types import Episode, Fact
-from .util import fmt_date
+from .util import fmt_date, now
 
 # words too generic to confirm an attribute on their own ("favorite food" must not match
 # "favorite programming language" just because both contain "favorite").
@@ -174,6 +174,55 @@ class Memory:
 
     def link_identity(self, a: str, b: str) -> str:
         return self.resolver.link(a, b)
+
+    # --- user-authored memory management (the editable layer the management UI drives) ---
+    def add_fact(self, subject: str, predicate: str, object: str, user_id: str = "default",
+                 valid_at: Optional[float] = None) -> Fact:
+        """Manually assert a fact. It is marked source='user' (authoritative): conflict resolution lets it
+        supersede any extracted value on the same slot, and it is then protected from future auto-overrides."""
+        user = self.resolver.resolve(user_id)
+        f = Fact(subject=subject, predicate=predicate, object=object, user_id=user, source="user",
+                 valid_at=valid_at if valid_at is not None else now())
+        f.embedding = self.embedder.embed(f.text)
+        live = [x for x in self.fact_store.values() if x.user_id == user and x.is_live()]
+        action, invalidated = self.engine.conflict.reconcile(f, live)
+        for old in invalidated:
+            self.engine.graph_builder.invalidate(old.id, f.created_at)
+        if action != "duplicate":
+            self.fact_store.upsert(f.id, f.embedding, f)
+            self.engine.graph_builder.add_fact(f)
+        self._persona_cache.clear()
+        return f
+
+    def update_fact(self, fact_id: str, subject: Optional[str] = None, predicate: Optional[str] = None,
+                    object: Optional[str] = None) -> Optional[Fact]:
+        """Edit a fact's fields in place and mark it user-authored (so auto-extraction won't revert it)."""
+        f = self.fact_store.get(fact_id) or self.cold_store.get(fact_id)
+        if f is None:
+            return None
+        if subject is not None:
+            f.subject = subject
+        if predicate is not None:
+            f.predicate = predicate
+        if object is not None:
+            f.object = object
+        f.text = f"{f.subject} {f.predicate.replace('_', ' ')} {f.object}".strip()
+        f.embedding = self.embedder.embed(f.text)
+        f.source = "user"
+        f.invalid_at = None  # a user edit makes it current again
+        f.expired_at = None
+        self.fact_store.upsert(f.id, f.embedding, f)
+        self._persona_cache.clear()
+        return f
+
+    def delete_fact(self, fact_id: str) -> bool:
+        """Right-to-forget: HARD-remove a fact (distinct from auto-invalidation, which keeps history). This
+        is user-initiated erasure, so the data is actually gone — from both the hot and cold tiers."""
+        existed = self.fact_store.get(fact_id) is not None or self.cold_store.get(fact_id) is not None
+        self.fact_store.delete(fact_id)
+        self.cold_store.delete(fact_id)
+        self._persona_cache.clear()
+        return existed
 
     # --- L2/L3 abstraction (built during consolidation, stored for a lean read) ---
     def summarize_episodes(self, episodes: list[Episode]) -> int:
