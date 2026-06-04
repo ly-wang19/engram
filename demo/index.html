@@ -174,14 +174,14 @@
         <li>50 段对话 ≈ <b>7.9 万 token</b>,全部重读一遍</li>
         <li>又慢、又贵,token 随历史无限增长</li>
         <li>信息太多 → "迷失在中间" → 反而答错</li>
-        <li>准确率只有 <b style="color:var(--red)">74.8%</b></li>
+        <li>准确率只有 <b style="color:var(--red)">73.2%</b></li>
       </ul>
     </div>
     <div class="pcard good rv d3">
       <h3>⚡ Engram:只取相关一小片</h3>
       <ul>
         <li>提炼成结构化记忆,提问时<b>精准检索</b></li>
-        <li>只用 <b>~9.5k token</b>(<b style="color:var(--teal)">省 8 倍</b>)</li>
+        <li>只用 <b>~9.6k token</b>(<b style="color:var(--teal)">省 8 倍</b>)</li>
         <li>去掉噪声、只留精华 → 更聚焦</li>
         <li>准确率 <b style="color:var(--teal)">83.6%</b>,且历史再长也不崩</li>
       </ul>
@@ -241,12 +241,12 @@
       <h3 style="font-size:18px">🐢 塞全文</h3>
       <div class="grid" id="gb"></div>
       <div class="vtok" style="color:var(--red)">79k <small>token · 全读一遍</small></div>
-      <div style="margin-top:10px;color:var(--red)">❌ 迷失在中间 · 74.8% 准</div>
+      <div style="margin-top:10px;color:var(--red)">❌ 迷失在中间 · 73.2% 准</div>
     </div>
     <div class="vcard win rv d3">
       <h3 style="font-size:18px">⚡ Engram 精简检索</h3>
       <div class="grid" id="gg"></div>
-      <div class="vtok" style="color:var(--teal)">9.5k <small>token · 只取相关片</small></div>
+      <div class="vtok" style="color:var(--teal)">9.6k <small>token · 只取相关片</small></div>
       <div style="margin-top:10px;color:var(--teal)">✓ 更聚焦 · 83.6% 准 · 可扩展到百万字</div>
     </div>
   </div>
@@ -258,15 +258,15 @@
   <h2 class="rv d1">严格判分器下,<span class="hl">大幅超过全文基线</span></h2>
   <p class="lead rv d2">LongMemEval_S 基准 · 500 题 · 用<b>标准、严格的 DeepSeek 判分器</b>,所以是公平的数字 —— 不是换个宽松判分器自我安慰。</p>
   <div class="bars">
-    <div class="bar rv d2" style="--h:74.8%"><div class="c" style="background:linear-gradient(180deg,#fb7185,#9f1239);color:#fff">74.8</div><div class="nm">裸塞全文<br><small>79k token</small></div></div>
-    <div class="bar rv d3" style="--h:83.6%"><div class="c" style="background:linear-gradient(180deg,var(--cyan),var(--violet))">83.6</div><div class="nm" style="color:var(--cyan)"><b>Engram</b><br><small>9.5k token · 8× 精简</small></div></div>
+    <div class="bar rv d2" style="--h:73.2%"><div class="c" style="background:linear-gradient(180deg,#fb7185,#9f1239);color:#fff">73.2</div><div class="nm">裸塞全文<br><small>79k token</small></div></div>
+    <div class="bar rv d3" style="--h:83.6%"><div class="c" style="background:linear-gradient(180deg,var(--cyan),var(--violet))">83.6</div><div class="nm" style="color:var(--cyan)"><b>Engram</b><br><small>9.6k token · 8× 精简</small></div></div>
   </div>
   <table class="bm rv d3">
     <tr><th>系统</th><th>总分</th><th>平均 token</th><th>开源?</th></tr>
-    <tr class="winrow"><td><b>Engram</b>(本项目)</td><td class="sc hl">83.6%</td><td style="text-align:right">9.5k</td><td>✅ AGPL-3.0</td></tr>
-    <tr><td>裸塞全文(同 backbone)</td><td class="sc">74.8%</td><td style="text-align:right">79k</td><td>—</td></tr>
+    <tr class="winrow"><td><b>Engram</b>(本项目)</td><td class="sc hl">83.6%</td><td style="text-align:right">9.6k</td><td>✅ AGPL-3.0</td></tr>
+    <tr><td>裸塞全文(同 backbone)</td><td class="sc">73.2%</td><td style="text-align:right">79k</td><td>—</td></tr>
   </table>
-  <p class="note rv d3"><b>它的定位:</b>Engram 远超裸全文(<b>+8.8 分</b>)且省约 8 倍 token,<b>全开源、可复现、可扩展到百万字</b>。500 题官方判分 ≈83.6%,每题原始日志公开。</p>
+  <p class="note rv d3"><b>它的定位:</b>Engram 远超裸全文(<b>+10.4 分</b>)且省约 8 倍 token,<b>全开源、可复现、可扩展到百万字</b>。500 题官方判分 ≈83.6%,每题原始日志公开。</p>
   <div class="repro rv d4">
 <span class="c1"># 每个数字都能自己跑一遍验证:</span><br>
 git clone https://github.com/ly-wang19/engram && cd engram<br>

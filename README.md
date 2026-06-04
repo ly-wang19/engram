@@ -43,9 +43,9 @@ a fraction of the tokens):
 | System | Overall | Avg tokens | Notes |
 |---|---:|---:|---|
 | **Engram** (`engram_lean`) | **83.6%** | **9.6k** | retrieves a lean slice; 0 errors / 500 |
-| full-context baseline (same answerer+judge) | 74.8% | 79k | stuffs the whole haystack in the prompt |
+| full-context baseline (same answerer+judge) | 73.2% | 79k | stuffs the whole haystack in the prompt |
 
-**Engram beats the full-context baseline by +8.8 points while using ~8× fewer tokens** (9.6k vs 79k) — the
+**Engram beats the full-context baseline by +10.4 points while using ~8× fewer tokens** (9.6k vs 79k) — the
 filtered slice is *more* accurate than the noisy full window, and the cost stays flat as history grows
 (full-context can't). Per-category (`engram_lean`, full 500):
 
@@ -59,16 +59,11 @@ filtered slice is *more* accurate than the noisy full window, and the cost stays
 | multi-session | 79.3% | 121 |
 | single-session-preference | 73.3% | 30 |
 
-**Where it stands:** at **83.6%** Engram beats the full-context baseline decisively (**+8.8**) at a fraction
+**Where it stands:** at **83.6%** Engram beats the full-context baseline decisively (**+10.4**) at a fraction
 of the tokens, and the cost stays flat as history grows. We report it openly — same answerer, same strict
 judge, every question logged, no cherry-picked slice. Engram leads on **token efficiency, scalability, and
 reproducibility**; the hardest categories (multi-session reasoning, temporal aggregation) are the active
 roadmap, where there's still headroom.
-
-> Note on a prior number: an earlier table cited 86.0% for a system (`engram_full`) that prepended facts to
-> the *entire* conversation history (~80k tokens). That system *contains* full-context, so it can't really
-> lose to it — it doesn't validate the memory architecture. We replaced it as the headline with
-> `engram_lean`, which retrieves a small slice and is the honest test of the thesis.
 
 ## Quickstart (zero setup, no API keys)
 
@@ -191,7 +186,7 @@ dated, provenance-tagged context.
 
 | # | Design choice | Why it matters |
 |---|---|---|
-| 1 | **Bi-temporal facts** — every fact carries *valid time* (true in the world) **and** *transaction time* (when we learned it) | Makes "what did we know on date T?" (`as_of`) and knowledge-updates **first-class**, not bolted-on. This is why knowledge-update scores 93% and temporal 87%. |
+| 1 | **Bi-temporal facts** — every fact carries *valid time* (true in the world) **and** *transaction time* (when we learned it) | Makes "what did we know on date T?" (`as_of`) and knowledge-updates **first-class**, not bolted-on. This is why knowledge-update scores 87.5% and temporal 81.1%. |
 | 2 | **Non-destructive conflict resolution** — a contradicted fact is *invalidated* (`invalid_at` + `supersedes` chain), never deleted | No silent memory corruption. Every fact answers "where did this come from?" and "what did it replace?" — full provenance + audit trail. |
 | 3 | **Cheap conflict detection** — slot-match + embedding/NLI heuristics, escalate to an LLM **only** when ambiguous | Production-grade temporal correctness **without** an LLM call per fact — the cost win at scale. |
 | 4 | **Hybrid retrieval** — dense semantic + BM25 lexical + graph proximity + recency/salience, fused with RRF | No single retriever wins everywhere. The *validated* finding: **facts + raw chunks beats either alone** — facts add conflict-resolved/temporal signal, chunks restore lost detail. |
