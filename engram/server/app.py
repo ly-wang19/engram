@@ -140,6 +140,57 @@ def health():
     return {"ok": True, "service": "engram", "users_hot": len(mgr()._hot)}
 
 
+@app.get("/")
+def viewer():
+    """A tiny built-in dashboard: enter your key, see/manage your own memory in the browser."""
+    from fastapi.responses import HTMLResponse
+    return HTMLResponse(_VIEWER_HTML)
+
+
+_VIEWER_HTML = """<!DOCTYPE html><html lang=zh-CN><head><meta charset=utf-8>
+<meta name=viewport content="width=device-width,initial-scale=1">
+<title>Engram · 我的记忆</title><style>
+*{box-sizing:border-box;margin:0;padding:0;font-family:"PingFang SC",system-ui,sans-serif}
+body{background:#070b14;color:#eaf0ff;padding:24px;max-width:920px;margin:0 auto}
+h1{font-size:22px;margin-bottom:4px}.dim{color:#8a97b8;font-size:13px}
+.bar{display:flex;gap:8px;margin:18px 0}
+input,button{padding:10px 14px;border-radius:10px;border:1px solid rgba(255,255,255,.12);background:rgba(255,255,255,.05);color:#eaf0ff;font-size:14px}
+input{flex:1}button{cursor:pointer;background:linear-gradient(90deg,#22d3ee,#a78bfa);color:#04121a;font-weight:700;border:none}
+.card{background:rgba(255,255,255,.045);border:1px solid rgba(255,255,255,.1);border-radius:14px;padding:16px;margin:12px 0}
+.card h3{font-size:14px;color:#22d3ee;letter-spacing:.1em;text-transform:uppercase;margin-bottom:10px}
+.f{padding:8px 0;border-bottom:1px solid rgba(255,255,255,.06);font-size:14.5px;display:flex;gap:10px;align-items:baseline}
+.tg{font-size:11px;border-radius:6px;padding:2px 8px;white-space:nowrap}
+.live{background:rgba(52,211,153,.16);color:#34d399}.old{background:rgba(255,255,255,.06);color:#8a97b8;text-decoration:line-through}
+.dt{color:#22d3ee;font-size:11px;min-width:78px}.stat{display:inline-block;margin-right:16px;font-size:13px;color:#8a97b8}
+.stat b{color:#eaf0ff;font-size:18px}pre{white-space:pre-wrap;font-size:13.5px;line-height:1.6}
+.add{display:flex;gap:8px;margin-top:8px}.add input{flex:1}
+</style></head><body>
+<h1>🧠 我的记忆 <span class=dim>Engram</span></h1>
+<p class=dim>输入你的 API key,看/管理你自己存的记忆。</p>
+<div class=bar><input id=key placeholder="API key(开放模式下随便填,比如 wei)" value="wei">
+<button onclick=load()>查看我的记忆</button></div>
+<div class=add><input id=msg placeholder="存一条新记忆,例如:我下周要去东京出差">
+<button onclick=remember()>记住</button></div>
+<div id=out></div>
+<script>
+const api=(p,m,b)=>fetch(p,{method:m||'GET',headers:{'Authorization':'Bearer '+key.value,'Content-Type':'application/json'},body:b?JSON.stringify(b):undefined}).then(r=>r.json());
+async function load(){
+  const d=await api('/v1/memories'); const c=d.counts||{};
+  out.innerHTML=`<div class=card><span class=stat><b>${c.facts_live||0}</b> 当前事实</span>
+   <span class=stat><b>${c.facts_superseded||0}</b> 历史</span>
+   <span class=stat><b>${c.episodes||0}</b> 对话</span>
+   <span class=stat><b>${c.summaries||0}</b> 摘要</span></div>
+   <div class=card><h3>用户画像</h3><pre>${(d.profile||'(空)')}</pre></div>
+   <div class=card><h3>事实 · 双时间轴</h3>${(d.facts||[]).map(f=>
+     `<div class=f><span class="tg ${f.status=='live'?'live':'old'}">${f.status=='live'?'当前':'历史'}</span>
+      <span class=dt>${f.valid_at}</span><span>${f.text}${f.invalid_at?' <span class=dim>→失效 '+f.invalid_at+'</span>':''}</span></div>`).join('')}</div>
+   <div class=card><h3>原始对话 + 摘要</h3>${(d.episodes||[]).map(e=>
+     `<div class=f><span class=dt>${e.date}</span><span>${e.content}${e.summary?'<br><span class=dim>摘要: '+e.summary+'</span>':''}</span></div>`).join('')}</div>`;
+}
+async function remember(){ if(!msg.value)return; await api('/v1/remember','POST',{content:msg.value}); msg.value=''; load(); }
+</script></body></html>"""
+
+
 @app.post("/v1/remember")
 def remember(req: RememberReq, user: str = Depends(auth)):
     m = mgr()
@@ -175,6 +226,33 @@ def profile(user: str = Depends(auth)):
     mem = mgr().get(user)
     return {"profile": mem.build_persona(user),
             "facts": [f.text for f in mem.fact_store.values() if f.is_live()][:50]}
+
+
+@app.get("/v1/memories")
+def memories(user: str = Depends(auth)):
+    """See EVERYTHING stored for this user — the raw episodes, the extracted bi-temporal facts (live and
+    superseded, with provenance), and the L2 session summaries. This is the 'look inside my memory' view."""
+    from ..util import fmt_date
+    mem = mgr().get(user)
+    facts = sorted(mem.fact_store.values(), key=lambda f: f.valid_at, reverse=True)
+    return {
+        "user": user,
+        "profile": mem.build_persona(user),
+        "counts": {"episodes": len(mem.episodes_doc.values()),
+                   "facts_live": sum(1 for f in mem.fact_store.values() if f.is_live()),
+                   "facts_superseded": sum(1 for f in mem.fact_store.values() if not f.is_live()),
+                   "summaries": len(mem.summary_vec.values())},
+        "facts": [{
+            "text": f.text, "subject": f.subject, "predicate": f.predicate, "object": f.object,
+            "valid_at": fmt_date(f.valid_at),
+            "invalid_at": fmt_date(f.invalid_at) if f.invalid_at else None,
+            "status": "live" if f.is_live() else "superseded",
+            "salience": round(f.salience, 2), "provenance": f.provenance,
+        } for f in facts],
+        "episodes": [{"date": ep.metadata.get("date") or fmt_date(ep.event_time),
+                      "session": ep.session_id, "content": ep.content[:500],
+                      "summary": ep.summary} for ep in mem.episodes_doc.values()],
+    }
 
 
 @app.post("/v1/forget")
