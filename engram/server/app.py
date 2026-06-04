@@ -80,12 +80,14 @@ def auth(authorization: str = Header(default="")) -> str:
 class RememberReq(BaseModel):
     content: str
     session_id: str = "default"
+    scope: str = "auto"  # auto (route by ephemerality) | long (force long-term) | working (force ephemeral)
 
 
 class RecallReq(BaseModel):
     query: str
     lean: bool = True
     n_chunks: int = 6
+    session_id: Optional[str] = None  # when set, recall also surfaces this session's working memory
 
 
 @app.get("/health")
@@ -187,19 +189,26 @@ async function delFact(id){ if(!confirm('永久删除这条记忆?'))return; awa
 
 @app.post("/v1/remember")
 def remember(req: RememberReq, user: str = Depends(auth)):
-    # Consolidation/summarization are best-effort inside the service so a transient model outage never
-    # loses the memory — the raw episode is stored and recallable either way.
-    return svc().remember(user, req.content, session_id=req.session_id)
+    # Route by ephemerality inside the service: either way the dated episode is stored (history stays
+    # answerable); transient state also goes to working memory and is NOT promoted into a durable fact.
+    return svc().remember(user, req.content, session_id=req.session_id, scope=req.scope)
 
 
 @app.post("/v1/recall")
 def recall(req: RecallReq, user: str = Depends(auth)):
-    return svc().recall(user, req.query, lean=req.lean, n_chunks=req.n_chunks)
+    return svc().recall(user, req.query, lean=req.lean, n_chunks=req.n_chunks, session_id=req.session_id)
 
 
 @app.get("/v1/profile")
 def profile(user: str = Depends(auth)):
     return svc().profile(user)
+
+
+@app.get("/v1/profile/structured")
+def structured_profile(user: str = Depends(auth)):
+    """L2 structured profile: basic info + preferences (by category) + habits, split into confirmed vs
+    待确认 (tentative). Display-only tiering — does NOT affect what recall/search can see."""
+    return svc().structured_profile(user)
 
 
 @app.get("/v1/memories")
@@ -283,6 +292,8 @@ class FactEdit(BaseModel):
     subject: Optional[str] = None
     predicate: Optional[str] = None
     object: Optional[str] = None
+    sensitive: Optional[bool] = None  # user override of the auto sensitivity flag (⑤)
+    category: Optional[str] = None
 
 
 @app.post("/v1/facts")
@@ -295,7 +306,7 @@ def add_fact(req: FactReq, user: str = Depends(auth)):
 def edit_fact(fact_id: str, req: FactEdit, user: str = Depends(auth)):
     """Edit a fact's fields; the edit becomes user-authored and sticks."""
     result = svc().update_fact(user, fact_id, subject=req.subject, predicate=req.predicate,
-                               object=req.object)
+                               object=req.object, sensitive=req.sensitive, category=req.category)
     if result is None:
         raise HTTPException(404, "fact not found")
     return result
@@ -346,6 +357,33 @@ def put_policy(req: PolicyReq, user: str = Depends(auth)):
     return svc().set_policy(user, **req.model_dump())
 
 
+# --- ① working memory: ephemeral, session/TTL-scoped state kept out of long-term ---
+class WorkingReq(BaseModel):
+    content: str
+    session_id: str = "default"
+    kind: str = "state"  # state | intent | schedule | note | ...
+    ttl_seconds: Optional[float] = None  # hard expiry; None => lives until the session is cleared
+
+
+@app.post("/v1/working")
+def add_working(req: WorkingReq, user: str = Depends(auth)):
+    """Store an ephemeral item (won't be consolidated into long-term or the profile)."""
+    return svc().add_working(user, req.content, session_id=req.session_id, kind=req.kind,
+                             ttl_seconds=req.ttl_seconds)
+
+
+@app.get("/v1/working")
+def list_working(session_id: Optional[str] = None, user: str = Depends(auth)):
+    """Live working-memory items (optionally scoped to a session). Expired/consumed are excluded."""
+    return svc().working_memory(user, session_id=session_id)
+
+
+@app.delete("/v1/working")
+def clear_working(session_id: str, user: str = Depends(auth)):
+    """End-of-session / power-cycle clear: drop this session's working memory."""
+    return svc().clear_working(user, session_id)
+
+
 # --- ② semantic graph for the 关系图谱 visualization ---
 @app.get("/v1/graph")
 def graph(user: str = Depends(auth)):
@@ -355,12 +393,13 @@ def graph(user: str = Depends(auth)):
 
 # --- ④ privacy: full data export (GDPR-style portability); erase is POST /v1/forget ---
 @app.get("/v1/export")
-def export(user: str = Depends(auth)):
+def export(include_sensitive: bool = True, user: str = Depends(auth)):
     """Download EVERYTHING stored for this user as a single JSON (data portability). Full fidelity:
-    every fact's bi-temporal stamps + provenance, raw episodes, summaries, profile, and focus."""
+    every fact's bi-temporal stamps + provenance, raw episodes, summaries, profile, and focus.
+    `include_sensitive=false` redacts facts tagged sensitive (feature ⑤) for safe sharing."""
     from fastapi.responses import JSONResponse
 
-    data = svc().export(user)
+    data = svc().export(user, include_sensitive=include_sensitive)
     fname = f"engram_{''.join(c for c in user if c.isalnum()) or 'me'}_export.json"
     return JSONResponse(data, headers={"Content-Disposition": f'attachment; filename="{fname}"'})
 

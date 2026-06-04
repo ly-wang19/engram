@@ -39,7 +39,7 @@ from .store import (
     VectorStore,
 )
 from .retrieve.lexical import bm25_scores, overlap_terms
-from .types import Episode, Fact
+from .types import Episode, Fact, WorkingMemory
 from .util import DAY, fmt_date, now
 
 # words too generic to confirm an attribute on their own ("favorite food" must not match
@@ -99,6 +99,9 @@ class Memory:
         # Working memory: the small, currently-attended set assembled for the latest query (the OS-paging
         # "hot" context). Populated by lean_context; inspectable, transient — distinct from the durable stores.
         self.working_set: list[Fact] = []
+        # WORKING MEMORY tier: ephemeral, session/TTL-scoped state that is deliberately kept OUT of the
+        # durable long-term store (CLAUDE.md §3 typed memory). Lifecycle-managed (expire/consume/clear).
+        self.working_mem: dict[str, WorkingMemory] = {}
         # User-customized focus areas (the "关注点" panel). NOT cosmetic — genuinely wired:
         #   * track: topics the user wants emphasized -> salience boost, which is a first-class retrieval
         #     scoring signal (CLAUDE.md §3.3 w_sal) AND exempts them from decay/eviction (they stay hot).
@@ -140,7 +143,7 @@ class Memory:
                 "fact_store": self.fact_store, "cold_store": self.cold_store,
                 "summary_vec": self.summary_vec, "graph": self.graph,
                 "resolver": self.resolver, "persona_cache": self._persona_cache,
-                "focus": self.focus, "policy": self.policy,
+                "focus": self.focus, "policy": self.policy, "working_mem": self.working_mem,
             }, fh)
 
     @classmethod
@@ -162,10 +165,12 @@ class Memory:
                 mem.focus = blob.get("focus") or {"track": [], "mute": []}
                 mem.policy = blob.get("policy") or {"extract_instruction": "", "extract_system": "",
                                                     "summary_system": "", "persona_system": ""}
+                mem.working_mem = blob.get("working_mem") or {}
             else:  # legacy 8-tuple snapshot (pre-focus)
                 (mem.episodes_doc, mem.episodes_vec, mem.fact_store, mem.cold_store,
                  mem.summary_vec, mem.graph, mem.resolver, mem._persona_cache) = blob
             mem._rewire()
+            mem._classify()  # backfill category/sensitivity on facts saved before feature ⑤
         mem._persist_path = path
         return mem
 
@@ -185,12 +190,34 @@ class Memory:
             self.consolidate()
         return ep
 
+    def remember(self, content: str, user_id: str = "default", session_id: str = "default",
+                 scope: str = "auto") -> dict:
+        """High-level write with ephemeral routing. KEY: it ALWAYS stores the lossless, dated episode, so
+        'when did X happen?' is answerable from history regardless of routing. For transient STATE
+        ('today my throat hurts') it additionally adds a working-memory item AND marks the episode so no
+        durable profile FACT is extracted from it — the *event* is remembered (dated, retrievable), but
+        the *state* never lingers as a current profile attribute. Durable content is left pending for the
+        caller to consolidate() into long-term facts. Returns a dict describing the routing.
+
+        This is the corrected model: ephemeral != deleted. Only the durable-profile promotion is skipped;
+        the episodic record (CLAUDE.md L0) is always kept."""
+        ephemeral = scope == "working" or (scope == "auto" and self.is_ephemeral(content))
+        ep = self.add(content, user_id=user_id, session_id=session_id)
+        if ephemeral:
+            ep.consolidated = True  # stays in the dated episodic log, but yields no durable fact
+            ep.metadata["ephemeral"] = True
+            wm = self.remember_working(content, user_id=user_id, session_id=session_id)
+            return {"scope": "working", "episode_id": ep.id, "working_id": wm.id, "kind": wm.kind}
+        return {"scope": "long", "episode_id": ep.id}
+
     def consolidate(self, episodes: Optional[list[Episode]] = None) -> dict[str, int]:
         """System-2: extract facts + build the bi-temporal graph from `episodes` (default: all pending).
         Invalidates the persona cache since the live fact set just changed."""
         eps = episodes if episodes is not None else self.ingestor.pending()
         self._apply_policy()  # honor the user's editable extraction prompt / "what to record" directive
+        self.sweep_working()  # housekeeping: drop expired/consumed ephemeral items
         stats = self.engine.consolidate(eps)
+        self._classify()  # feature ⑤: tag new facts with a category + sensitivity flag (rule-based)
         self._persona_cache.clear()  # facts changed -> any cached persona is stale
         return stats
 
@@ -305,6 +332,8 @@ class Memory:
         f = Fact(subject=subject, predicate=predicate, object=object, user_id=user, source="user",
                  valid_at=valid_at if valid_at is not None else now())
         f.embedding = self.embedder.embed(f.text)
+        from .consolidate.classify import classify_fact
+        classify_fact(f)  # tag category + sensitivity (feature ⑤)
         live = [x for x in self.fact_store.values() if x.user_id == user and x.is_live()]
         action, invalidated = self.engine.conflict.reconcile(f, live)
         for old in invalidated:
@@ -316,8 +345,11 @@ class Memory:
         return f
 
     def update_fact(self, fact_id: str, subject: Optional[str] = None, predicate: Optional[str] = None,
-                    object: Optional[str] = None) -> Optional[Fact]:
-        """Edit a fact's fields in place and mark it user-authored (so auto-extraction won't revert it)."""
+                    object: Optional[str] = None, sensitive: Optional[bool] = None,
+                    category: Optional[str] = None) -> Optional[Fact]:
+        """Edit a fact's fields in place and mark it user-authored (so auto-extraction won't revert it).
+        Re-classifies category/sensitivity from the new content; an explicit `sensitive`/`category`
+        overrides the auto result (user's call always wins)."""
         f = self.fact_store.get(fact_id) or self.cold_store.get(fact_id)
         if f is None:
             return None
@@ -332,6 +364,13 @@ class Memory:
         f.source = "user"
         f.invalid_at = None  # a user edit makes it current again
         f.expired_at = None
+        # re-classify from the edited content, then apply any explicit user override
+        from .consolidate.classify import classify
+        f.category, f.sensitive = classify(f.predicate, f.object, f.text)
+        if category is not None:
+            f.category = category
+        if sensitive is not None:
+            f.sensitive = sensitive
         self.fact_store.upsert(f.id, f.embedding, f)
         self._persona_cache.clear()
         return f
@@ -433,6 +472,82 @@ class Memory:
             ex.system = self._effective("extract_system")
             ex.instruction = self.policy.get("extract_instruction", "")
         self.summarizer.system = self._effective("summary_system")
+
+    # --- WORKING MEMORY tier: ephemeral, session/TTL-scoped state kept OUT of long-term (feature ①) ---
+    # Markers that a statement is transient (a passing state/intent) rather than a durable fact — used to
+    # route "today my throat hurts" to working memory instead of polluting the long-term store.
+    _EPHEMERAL_MARKERS = (
+        "today", "right now", "currently", "this morning", "this afternoon", "tonight", "this week",
+        "for now", "at the moment", "temporarily", "this trip", "feeling a bit", "i feel ",
+        "今天", "现在", "此刻", "暂时", "这会儿", "待会", "等下", "本次", "这趟", "这次", "最近想", "改天",
+    )
+
+    @classmethod
+    def is_ephemeral(cls, content: str) -> bool:
+        """Heuristic router: does this read as transient state/intent (→ working memory) rather than a
+        durable fact (→ long-term)? Deterministic and free; the caller can always override with an explicit
+        scope. Keeping transient context out of long-term is the general memory-hygiene win."""
+        c = content.lower()
+        return any(m in c for m in cls._EPHEMERAL_MARKERS)
+
+    def remember_working(self, content: str, user_id: str = "default", session_id: str = "default",
+                         kind: str = "state", ttl_seconds: Optional[float] = None,
+                         event_time: Optional[float] = None) -> WorkingMemory:
+        """Store an ephemeral item in the working-memory tier. NOT consolidated into long-term and NOT part
+        of the durable profile. `ttl_seconds` sets a hard wall-clock expiry; otherwise it lives until the
+        session is cleared."""
+        user = self.resolver.resolve(user_id)
+        wm = WorkingMemory(
+            content=content, user_id=user, session_id=session_id, kind=kind,
+            event_time=event_time if event_time is not None else now(),
+            expires_at=(now() + ttl_seconds) if ttl_seconds else None,
+        )
+        wm.embedding = self.embedder.embed(content)
+        self.working_mem[wm.id] = wm
+        return wm
+
+    def working_memory(self, user_id: str = "default", session_id: Optional[str] = None,
+                       as_of: Optional[float] = None, kind: Optional[str] = None) -> list[WorkingMemory]:
+        """Live working-memory items (optionally scoped to a session / kind); expired & consumed excluded.
+        Lazily sweeps hard-expired items on read."""
+        user = self.resolver.resolve(user_id)
+        self.sweep_working(as_of)
+        return [w for w in self.working_mem.values()
+                if w.user_id == user and w.is_live(as_of, session_id) and (kind is None or w.kind == kind)]
+
+    def clear_session(self, user_id: str = "default", session_id: str = "default") -> int:
+        """End-of-session / power-cycle clear: drop this session's working memory. Returns count cleared."""
+        user = self.resolver.resolve(user_id)
+        ids = [i for i, w in self.working_mem.items() if w.user_id == user and w.session_id == session_id]
+        for i in ids:
+            del self.working_mem[i]
+        return len(ids)
+
+    def consume_working(self, wm_id: str) -> bool:
+        """Soft-clear: mark a working item consumed so it stops surfacing (it served its purpose)."""
+        w = self.working_mem.get(wm_id)
+        if w is None:
+            return False
+        w.consumed = True
+        return True
+
+    def sweep_working(self, as_of: Optional[float] = None) -> int:
+        """Drop hard-expired / consumed working items. Called lazily on read and during consolidate."""
+        t = now() if as_of is None else as_of
+        dead = [i for i, w in self.working_mem.items()
+                if w.consumed or (w.expires_at is not None and w.expires_at <= t)]
+        for i in dead:
+            del self.working_mem[i]
+        return len(dead)
+
+    # --- classification + sensitivity (feature ⑤) ---
+    def _classify(self) -> None:
+        """Tag each fact with a coarse category + sensitivity flag (rule-based, idempotent)."""
+        from .consolidate.classify import classify_fact
+        for f in self.fact_store.values():
+            classify_fact(f)
+        for f in self.cold_store.values():
+            classify_fact(f)
 
     # --- L2/L3 abstraction (built during consolidation, stored for a lean read) ---
     def summarize_episodes(self, episodes: list[Episode]) -> int:
@@ -546,6 +661,16 @@ class Memory:
                 and (f.predicate.lower() in self._INSTRUCTION_PREDS
                      or any(f.predicate.lower().startswith(p + "_") for p in ("wants", "prefers", "remind")))]
 
+    def structured_profile(self, user_id: str = "default") -> dict:
+        """L2 structured profile: the user's live facts grouped into basic info / preferences / habits,
+        split into confirmed vs tentative for DISPLAY. This is a read-only derived view — it never filters
+        the fact store or the retrieval path, so recall is unaffected (search/lean_context see all facts)."""
+        from .consolidate.structured import build_structured_profile
+        user = self.resolver.resolve(user_id)
+        subject = self.engine.self_name(user)
+        live = [f for f in self.fact_store.values() if f.user_id == user and f.is_live()]
+        return build_structured_profile(live, subject, user)
+
     def build_persona(self, user_id: str = "default") -> str:
         """L3: a compact narrative profile (preferences/habits/possessions) synthesized from live facts."""
         user = self.resolver.resolve(user_id)
@@ -578,6 +703,8 @@ class Memory:
         cascade: bool = False,  # _S-optimal off; it's the _M/10M scaling primitive (coarse->fine drill)
         timeline: bool = False,  # add a chronological event timeline (helps temporal ordering/durations)
         char_budget: int = 60_000,
+        session_id: Optional[str] = None,  # when set, prepend this session's ephemeral working memory
+        redact_sensitive: bool = False,  # drop sensitive facts (feature ⑤) — for shared/export contexts
     ) -> str:
         """The scalable read path (CLAUDE.md Bet A/E): assemble a SMALL, well-organized context from
         retrieved abstractions instead of the whole history —
@@ -602,10 +729,23 @@ class Memory:
             from .retrieve.agentic import AgenticRetriever
             queries += AgenticRetriever(self, self.llm)._subqueries(query)
 
-        if persona:
+        # The L3 persona is a free-text SYNTHESIS that may fold in sensitive facts; we can't guarantee it's
+        # scrubbed, so for a redacted/shared context we drop it entirely (structured facts below are filtered
+        # reliably). NB: session summaries/chunks are also free text — sensitivity redaction is reliable at
+        # the structured-fact level (and export), best-effort for free-text layers.
+        if persona and not redact_sensitive:
             p = self.build_persona(user)
             if p:
                 blocks.append(f"USER PROFILE:\n{p}")
+
+        # WORKING MEMORY: the current session's ephemeral state ("today my throat hurts", this-trip intent)
+        # — surfaced so the answer reflects "right now", but never consolidated to long-term or the profile.
+        if session_id is not None:
+            wm = self.working_memory(user, session_id=session_id, as_of=as_of)
+            if wm:
+                wl = "\n".join(f"- [{w.kind}] {w.content}"
+                               for w in sorted(wm, key=lambda x: x.event_time))
+                blocks.append(f"WORKING MEMORY (this session, ephemeral):\n{wl}")
 
         # L1 facts: hybrid retrieval per (sub-)query, unioned; + n-hop graph expansion from query entities.
         fact_map: dict[str, Fact] = {}
@@ -619,6 +759,9 @@ class Memory:
         mute = self.focus.get("mute", [])
         if mute:
             all_facts = [f for f in all_facts if not self._matches(f, mute)]
+        # Sensitivity redaction (feature ⑤): exclude sensitive facts when assembling a shared/export context.
+        if redact_sensitive:
+            all_facts = [f for f in all_facts if not getattr(f, "sensitive", False)]
         # Optional cross-encoder rerank over the FACT pool. Unlike reranking whole sessions (which the
         # cross-encoder truncates to 512 and mis-ranks — a known _S regression), facts are short, so the
         # reranker sharpens fact selection without truncation loss.

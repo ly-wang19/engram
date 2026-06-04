@@ -9,6 +9,7 @@ import {
   ShieldCheck,
   SlidersHorizontal,
   Target,
+  UserRound,
   X,
 } from 'lucide-react'
 
@@ -16,6 +17,7 @@ import { cx } from './ui'
 
 const NAV = [
   { to: '/', label: '总览', icon: LayoutDashboard, end: true },
+  { to: '/profile', label: '用户画像', icon: UserRound },
   { to: '/ask', label: '记忆问答', icon: Search },
   { to: '/facts', label: '事实管理', icon: Database },
   { to: '/timeline', label: '时间线', icon: Clock },

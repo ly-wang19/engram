@@ -10,6 +10,8 @@ import type {
   PolicyResponse,
   RecallResult,
   RememberResult,
+  StructuredProfile,
+  WorkingItem,
 } from '../types'
 
 // Same-origin by default (FastAPI serves the SPA + API together). Override with
@@ -86,6 +88,8 @@ export const api = {
   setFocus: (focus: Partial<Focus>) =>
     request<{ ok: boolean; focus: Focus }>('/v1/focus', { method: 'PUT', body: json(focus) }),
 
+  structuredProfile: () => request<StructuredProfile>('/v1/profile/structured'),
+
   policy: () => request<PolicyResponse>('/v1/policy'),
 
   setPolicy: (patch: Partial<Policy>) =>
@@ -93,10 +97,25 @@ export const api = {
 
   forget: () => request<{ ok: boolean; message: string }>('/v1/forget', { method: 'POST', body: json({}) }),
 
+  working: (sessionId?: string) =>
+    request<{ items: WorkingItem[] }>(`/v1/working${sessionId ? `?session_id=${encodeURIComponent(sessionId)}` : ''}`),
+
+  addWorking: (content: string, kind = 'state', ttl_seconds?: number, session_id = 'default') =>
+    request<{ ok: boolean; id: string }>('/v1/working', {
+      method: 'POST',
+      body: json({ content, kind, ttl_seconds, session_id }),
+    }),
+
+  clearWorking: (session_id = 'default') =>
+    request<{ ok: boolean; cleared: number }>(`/v1/working?session_id=${encodeURIComponent(session_id)}`, {
+      method: 'DELETE',
+    }),
+
   /** Trigger a browser download of the full data export (keeps the Bearer header). */
-  async exportDownload(filenameHint = 'me'): Promise<void> {
+  async exportDownload(filenameHint = 'me', includeSensitive = true): Promise<void> {
     const key = currentKey()
-    const res = await fetch(`${BASE}/v1/export`, {
+    const qs = includeSensitive ? '' : '?include_sensitive=false'
+    const res = await fetch(`${BASE}/v1/export${qs}`, {
       headers: key ? { Authorization: `Bearer ${key}` } : undefined,
     })
     if (!res.ok) throw new ApiError(res.status, `导出失败 (${res.status})`)

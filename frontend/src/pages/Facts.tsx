@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { Lock, Pencil, Plus, Search, Trash2 } from 'lucide-react'
+import { Lock, Pencil, Plus, Search, ShieldAlert, Trash2 } from 'lucide-react'
 
 import { Badge, Button, Card, EmptyState, ErrorState, Field, PageHeader, Spinner } from '../components/ui'
 import { ConfirmDialog, Modal } from '../components/Modal'
@@ -15,6 +15,7 @@ export default function Facts() {
 
   const [q, setQ] = useState('')
   const [showOld, setShowOld] = useState(true)
+  const [hideSensitive, setHideSensitive] = useState(false)
   const [editing, setEditing] = useState<MemoryFact | null>(null)
   const [adding, setAdding] = useState(false)
   const [confirmId, setConfirmId] = useState<string | null>(null)
@@ -22,10 +23,13 @@ export default function Facts() {
   const facts = useMemo(() => {
     let list = data?.facts ?? []
     if (!showOld) list = list.filter((f) => f.status === 'live')
+    if (hideSensitive) list = list.filter((f) => !f.sensitive)
     const needle = q.trim().toLowerCase()
     if (needle) list = list.filter((f) => f.text.toLowerCase().includes(needle))
     return list
-  }, [data, q, showOld])
+  }, [data, q, showOld, hideSensitive])
+
+  const sensitiveCount = (data?.facts ?? []).filter((f) => f.sensitive).length
 
   if (isLoading) return <Spinner label="加载事实…" />
   if (isError) return <ErrorState message={(error as Error).message} />
@@ -57,6 +61,10 @@ export default function Facts() {
             <input type="checkbox" checked={showOld} onChange={(e) => setShowOld(e.target.checked)} className="accent-brand-cyan" />
             显示历史
           </label>
+          <label className="flex select-none items-center gap-2 px-1 text-sm text-ghost">
+            <input type="checkbox" checked={hideSensitive} onChange={(e) => setHideSensitive(e.target.checked)} className="accent-brand-rose" />
+            隐藏敏感{sensitiveCount > 0 && <span className="text-brand-rose">({sensitiveCount})</span>}
+          </label>
         </div>
       </Card>
 
@@ -73,6 +81,14 @@ export default function Facts() {
                   </div>
                   <div className="mt-0.5 flex flex-wrap items-center gap-2 text-[11px] text-ghost">
                     <span className="rounded bg-white/5 px-1.5 py-px font-mono">{f.predicate}</span>
+                    {f.category && f.category !== '其他' && (
+                      <span className="rounded bg-brand-violet/15 px-1.5 py-px text-brand-violet">{f.category}</span>
+                    )}
+                    {f.sensitive && (
+                      <span className="inline-flex items-center gap-1 rounded bg-brand-rose/15 px-1.5 py-px text-brand-rose">
+                        <ShieldAlert className="h-3 w-3" /> 敏感
+                      </span>
+                    )}
                     {f.source === 'user' && (
                       <span className="inline-flex items-center gap-1 text-brand-amber">
                         <Lock className="h-3 w-3" /> 我设定
@@ -184,11 +200,12 @@ function FactModal({
   initial?: MemoryFact
   loading: boolean
   onClose: () => void
-  onSubmit: (vals: { subject?: string; predicate?: string; object?: string }) => void
+  onSubmit: (vals: { subject?: string; predicate?: string; object?: string; sensitive?: boolean }) => void
 }) {
   const [subject, setSubject] = useState('user')
   const [predicate, setPredicate] = useState('')
   const [object, setObject] = useState('')
+  const [sensitive, setSensitive] = useState(false)
 
   // Sync inputs whenever the dialog opens with a (possibly new) fact.
   const [seen, setSeen] = useState<string | null>(null)
@@ -198,6 +215,7 @@ function FactModal({
     setSubject(initial?.subject ?? 'user')
     setPredicate(initial?.predicate ?? '')
     setObject(initial?.object ?? '')
+    setSensitive(initial?.sensitive ?? false)
   }
 
   return (
@@ -210,7 +228,7 @@ function FactModal({
           <Button variant="ghost" onClick={onClose}>
             取消
           </Button>
-          <Button loading={loading} disabled={!predicate.trim() || !object.trim()} onClick={() => onSubmit({ subject, predicate, object })}>
+          <Button loading={loading} disabled={!predicate.trim() || !object.trim()} onClick={() => onSubmit({ subject, predicate, object, sensitive })}>
             保存
           </Button>
         </>
@@ -226,6 +244,10 @@ function FactModal({
         <Field label="宾语 Object">
           <input className="input" value={object} onChange={(e) => setObject(e.target.value)} placeholder="字节跳动" />
         </Field>
+        <label className="flex select-none items-center gap-2 text-sm text-slate-200">
+          <input type="checkbox" checked={sensitive} onChange={(e) => setSensitive(e.target.checked)} className="accent-brand-rose" />
+          <ShieldAlert className="h-4 w-4 text-brand-rose" /> 标记为敏感（导出/共享时可一键排除）
+        </label>
         <p className="text-xs text-ghost">保存后这条会被标记为“我设定”，自动抽取不会再覆盖它。</p>
       </div>
     </Modal>

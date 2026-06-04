@@ -1,13 +1,15 @@
 import { useState } from 'react'
-import { Send } from 'lucide-react'
+import { Hourglass, Send, Trash2 } from 'lucide-react'
 
-import { Button, Card, CardTitle, EmptyState, ErrorState, PageHeader, Spinner } from '../components/ui'
+import { Badge, Button, Card, CardTitle, EmptyState, ErrorState, PageHeader, Spinner } from '../components/ui'
 import { toast } from '../components/Toast'
-import { useMemories, useRemember } from '../hooks/queries'
+import { useClearWorking, useMemories, useRemember, useWorking } from '../hooks/queries'
 
 export default function Conversations() {
   const { data, isLoading, isError, error } = useMemories()
   const remember = useRemember()
+  const working = useWorking()
+  const clearWorking = useClearWorking()
   const [text, setText] = useState('')
 
   const submit = () => {
@@ -16,7 +18,9 @@ export default function Conversations() {
     remember.mutate(content, {
       onSuccess: (r) => {
         setText('')
-        if (r.degraded) toast.info('已存为原始记忆（抽取暂时降级）')
+        working.refetch()
+        if (r.scope === 'working') toast.info('临时状态 → 已记入历史（可日后查询）+ 本次会话工作记忆，但不写进长期画像')
+        else if (r.degraded) toast.info('已存为原始记忆（抽取暂时降级）')
         else toast.success(`已记住，抽取出 ${r.extracted} 条新事实`)
       },
       onError: (e) => toast.error(String((e as Error).message)),
@@ -48,6 +52,41 @@ export default function Conversations() {
           </Button>
         </div>
       </Card>
+
+      {(working.data?.items.length ?? 0) > 0 && (
+        <Card>
+          <CardTitle
+            hint={
+              <button
+                onClick={() =>
+                  clearWorking.mutate(undefined, {
+                    onSuccess: () => {
+                      working.refetch()
+                      toast.success('已清空本次会话工作记忆')
+                    },
+                  })
+                }
+                className="inline-flex items-center gap-1 text-brand-rose hover:underline"
+              >
+                <Trash2 className="h-3.5 w-3.5" /> 清空本次会话
+              </button>
+            }
+          >
+            <span className="inline-flex items-center gap-2">
+              <Hourglass className="h-4 w-4 text-brand-amber" /> 工作记忆 · 本次会话临时状态（历史已另存，可查询）
+            </span>
+          </CardTitle>
+          <ul className="space-y-1.5">
+            {working.data!.items.map((w) => (
+              <li key={w.id} className="flex items-center gap-2 text-sm text-slate-200">
+                <Badge tone="cyan">{w.kind}</Badge>
+                <span className="flex-1">{w.content}</span>
+                {w.expires_at && <span className="text-[11px] text-ghost">到期 {w.expires_at}</span>}
+              </li>
+            ))}
+          </ul>
+        </Card>
+      )}
 
       <Card>
         <CardTitle hint={`${data.episodes.length} 条`}>对话记录</CardTitle>

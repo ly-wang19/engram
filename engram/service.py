@@ -86,12 +86,20 @@ class MemoryService:
         return len(self._hot)
 
     # --- write path ---------------------------------------------------------
-    def remember(self, user: str, content: str, session_id: str = "default") -> dict:
+    def remember(self, user: str, content: str, session_id: str = "default",
+                 scope: str = "auto") -> dict:
         """Store a message + run System-2 consolidation/summarization (best-effort: a transient model
-        outage never loses the raw episode)."""
+        outage never loses the raw episode). `scope` (auto|long|working) routes by ephemerality —
+        transient state stays in dated history + working memory but is NOT promoted to a durable profile
+        fact (see Memory.remember)."""
         with self.lock(user):
             mem = self.get(user)
-            mem.add(content, user_id=user, session_id=session_id)
+            routed = mem.remember(content, user_id=user, session_id=session_id, scope=scope)
+            if routed["scope"] == "working":
+                mem.save()
+                return {"ok": True, "scope": "working", "kind": routed["kind"],
+                        "id": routed["working_id"], "episode_id": routed["episode_id"],
+                        "note": "kept in dated history (askable later); not added to the durable profile"}
             try:
                 added = mem.consolidate().get("facts_added", 0)
                 mem.summarize_episodes(list(mem.episodes_doc.values()))
@@ -99,7 +107,7 @@ class MemoryService:
                 mem.save()
                 return {"ok": True, "extracted": 0, "degraded": type(exc).__name__, "stored_raw": True}
             mem.save()
-            return {"ok": True, "extracted": added,
+            return {"ok": True, "scope": "long", "extracted": added,
                     "total_facts": len([f for f in mem.fact_store.values() if f.is_live()])}
 
     def import_(self, user: str, sessions: Optional[list] = None, format: str = "auto",
@@ -125,10 +133,12 @@ class MemoryService:
             return {"ok": True, "id": f.id, "text": f.text}
 
     def update_fact(self, user: str, fact_id: str, subject: Optional[str] = None,
-                    predicate: Optional[str] = None, object: Optional[str] = None) -> Optional[dict]:
+                    predicate: Optional[str] = None, object: Optional[str] = None,
+                    sensitive: Optional[bool] = None, category: Optional[str] = None) -> Optional[dict]:
         with self.lock(user):
             mem = self.get(user)
-            f = mem.update_fact(fact_id, subject=subject, predicate=predicate, object=object)
+            f = mem.update_fact(fact_id, subject=subject, predicate=predicate, object=object,
+                                sensitive=sensitive, category=category)
             if f is None:
                 return None
             mem.save()
@@ -158,14 +168,46 @@ class MemoryService:
             return {"ok": True, **result}
 
     # --- read path ----------------------------------------------------------
-    def recall(self, user: str, query: str, lean: bool = True, n_chunks: int = 6) -> dict:
-        """A small retrieved context (lean) or a direct factual answer (lean=False)."""
+    def recall(self, user: str, query: str, lean: bool = True, n_chunks: int = 6,
+               session_id: Optional[str] = None) -> dict:
+        """A small retrieved context (lean) or a direct factual answer (lean=False). When `session_id` is
+        set, the lean context also surfaces that session's ephemeral working memory."""
         mem = self.get(user)
         if lean:
-            ctx = mem.lean_context(query, user_id=user, n_chunks=n_chunks)
+            ctx = mem.lean_context(query, user_id=user, n_chunks=n_chunks, session_id=session_id)
             return {"context": ctx, "tokens_est": len(ctx.split())}
         res = mem.search(query, user_id=user)
         return {"answer": res.answer(), "facts": [f.text for f in res.facts[:10]]}
+
+    def structured_profile(self, user: str) -> dict:
+        """L2 structured profile (basic info / preferences / habits, confirmed vs tentative). Display-only."""
+        return self.get(user).structured_profile(user)
+
+    # --- working memory (ephemeral, session/TTL-scoped; feature ①) ----------
+    def add_working(self, user: str, content: str, session_id: str = "default", kind: str = "state",
+                    ttl_seconds: Optional[float] = None) -> dict:
+        with self.lock(user):
+            mem = self.get(user)
+            wm = mem.remember_working(content, user_id=user, session_id=session_id, kind=kind,
+                                      ttl_seconds=ttl_seconds)
+            mem.save()
+            return {"ok": True, "id": wm.id, "kind": wm.kind, "expires_at": wm.expires_at}
+
+    def working_memory(self, user: str, session_id: Optional[str] = None) -> dict:
+        mem = self.get(user)
+        items = mem.working_memory(user, session_id=session_id)
+        return {"items": [{
+            "id": w.id, "content": w.content, "kind": w.kind, "session_id": w.session_id,
+            "created": fmt_date(w.created_at),
+            "expires_at": fmt_date(w.expires_at) if w.expires_at else None,
+        } for w in items]}
+
+    def clear_working(self, user: str, session_id: str) -> dict:
+        with self.lock(user):
+            mem = self.get(user)
+            n = mem.clear_session(user, session_id)
+            mem.save()
+            return {"ok": True, "cleared": n}
 
     def profile(self, user: str) -> dict:
         mem = self.get(user)
@@ -199,6 +241,7 @@ class MemoryService:
                 "invalid_at": fmt_date(f.invalid_at) if f.invalid_at else None,
                 "status": "live" if f.is_live() else "superseded",
                 "source": f.source, "supersedes": f.supersedes,
+                "category": getattr(f, "category", ""), "sensitive": getattr(f, "sensitive", False),
                 "salience": round(f.salience, 2), "provenance": f.provenance,
             } for f in facts],
             "episodes": [{"date": ep.metadata.get("date") or fmt_date(ep.event_time),
@@ -206,10 +249,13 @@ class MemoryService:
                           "summary": ep.summary} for ep in mem.episodes_doc.values()],
         }
 
-    def export(self, user: str) -> dict:
+    def export(self, user: str, include_sensitive: bool = True) -> dict:
         """Full-fidelity data export (GDPR-style portability): every fact's bi-temporal stamps +
-        provenance, raw episodes, summaries, profile, focus, and graph."""
+        provenance, raw episodes, summaries, profile, focus, and graph. `include_sensitive=False` redacts
+        facts tagged sensitive (feature ⑤) for safe sharing."""
         mem = self.get(user)
+        _facts = [f for f in mem.fact_store.values()
+                  if include_sensitive or not getattr(f, "sensitive", False)]
         return {
             "engram_export_version": 1,
             "user": user,
@@ -218,12 +264,13 @@ class MemoryService:
             "facts": [{
                 "id": f.id, "subject": f.subject, "predicate": f.predicate, "object": f.object,
                 "text": f.text, "source": f.source, "status": "live" if f.is_live() else "superseded",
+                "category": getattr(f, "category", ""), "sensitive": getattr(f, "sensitive", False),
                 "salience": round(f.salience, 3), "confidence": f.confidence,
                 "valid_at": f.valid_at, "valid_at_h": fmt_date(f.valid_at),
                 "invalid_at": f.invalid_at, "invalid_at_h": fmt_date(f.invalid_at) if f.invalid_at else None,
                 "created_at": f.created_at, "expired_at": f.expired_at,
                 "supersedes": f.supersedes, "provenance": f.provenance,
-            } for f in sorted(mem.fact_store.values(), key=lambda x: x.valid_at, reverse=True)],
+            } for f in sorted(_facts, key=lambda x: x.valid_at, reverse=True)],
             "episodes": [{
                 "id": ep.id, "session_id": ep.session_id, "speaker": ep.speaker,
                 "event_time": ep.event_time, "date": ep.metadata.get("date") or fmt_date(ep.event_time),

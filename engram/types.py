@@ -52,6 +52,11 @@ class Fact:
     # management UI). A user-asserted fact is AUTHORITATIVE — auto-extraction may never silently override it
     # (so a manual correction sticks). This is what makes user-facing memory editing trustworthy.
     source: str = "extracted"
+    # classification (feature ⑤): a coarse domain/category and a sensitivity flag (PII/health/finance/...).
+    # Simple defaults so they're class attributes — old pickled facts (without these) read the defaults,
+    # keeping snapshots backward-compatible. Sensitive facts can be redacted from shared/export contexts.
+    category: str = ""
+    sensitive: bool = False
 
     # --- valid time (world) ---
     valid_at: float = field(default_factory=now)
@@ -111,3 +116,40 @@ class Relation:
     valid_at: float = field(default_factory=now)
     invalid_at: Optional[float] = None
     id: str = field(default_factory=lambda: gen_id("rel"))
+
+
+@dataclass
+class WorkingMemory:
+    """Short-term WORKING memory (CLAUDE.md §3 typed memory): ephemeral state that must NOT pollute the
+    durable long-term store. Bound to a session and/or a hard TTL, and cleared when its session ends, it
+    expires, or it is consumed. Examples: "today my throat hurts" (transient state), "remind me to buy
+    milk" (intent), seat-occupant facts within one trip. Distinct from `working_set` (the transient query
+    attention set) — this is a persisted, lifecycle-managed tier.
+
+    Lifecycle (the general memory-hygiene rule — keep transient context out of long-term):
+      * session-scoped  -> lives until clear_session() (e.g. a new conversation / power cycle)
+      * ttl/expires_at  -> hard-expires at a wall-clock time (e.g. a dated reminder, a 2h fallback)
+      * consumed        -> soft-cleared once it has served its purpose
+    """
+
+    content: str
+    user_id: str = "default"
+    session_id: str = "default"
+    kind: str = "state"  # state | intent | schedule | note | passenger | ...
+    event_time: float = field(default_factory=now)
+    created_at: float = field(default_factory=now)
+    expires_at: Optional[float] = None  # hard wall-clock expiry; None => session-scoped only
+    consumed: bool = False  # soft-clear once used
+    embedding: Optional[list[float]] = None
+    id: str = field(default_factory=lambda: gen_id("wm"))
+    metadata: dict = field(default_factory=dict)
+
+    def is_live(self, as_of: Optional[float] = None, session_id: Optional[str] = None) -> bool:
+        t = now() if as_of is None else as_of
+        if self.consumed:
+            return False
+        if self.expires_at is not None and self.expires_at <= t:
+            return False
+        if session_id is not None and self.session_id != session_id:
+            return False
+        return True
