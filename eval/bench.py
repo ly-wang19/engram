@@ -41,10 +41,16 @@ from eval.longmemeval import (  # noqa: E402
     FC_CHAR_BUDGET,
     REASONING_SYSTEM,
     all_text,
+    answer_self_consistency,
+    answer_two_stage_pref,
+    build_persona,
+    build_session_map,
     extract_answer,
     ingest,
     judge_correct,
     load_data,
+    needs_self_consistency,
+    needs_two_stage_pref,
     sessions_of,
 )
 
@@ -60,6 +66,13 @@ class Rig:
     chunks: int = 5
     extract_k: int = 8
     reasoning: bool = False
+    strategies: bool = False
+    sc_on: bool = True
+    sc_k: int = 5
+    persona: bool = False
+    session_map: bool = False
+    summ_k: int = 25      # engram_lean: how many sessions to summarize (high-recall coverage)
+    n_summaries: int = 12  # engram_lean: how many session summaries to retrieve into the lean context
     agentic: bool = False
     timeline: bool = False
     hyde: bool = False
@@ -179,11 +192,53 @@ class EngramFullSystem:
         facts.sort(key=lambda f: f.valid_at, reverse=True)
         fact_lines = "\n".join(f"- [{fmt_date(f.valid_at)}] {f.text}" for f in facts) or "(none extracted)"
         full_hist = all_text(item)[:FC_CHAR_BUDGET]
-        return f"MEMORY INDEX (extracted facts, most recent first):\n{fact_lines}\n\nFULL CONVERSATION HISTORY:\n{full_hist}"
+
+        # L2/L3 abstraction layers (built once over the full history with the cheap extractor LLM).
+        blocks = []
+        if rig.persona:  # L3: user profile — grounds preference/recommendation answers
+            persona = build_persona(rig.extractor_llm, full_hist)
+            if persona:
+                blocks.append(f"USER PROFILE (preferences, habits, possessions):\n{persona}")
+        blocks.append(f"MEMORY INDEX (extracted facts, most recent first):\n{fact_lines}")
+        if rig.session_map:  # L2: complete session-by-session digest — aids multi-session aggregation
+            smap = build_session_map(rig.extractor_llm, full_hist)
+            if smap:
+                blocks.append(f"SESSION MAP (every conversation, chronological):\n{smap}")
+        blocks.append(f"FULL CONVERSATION HISTORY:\n{full_hist}")
+        return "\n\n".join(blocks)
+
+
+class EngramLeanSystem:
+    """The scalable memory system (CLAUDE.md Bet A/E): build L1 facts + L2 session summaries + L3 persona
+    during consolidation, then answer from a LEAN retrieved slice — NOT the full history. This is the real
+    win condition: beat full-context on accuracy while using a fraction of the tokens, so it still works
+    when the history far exceeds the model's window. Unlike engram_full, the raw haystack never enters the
+    prompt; only a small, organized, retrieved context does."""
+
+    name = "engram_lean"
+
+    def __init__(self, rig: Rig):
+        self.rig = rig
+
+    def context(self, item: dict) -> str:
+        rig, qid, q = self.rig, item["question_id"], item["question"]
+        mem = Memory(embedder=rig.embedder, llm=rig.extractor_llm, reranker=rig.reranker)
+        ingest(mem, item, qid)
+        # L1 facts from the top-k retrieved sessions; L2 summaries over a high-recall set (recall@25≈98%
+        # on _S, so summarizing the top-summ_k retrieved sessions covers the evidence while staying lean).
+        retrieved = mem.retrieve_episodes(q, qid, max(rig.extract_k, rig.summ_k))
+        mem.consolidate_full(
+            fact_episodes=retrieved[: rig.extract_k] if rig.extract_k > 0 else retrieved,
+            summary_episodes=retrieved[: rig.summ_k],
+        )
+        return mem.lean_context(
+            q, user_id=qid, n_summaries=rig.n_summaries, n_facts=rig.topk,
+            n_chunks=rig.chunks, persona=rig.persona,
+        )
 
 
 SYSTEMS = {"engram": EngramSystem, "full_context": FullContextSystem, "rag": RAGSystem,
-           "mem0": Mem0System, "engram_full": EngramFullSystem}
+           "mem0": Mem0System, "engram_full": EngramFullSystem, "engram_lean": EngramLeanSystem}
 
 
 def eval_item(item, systems, rig):
@@ -195,9 +250,18 @@ def eval_item(item, systems, rig):
         try:
             t0 = time.perf_counter()
             ctx = sysobj.context(item)
-            pred_raw = rig.answerer_llm.complete(
-                ANSWER_TEMPLATE.format(qdate=qdate, context=ctx, question=q), system=sys_prompt
-            )
+            # Strategy routing (rig.strategies): pick the answer method from the QUESTION TEXT (generalizes;
+            # never peeks at the benchmark's category label). Counting/duration -> self-consistency vote;
+            # recommendation/preference -> two-stage (surface user history, then answer grounded in it).
+            if rig.strategies and rig.sc_on and rig.reasoning and needs_self_consistency(q):
+                prompt = ANSWER_TEMPLATE.format(qdate=qdate, context=ctx, question=q)
+                pred_raw = answer_self_consistency(rig.answerer_llm, prompt, sys_prompt, k=rig.sc_k)
+            elif rig.strategies and rig.reasoning and needs_two_stage_pref(q):
+                pred_raw = answer_two_stage_pref(rig.answerer_llm, ctx, q, qdate, sys_prompt)
+            else:
+                pred_raw = rig.answerer_llm.complete(
+                    ANSWER_TEMPLATE.format(qdate=qdate, context=ctx, question=q), system=sys_prompt
+                )
             # reasoning mode: judge + abstention check operate on the extracted final ANSWER line,
             # not the chain-of-thought, so reasoning text doesn't false-positive abstention markers.
             pred = extract_answer(pred_raw) if rig.reasoning else pred_raw
@@ -248,6 +312,20 @@ def main():
                     help="answer with explicit EVIDENCE+REASON+ANSWER chain-of-thought (Phase 1: lifts "
                          "multi-evidence categories — temporal, multi-session, knowledge-update — which "
                          "fail because single-shot answering can't aggregate)")
+    ap.add_argument("--strategies", action="store_true",
+                    help="route by question text: self-consistency vote on counting/duration questions, "
+                         "two-stage (surface user history -> answer) on preference questions (needs --reasoning)")
+    ap.add_argument("--sc-k", type=int, default=5, dest="sc_k", help="self-consistency vote count (default 5)")
+    ap.add_argument("--no-self-consistency", action="store_false", dest="sc_on",
+                    help="with --strategies: keep two-stage preference but DISABLE self-consistency voting")
+    ap.add_argument("--persona", action="store_true",
+                    help="L3 user-profile (preferences/habits) — prepended in engram_full / engram_lean")
+    ap.add_argument("--session-map", action="store_true", dest="session_map",
+                    help="engram_full: insert an L2 complete session-by-session digest (multi-session aggregation)")
+    ap.add_argument("--summ-k", type=int, default=25, dest="summ_k",
+                    help="engram_lean: number of sessions to summarize for the L2 index (default 25)")
+    ap.add_argument("--n-summaries", type=int, default=12, dest="n_summaries",
+                    help="engram_lean: number of session summaries to pull into the lean context (default 12)")
     ap.add_argument("--agentic", action="store_true", help="engram: LLM-decomposed iterative retrieval (M2a)")
     ap.add_argument("--timeline", action="store_true", help="engram: prepend a chronological timeline (M2b)")
     ap.add_argument("--hyde", action="store_true", help="engram: HyDE query expansion for recall (M2c)")
@@ -301,8 +379,9 @@ def main():
         items = [it for it in items if it["question_id"] not in done_qids]
         print(f"  RESUME: {len(done_qids)} already done; {len(items)} of {n_before} remaining")
 
-    # reasoning mode generates EVIDENCE+REASON+ANSWER — allow up to 600 tokens; single-fact answers fit in 64
-    ans_max_tok = 600 if args.reasoning else 256
+    # reasoning mode generates EVIDENCE+REASON+ANSWER; reasoning-model backbones (doubao-seed, deepseek-r1)
+    # also emit a thinking trace, so give generous headroom to avoid truncating before the ANSWER line.
+    ans_max_tok = 1500 if args.reasoning else 256
     rig = Rig(
         embedder=make_embedder(args.embedder),
         extractor_llm=make_llm(args.extractor, max_tokens=512, num_retries=3, timeout=60),
@@ -310,7 +389,8 @@ def main():
         judge_llm=make_llm(args.judge, max_tokens=8, num_retries=3, timeout=60),
         reranker=make_reranker(args.reranker),
         topk=args.topk, chunks=args.chunks, extract_k=args.extract_k,
-        reasoning=args.reasoning,
+        reasoning=args.reasoning, strategies=args.strategies, sc_on=args.sc_on, sc_k=args.sc_k,
+        persona=args.persona, session_map=args.session_map, summ_k=args.summ_k, n_summaries=args.n_summaries,
         agentic=args.agentic, timeline=args.timeline, hyde=args.hyde, graph=args.graph, wiki=args.wiki,
         summary=args.summary, verify=args.verify, intent=args.intent,
     )

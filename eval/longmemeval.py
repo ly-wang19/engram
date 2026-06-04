@@ -62,32 +62,37 @@ ANSWER_TEMPLATE = "Today's date: {qdate}\n\n{context}\n\nQuestion: {question}\nA
 # (knowledge-update). Single-shot answering doesn't aggregate; this prompts a brief CoT then a final
 # canonical "ANSWER: ..." line that the extractor + judge consume.
 REASONING_SYSTEM = (
-    "You answer the user's question using ONLY the provided dated context (FACTS and CONVERSATIONS). "
-    "The context dates are real — use them for all temporal reasoning.\n\n"
-    "PREMISE CHECK FIRST (critical, do this before anything else): the question often presupposes a fact "
-    "(e.g. 'where did you present your poster', 'how big is your fish tank'). Find the context line that "
-    "EXPLICITLY states that premise about THIS user. If the user never actually stated it — even if the "
-    "context mentions the topic in a DIFFERENT context (someone else, a general discussion, a related but "
-    "distinct thing) — the question is unanswerable: reply exactly 'ANSWER: I don't know'. A plausible guess "
-    "assembled from related-but-not-matching context is WRONG and worse than abstaining. Only proceed past "
-    "this check if you can point to an explicit statement by the user.\n\n"
+    "You answer the user's question using the provided dated context. The context has two parts: a FACTS "
+    "index (a digest) AND the full dated CONVERSATIONS below it. The answer is USUALLY present — search "
+    "BOTH parts thoroughly before concluding anything. The dates are real; use them for temporal reasoning.\n\n"
+    "DIG FOR THE ANSWER FIRST. Most questions ARE answerable from the history — your job is to find the "
+    "evidence, not to give up. If the FACTS digest doesn't contain it, scan the full CONVERSATIONS below.\n\n"
     "WHEN THE QUESTION NEEDS MULTIPLE EVIDENCE PIECES (counting, summing, ordering, date arithmetic, "
-    "finding earliest/latest/most recent, multi-step lookup, knowledge updated over time):\n"
-    "  EVIDENCE: list EVERY relevant item EXPLICITLY in the context, one per line with its date. Be "
-    "EXHAUSTIVE — scan the whole history; a missed item makes a count wrong. Re-read before finalizing.\n"
-    "  REASON: count distinct items / sum / sort by date / compute date difference / pick the most recent. "
-    "Show the work in 1-2 lines. For durations: compute end_date − start_date explicitly.\n"
-    "  ANSWER: <a single concise final answer — no reasoning on this line>\n"
-    "Compute ONLY from pieces explicitly present; never invent a piece to complete a calculation.\n\n"
-    "FOR DATE/TIME ANSWERS: give the most specific date the context supports "
-    "(exact date > month+year > year > approximate). Never say 'a few years' if a date is given.\n\n"
+    "duration, earliest/latest/most-recent, multi-step lookup, knowledge updated over time):\n"
+    "  EVIDENCE: list EVERY relevant dated item from the context, one per line with its date. Be EXHAUSTIVE "
+    "— scan the whole history; a missed item makes a count or total wrong. Re-read before finalizing.\n"
+    "  REASON: count distinct items / sum / sort by date / compute the date difference / pick the most "
+    "recent. Show the work in 1-2 lines. For durations compute end_date − start_date explicitly.\n"
+    "  ANSWER: <a single concise final answer — no reasoning on this line>\n\n"
+    "FOR DATE/TIME/NUMBER ANSWERS: give the MOST SPECIFIC value the context supports (exact date > "
+    "month+year > year; exact duration, not 'a while'). Read the exact figure from the text — don't round "
+    "or approximate (e.g. 27 minutes 45 seconds, not 28 minutes).\n\n"
     "WHEN THE QUESTION ASKS FOR A RECOMMENDATION / PREFERENCE / what the user would like or how they'd want "
     "you to respond: do NOT refuse, do NOT ask a clarifying question, do NOT give generic advice. Instead, "
     "ground the answer in the user's OWN stated history: name the SPECIFIC people, places, brands, tools, "
     "past experiences or constraints they mentioned, and tailor the suggestion to those. "
     "Answer 'ANSWER: <concrete suggestion that explicitly references the user's specific stated details>'.\n\n"
-    "FOR SIMPLE SINGLE-FACT QUESTIONS: after the premise check, go straight to 'ANSWER: <fact>'.\n\n"
-    "When facts conflict, ALWAYS trust the most recent one. "
+    "FOR SIMPLE SINGLE-FACT QUESTIONS: go straight to 'ANSWER: <fact>'.\n\n"
+    "CURRENT-STATE questions ('what is my current/latest X', 'where do I work now', anything about the "
+    "present): report ONLY the most recent value by date and explicitly disregard older, superseded ones. "
+    "The newest dated statement wins; earlier values are history, not the answer.\n\n"
+    "When facts conflict, ALWAYS trust the most recent one by date.\n\n"
+    "ABSTENTION — a careful LAST resort, only after you have searched the ENTIRE history (facts AND all "
+    "conversations) and the SPECIFIC thing asked is genuinely never stated by the user. Do NOT abstain just "
+    "because it wasn't in the FACTS digest or wasn't immediately obvious — the answer is usually further "
+    "down in the conversations. But if the question presupposes something the user truly never mentioned "
+    "(only a different/unrelated topic appears), then reply exactly 'ANSWER: I don't know' rather than "
+    "guessing. Never fabricate a value to fill a gap. "
     "The line starting 'ANSWER:' is REQUIRED and must contain the final concise answer only."
 )
 
@@ -109,8 +114,136 @@ def extract_answer(pred: str) -> str:
         tail = tail.split("\n")[0].strip()
         if tail:
             return tail
-    lines = [ln.strip() for ln in text.split("\n") if ln.strip()]
-    return lines[-1] if lines else text
+    # No 'ANSWER:' marker. Reasoning-model backbones (doubao-seed, deepseek) put their chain-of-thought in
+    # a separate reasoning_content field and emit the actual answer directly in content — often multi-line
+    # (e.g. a personalized recommendation). Returning only the LAST line mangles those into a fragment and
+    # the judge never sees the real answer (this silently zeroed the preference category). The official
+    # LongMemEval judge grades the FULL response, so when there's no marker, return the whole text.
+    return text
+
+
+# ---- L2 session map + L3 user persona (CLAUDE.md §3 hierarchical abstraction) ----
+# Both leading agent-memory systems (Tencent Agent-Memory's L2 scenario-blocks + L3 personas, Volcano
+# OpenViking's User-Memory + L0/L1/L2 tiers) lift exactly our two weak categories with these layers:
+#   L2 session map  -> multi-session aggregation (count/list/compare without missing a session)
+#   L3 user persona -> preference (a pre-built profile to ground recommendations in)
+# We build each in ONE LLM pass over the whole dated history (cheap) instead of per-session calls.
+
+SESSION_MAP_SYSTEM = (
+    "You condense a long DATED chat history into a COMPLETE session-by-session map, for questions that "
+    "aggregate across sessions (counting, listing, comparing, 'how many', 'which ones'). For EVERY dated "
+    "conversation, emit one line: '[date] key facts/events/items/decisions/topics in it'. Be COMPLETE and "
+    "specific — include every distinct thing the user mentions (names, places, purchases, trips, activities, "
+    "numbers), because a later question may need to count or list them. Do NOT merge or skip conversations; "
+    "preserve chronological order."
+)
+
+PERSONA_SYSTEM = (
+    "You build a concise USER PROFILE from a long chat history, to help answer what the user prefers or "
+    "would want. Capture WITH SPECIFICS: stated preferences and dislikes; habits and routines; owned "
+    "tools/brands/devices; hobbies and interests; skill levels; goals; constraints. Quote concrete details "
+    "(names, brands, places, genres). Group into short labeled lines. Include ONLY what the user actually "
+    "stated — do not invent."
+)
+
+
+def build_session_map(llm, history_text: str) -> str:
+    """L2: one dense pass turning the full dated history into a complete chronological session digest."""
+    try:
+        out = llm.complete(f"{history_text}\n\nComplete session-by-session map:", system=SESSION_MAP_SYSTEM)
+        return out.strip()
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def build_persona(llm, history_text: str) -> str:
+    """L3: one pass synthesizing the user's preferences/habits/possessions into a compact profile."""
+    try:
+        out = llm.complete(f"{history_text}\n\nUSER PROFILE:", system=PERSONA_SYSTEM)
+        return out.strip()
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+# ---- answer strategies that push the two weak categories (CLAUDE.md Bet B) ----
+# Routed by QUESTION TEXT, not the benchmark's category label, so the logic generalizes to real use
+# (a deployed system never sees a 'question_type') and isn't gaming the test.
+
+_NUM_WORDS = {"zero": "0", "one": "1", "two": "2", "three": "3", "four": "4", "five": "5", "six": "6",
+              "seven": "7", "eight": "8", "nine": "9", "ten": "10", "eleven": "11", "twelve": "12"}
+_COUNT_CUES = ("how many", "how much", "how often", "number of", "total number", "in total",
+               "altogether", "combined", "count of", "how long", "how old", "list all", "all the")
+_PREF_CUES = ("recommend", "suggest", "what should i", "what would i", "would i prefer", "help me",
+              "advice", "i'm planning", "im planning", "i am planning", "i'm thinking", "what kind of",
+              "what type of", "which one should", "any ideas", "what do you suggest")
+
+
+def needs_self_consistency(question: str) -> bool:
+    """Counting / summing / duration / aggregation questions: single-shot answering miscounts at random
+    (5->4, 4->6 observed on _S). Sampling K answers and taking the mode cancels the random error."""
+    q = question.lower()
+    return any(c in q for c in _COUNT_CUES)
+
+
+def needs_two_stage_pref(question: str) -> bool:
+    """Recommendation/preference questions: the model defaults to generic advice. Forcing it to first
+    surface the user's concrete stated history, then answer using it, fixes the personalization gap."""
+    q = question.lower()
+    return any(c in q for c in _PREF_CUES)
+
+
+def _norm_vote(ans: str) -> str:
+    """Normalize an answer for majority voting: lowercase, drop articles/filler, map number-words to
+    digits, collapse whitespace. So 'four model kits' and 'I worked on 4 kits' vote together on '4'."""
+    import re as _re
+    s = ans.lower().strip().strip(".!?\"' ")
+    s = _re.sub(r"\b(the|a|an|i|you|your|my|have|has|had|worked|on|or|bought|in|of|total|there|are|is|were|was)\b", " ", s)
+    toks = [_NUM_WORDS.get(t, t) for t in _re.split(r"\s+", s) if t]
+    # if a number appears, vote on the number alone — it's the decisive content for counting/duration
+    nums = [t for t in toks if _re.fullmatch(r"\d+(\.\d+)?", t)]
+    if nums:
+        return nums[0]
+    return " ".join(toks)
+
+
+def answer_self_consistency(answerer, prompt: str, system: str, k: int = 5) -> str:
+    """Sample k answers at temperature, return the ORIGINAL answer whose normalized form is most common.
+    Returns the full text (not just the normalized key) so the official judge sees a real answer."""
+    from collections import Counter
+    cands = []
+    for i in range(k):
+        raw = answerer.complete(prompt, system=system, temperature=0.0 if i == 0 else 0.7)
+        cands.append(extract_answer(raw))
+    cands = [c for c in cands if c]
+    if not cands:
+        return ""
+    votes = Counter(_norm_vote(c) for c in cands)
+    winner_key, _ = votes.most_common(1)[0]
+    # return the first full answer that maps to the winning key (longest, to carry the most context)
+    matching = [c for c in cands if _norm_vote(c) == winner_key]
+    return max(matching, key=len)
+
+
+PREF_EXTRACT_SYSTEM = (
+    "You read a user's long chat history and surface ONLY what they themselves explicitly stated that is "
+    "relevant to the question — their concrete preferences, habits, owned tools/brands, past experiences, "
+    "skill level, and constraints. Quote specifics (names, brands, places, dates). 3-6 bullet points. "
+    "If they stated nothing relevant, say 'NONE'. Do not invent or generalize."
+)
+
+
+def answer_two_stage_pref(answerer, context: str, question: str, qdate: str, answer_system: str) -> str:
+    """Stage 1: pull the user's concrete relevant history. Stage 2: answer, with that history pinned at the
+    top of the context so the model must ground its recommendation in it instead of giving generic advice."""
+    relevant = answerer.complete(
+        f"{context}\n\nQuestion: {question}\n\nThe user's relevant stated details:",
+        system=PREF_EXTRACT_SYSTEM, temperature=0.0,
+    ).strip()
+    pinned = f"THE USER'S RELEVANT STATED HISTORY (ground your answer in these specifics):\n{relevant}\n\n{context}"
+    return answerer.complete(
+        ANSWER_TEMPLATE.format(qdate=qdate, context=pinned, question=question),
+        system=answer_system, temperature=0.0,
+    )
 
 
 # LongMemEval_S haystack averages ~497k chars (≈124k tokens) — well within gemini-2.5-flash/pro 1M window.

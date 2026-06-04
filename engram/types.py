@@ -26,6 +26,11 @@ class Episode:
     ingested_at: float = field(default_factory=now)  # when we recorded it
     embedding: Optional[list[float]] = None
     consolidated: bool = False
+    # L2 abstraction: a compact summary of this episode/session, computed once during consolidation and
+    # retrieved (instead of the full raw text) to build a LEAN read context — the scaling primitive that
+    # lets a small retrieved slice cover many sessions cheaply (CLAUDE.md Bet A/E).
+    summary: str = ""
+    summary_embedding: Optional[list[float]] = None
     id: str = field(default_factory=lambda: gen_id("ep"))
     metadata: dict = field(default_factory=dict)
 

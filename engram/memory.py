@@ -11,6 +11,7 @@ from typing import Callable, Optional
 
 from .config import Config
 from .consolidate import ConsolidationEngine, reinforce
+from .consolidate.summarizer import ProfileBuilder, SessionSummarizer
 from .embed import Embedder, HashingEmbedder
 from .ingest import IdentityResolver, Ingestor
 from .llm import LLM
@@ -72,6 +73,7 @@ class Memory:
         self.episodes_doc = InMemoryDocStore()
         self.episodes_vec = vector_store_factory()
         self.fact_store = vector_store_factory()
+        self.summary_vec = vector_store_factory()  # L2 session summaries, retrievable for a lean read slice
         self.graph = graph_store_factory()
         self.resolver = IdentityResolver()
 
@@ -79,6 +81,9 @@ class Memory:
         self.engine = ConsolidationEngine(self.fact_store, self.graph, self.embedder, self.config, llm)
         self.retriever = HybridRetriever(self.fact_store, self.graph, self.embedder, self.config)
         self.planner = MultiHopPlanner(self.graph, self.fact_store, self.config)
+        self.summarizer = SessionSummarizer(llm)
+        self.profiles = ProfileBuilder()
+        self._persona_cache: dict[str, str] = {}
 
     # --- write path ---
     def add(
@@ -96,11 +101,148 @@ class Memory:
             self.consolidate()
         return ep
 
-    def consolidate(self) -> dict[str, int]:
-        return self.engine.consolidate(self.ingestor.pending())
+    def consolidate(self, episodes: Optional[list[Episode]] = None) -> dict[str, int]:
+        """System-2: extract facts + build the bi-temporal graph from `episodes` (default: all pending).
+        Invalidates the persona cache since the live fact set just changed."""
+        eps = episodes if episodes is not None else self.ingestor.pending()
+        stats = self.engine.consolidate(eps)
+        self._persona_cache.clear()  # facts changed -> any cached persona is stale
+        return stats
+
+    def consolidate_full(
+        self,
+        fact_episodes: Optional[list[Episode]] = None,
+        summary_episodes: Optional[list[Episode]] = None,
+    ) -> dict[str, int]:
+        """One coherent System-2 pass building all read-time layers:
+          L1 facts   from `fact_episodes`    (deep extraction over the most relevant sessions),
+          L2 summaries from `summary_episodes` (broad, cheap coverage for aggregation),
+          L3 persona  refreshed from the resulting facts (lazily, on first read).
+        The two episode sets differ by design: facts want depth on a few sessions, summaries want breadth.
+        Defaults to the pending queue for both when not specified."""
+        stats = self.consolidate(fact_episodes)
+        stats["summaries"] = self.summarize_episodes(
+            summary_episodes if summary_episodes is not None else self.ingestor.pending()
+        )
+        return stats
 
     def link_identity(self, a: str, b: str) -> str:
         return self.resolver.link(a, b)
+
+    # --- L2/L3 abstraction (built during consolidation, stored for a lean read) ---
+    def summarize_episodes(self, episodes: list[Episode]) -> int:
+        """L2: distill each episode into a compact summary and index it in summary_vec for retrieval.
+        Summaries are generated in parallel (independent LLM calls) then batch-embedded — so a lean read
+        can pull a few session digests instead of dragging whole raw sessions into context."""
+        from concurrent.futures import ThreadPoolExecutor
+
+        todo = [ep for ep in episodes if not ep.summary]
+        if not todo:
+            return 0
+        if self.llm is not None and len(todo) > 1:
+            with ThreadPoolExecutor(max_workers=min(8, len(todo))) as pool:
+                summaries = list(pool.map(self.summarizer.summarize, todo))
+        else:
+            summaries = [self.summarizer.summarize(ep) for ep in todo]
+        vecs = self.embedder.embed_batch([s or ep.content[:200] for s, ep in zip(summaries, todo)])
+        for ep, summ, vec in zip(todo, summaries, vecs):
+            ep.summary = summ
+            ep.summary_embedding = vec
+            self.summary_vec.upsert(ep.id, vec, ep)
+        return len(todo)
+
+    def retrieve_summaries(self, query: str, user_id: str = "default", k: int = 8) -> list[Episode]:
+        """Top-k session summaries for a query, via the SAME hybrid (dense + BM25, RRF) signal as fact and
+        episode retrieval. Lexical matching matters here: aggregation questions ('how many trips') hinge on
+        exact terms a summary mentions, which a pure-embedding lookup can rank below a vaguely-similar one.
+        Returns episodes carrying the .summary field."""
+        user = self.resolver.resolve(user_id)
+        pool = max(k * 3, 30)
+        cands = self.summary_vec.search(self.embedder.embed(query), pool, where=lambda e: e.user_id == user)
+        eps = [ep for _, ep in cands]
+        if len(eps) <= k:
+            return eps
+        from .retrieve.hybrid import date_terms
+        bm25 = bm25_scores(query, [
+            (ep.id, f"{ep.summary or ep.content} {date_terms(ep.event_time)}") for ep in eps])
+        if bm25:
+            bm25_rank = {eid: r for r, (eid, _) in
+                         enumerate(sorted(bm25.items(), key=lambda x: x[1], reverse=True))}
+            K = 60  # standard RRF constant
+            order = sorted(range(len(eps)), key=lambda i: -(
+                1.0 / (K + i + 1) + 1.0 / (K + bm25_rank.get(eps[i].id, len(eps)) + 1)))
+            eps = [eps[i] for i in order]
+        return eps[:k]
+
+    def build_persona(self, user_id: str = "default") -> str:
+        """L3: a compact narrative profile (preferences/habits/possessions) synthesized from live facts."""
+        user = self.resolver.resolve(user_id)
+        if user in self._persona_cache:
+            return self._persona_cache[user]
+        subject = self.engine.self_name(user)
+        live = [f for f in self.fact_store.values() if f.user_id == user and f.is_live()]
+        persona = self.profiles.narrative(subject, live, llm=self.llm) if live else ""
+        self._persona_cache[user] = persona
+        return persona
+
+    def lean_context(
+        self,
+        query: str,
+        user_id: str = "default",
+        as_of: Optional[float] = None,
+        top_k: Optional[int] = None,
+        n_summaries: int = 20,
+        n_facts: int = 15,
+        n_chunks: int = 2,
+        persona: bool = True,
+        char_budget: int = 60_000,
+    ) -> str:
+        """The scalable read path (CLAUDE.md Bet A/E): assemble a SMALL, well-organized context from
+        retrieved abstractions instead of the whole history —
+            L3 persona  +  L1 dated facts  +  L2 session summaries  +  a couple full chunks for detail.
+
+        Tokens stay roughly constant as history grows (a fixed-size slice is retrieved), which full-context
+        cannot do. Two design points that make this both lean and accurate:
+          * The top-`n_chunks` sessions are shown in FULL (detail) and EXCLUDED from the summary block, so
+            no session appears twice — every token buys new information.
+          * The summary block carries broad chronological COVERAGE (default 20), which is what aggregation
+            questions ('how many trips', 'list everything') need; summaries are tiny so coverage stays cheap.
+        `char_budget` hard-caps the assembled context so it can never approach the full-history size."""
+        user = self.resolver.resolve(user_id)
+        blocks: list[str] = []
+
+        # detail: the few most-relevant sessions in full — their ids are excluded from the summary block.
+        detail_eps = self.retrieve_episodes(query, user, n_chunks) if n_chunks else []
+        detail_ids = {e.id for e in detail_eps}
+
+        if persona:
+            p = self.build_persona(user)
+            if p:
+                blocks.append(f"USER PROFILE:\n{p}")
+
+        ranked, _ = self.retriever.retrieve(query, user, as_of, top_k or n_facts)
+        if ranked:
+            for f, _ in ranked:  # reinforcement-on-access: surfaced facts stay salient (spacing effect)
+                reinforce(f, self.config.access_boost)
+            by_date = sorted(ranked, key=lambda x: x[0].valid_at, reverse=True)  # latest first (updates)
+            fl = "\n".join(f"- [{fmt_date(f.valid_at)}] {f.text}" for f, _ in by_date)
+            blocks.append(f"FACTS (current, dated):\n{fl}")
+
+        summaries = [e for e in self.retrieve_summaries(query, user, n_summaries) if e.id not in detail_ids]
+        if summaries:
+            chrono = sorted(summaries, key=lambda e: e.event_time)
+            sm = "\n".join(
+                f"- [{e.metadata.get('date') or fmt_date(e.event_time)}] {e.summary}" for e in chrono
+            )
+            blocks.append(f"SESSION SUMMARIES (relevant, chronological):\n{sm}")
+
+        if detail_eps:
+            chunks = "\n\n".join(
+                f"[{e.metadata.get('date') or fmt_date(e.event_time)}]\n{e.content}" for e in detail_eps
+            )
+            blocks.append(f"RELEVANT CONVERSATIONS (full detail):\n{chunks}")
+
+        return "\n\n".join(blocks)[:char_budget]
 
     # --- read path ---
     def search(

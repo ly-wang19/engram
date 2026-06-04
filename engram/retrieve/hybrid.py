@@ -8,9 +8,47 @@ from ..config import Config
 from ..embed import Embedder
 from ..store import GraphStore, VectorStore
 from ..types import Fact
-from ..util import cosine, now, recency, tokenize
+from ..util import cosine, fmt_date, now, recency, tokenize
 from .fusion import order_by_score, weighted_rrf
 from .lexical import bm25_scores, stem, stems
+
+_MONTHS = ("january", "february", "march", "april", "may", "june", "july", "august",
+           "september", "october", "november", "december")
+
+
+def date_terms(epoch: float) -> str:
+    """Render a fact's date as searchable tokens (year, numeric month, month name) so a query that names
+    a time ('May 2023', 'in 2024') matches the right-dated facts via BM25 — dates otherwise live only in
+    valid_at and are invisible to retrieval. This is query-time temporal matching done as a lexical signal
+    (MemoryScope time_ratio in spirit), with no score multiplier that could override relevance."""
+    try:
+        d = fmt_date(epoch)  # YYYY-MM-DD
+        y, m, _ = d.split("-")
+        return f"{d} {y} {m} {_MONTHS[int(m) - 1]}"
+    except Exception:  # noqa: BLE001
+        return ""
+
+# Predicates that mark a durable identity or preference fact (vs. an incidental event mention). Used for
+# type-weighted fusion — these get a retrieval boost (CLAUDE.md §3.3; MemoryScope/OMEGA convergent finding).
+_PREFERENCE_PREDS = frozenset({
+    "likes", "dislikes", "prefers", "avoids", "loves", "hates", "enjoys", "wants",
+    "allergic_to", "interested_in", "favorite", "prefers_to",
+})
+_IDENTITY_PREDS = frozenset({
+    "name", "works_at", "lives_in", "born_in", "married_to", "occupation", "age",
+    "studied_at", "owns", "has", "speaks",
+})
+
+
+def fact_type_weight(fact: Fact, config: Config) -> float:
+    """Retrieval multiplier by fact type: preference > identity > incidental. A durable 'who they are /
+    what they like' fact should outrank a one-off mention when both match a query."""
+    p = fact.predicate.lower()
+    if p in _PREFERENCE_PREDS or p.startswith("favorite"):
+        return config.w_type_preference
+    if p in _IDENTITY_PREDS:
+        return config.w_type_identity
+    return 1.0
 
 
 class HybridRetriever:
@@ -66,7 +104,8 @@ class HybridRetriever:
 
         qvec = self.embedder.embed(query)
         sem = {f.id: cosine(qvec, f.embedding or []) for f in live}
-        lex = bm25_scores(query, [(f.id, f.text) for f in live])
+        # include each fact's date as searchable tokens so time-named queries ('May 2023') match by date
+        lex = bm25_scores(query, [(f.id, f"{f.text} {date_terms(f.valid_at)}") for f in live])
         gph, qids = self._graph_scores(query, user_id, live, as_of)
         t = now() if as_of is None else as_of
         rec = {f.id: recency(max(0.0, t - f.valid_at), self.config.recency_tau_days) for f in live}
@@ -87,6 +126,11 @@ class HybridRetriever:
             "sal": self.config.w_sal,
         }
         fused = weighted_rrf(rankings, weights, self.config.rrf_k)
+        # Type weighting (insight/preference > incidental) is realized STRUCTURALLY in the lean read path —
+        # the L3 persona and L1 facts occupy dedicated, always-included blocks above the L2 summaries and
+        # raw chunks. We deliberately do NOT multiply per-fact here: an unconditional type multiplier
+        # overrides query relevance (a 'favorite_language' fact would outrank 'works_at' for "where do you
+        # work?"). Relevance must win the fact ranking; type priority is expressed by block, not by score.
         ranked = sorted(live, key=lambda f: fused.get(f.id, 0.0), reverse=True)[:top_k]
         diag = {"sem": sem, "lex": lex, "fused": fused, "qids": qids}
         return [(f, fused.get(f.id, 0.0)) for f in ranked], diag

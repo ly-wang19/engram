@@ -14,6 +14,13 @@ class Config:
     w_rec: float = 0.3  # recency decay
     w_sal: float = 0.25  # salience / importance
 
+    # Type-weighted fusion (MemoryScope `type_ratio`, OMEGA 2x-for-decisions): a consolidated, durable
+    # fact about who the user IS or what they PREFER is worth more at retrieval than an incidental mention.
+    # Applied as a multiplier on the fused score. This is where Hunyuan banked its big preference (+21) and
+    # knowledge-update (+21) gains — surfacing identity/preference facts ahead of noise.
+    w_type_preference: float = 1.5
+    w_type_identity: float = 1.3
+
     recency_tau_days: float = 45.0
     top_k: int = 5
     candidate_k: int = 24  # per-retriever candidate pool before fusion

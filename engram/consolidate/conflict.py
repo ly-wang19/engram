@@ -22,11 +22,21 @@ the same multi-valued guard, so accumulating preferences ("likes pizza" / "likes
 """
 from __future__ import annotations
 
+import re
 from typing import Optional
 
 from ..embed import Embedder
 from ..types import Fact
 from ..util import cosine
+
+# content words for subsumption ("Contained") detection — short/function words ignored so that
+# "Charles is my boss" ⊂ "Charles is my boss and a branch manager" is recognized.
+_STOP = frozenset({"the", "a", "an", "and", "or", "of", "to", "in", "on", "at", "is", "are", "was",
+                   "were", "my", "his", "her", "their", "with", "for", "as", "by"})
+
+
+def _content_tokens(s: str) -> frozenset:
+    return frozenset(w for w in re.findall(r"[a-z0-9]+", s.lower()) if len(w) > 2 and w not in _STOP)
 
 # Predicates whose values ACCUMULATE — a person legitimately has many. These never supersede; everything
 # else is treated as a single-current-value attribute (state) that a newer fact replaces.
@@ -90,9 +100,30 @@ class ConflictResolver:
                 return ("duplicate", [])
 
         invalidated: list[Fact] = []
+
+        # Subsumption / "Contained" (MemoryScope contra_repeat): if the new claim's content words are a
+        # STRICT SUBSET of an existing same-slot fact, the new fact adds nothing -> drop it (dedup). If it
+        # strictly SUPERSETS an existing one, the old is a less-complete version of the same claim ->
+        # invalidate it. This prunes redundant near-duplicates that otherwise crowd the retrieved context
+        # (Bet A: precision). Gated to same-slot so accumulating values on the same predicate stay distinct.
+        new_toks = _content_tokens(new.object)
+        if new_toks:
+            for old in same_slot:
+                old_toks = _content_tokens(old.object)
+                if not old_toks or old_toks == new_toks:
+                    continue
+                if new_toks < old_toks:  # new ⊂ old: subsumed, nothing gained
+                    return ("duplicate", [])
+                if old_toks < new_toks and new.valid_at >= old.valid_at:  # new ⊃ old: more complete
+                    _supersede(old, new)
+                    invalidated.append(old)
+
         if is_single_valued(new.predicate):
+            _seen = {id(f) for f in invalidated}  # don't double-invalidate what subsumption already took
             # 1. exact-slot: same (subject, predicate), different object
             for old in same_slot:
+                if id(old) in _seen:
+                    continue
                 if _norm(old.object) != _norm(new.object) and new.valid_at >= old.valid_at:
                     _supersede(old, new)
                     invalidated.append(old)
