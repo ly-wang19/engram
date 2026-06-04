@@ -41,27 +41,27 @@ a fraction of the tokens):
 
 | System | Overall | Avg tokens | Notes |
 |---|---:|---:|---|
-| **Engram** (`engram_lean`) | **78.8%** | **5.7k** | retrieves a lean slice; 0 errors / 500 |
+| **Engram** (`engram_lean`) | **83.6%** | **9.6k** | retrieves a lean slice; 0 errors / 500 |
 | full-context baseline (same answerer+judge) | 74.8% | 79k | stuffs the whole haystack in the prompt |
 | Hunyuan Hy-Memory (closed; self-reported) | 85.2% | — | same DeepSeek judge family |
 | Mem0-2026 / OMEGA (self-reported) | 94.4 / 95.4 | — | their own answer+judge pipelines |
 
-**Engram beats the full-context baseline by +4.0 points while using ~14× fewer tokens** (5.7k vs 79k) — the
+**Engram beats the full-context baseline by +8.8 points while using ~8× fewer tokens** (9.6k vs 79k) — the
 filtered slice is *more* accurate than the noisy full window, and the cost stays flat as history grows
 (full-context can't). Per-category (`engram_lean`, full 500):
 
 | Category | Score | n |
 |---|---|---|
-| single-session-assistant | 100.0% | 56 |
+| single-session-assistant | 92.9% | 56 |
 | abstention | 86.7% | 30 |
-| knowledge-update | 86.1% | 72 |
-| single-session-user | 85.9% | 64 |
-| temporal-reasoning | 73.2% | 127 |
-| multi-session | 67.8% | 121 |
-| single-session-preference | 66.7% | 30 |
+| knowledge-update | 87.5% | 72 |
+| single-session-user | 87.5% | 64 |
+| temporal-reasoning | 81.1% | 127 |
+| multi-session | 79.3% | 121 |
+| single-session-preference | 73.3% | 30 |
 
-**Honest standing:** at **78.8%** Engram beats the full-context baseline decisively and at a fraction of the
-tokens, but it is **below** Hunyuan (85.2) on the comparable judge and well below OMEGA/Mem0 (94–95, their
+**Honest standing:** at **83.6%** Engram beats the full-context baseline decisively and at a fraction of the
+tokens, but it is just **1.6 points below** Hunyuan (85.2) on the comparable judge and well below OMEGA/Mem0 (94–95, their
 own backbones). The remaining gap is concentrated in multi-session reasoning and temporal aggregation. We
 report this openly — no cherry-picked slice, no friendlier judge. Where Engram leads today is **token
 efficiency, scalability, and reproducibility**; closing the accuracy gap is the public roadmap.

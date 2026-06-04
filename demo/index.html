@@ -150,7 +150,7 @@
   <h1 class="rv in d1">给 AI 一个<br><span class="hl">会记事的大脑</span></h1>
   <p class="tag rv in d2">像人脑一样:聊天时悄悄提炼「事实」、随时间更新而不忘历史、<br>提问时只取出相关的一小片 —— 用 1/8 的信息,答得反而更准。</p>
   <div class="stats">
-    <div class="stat rv in d2"><div class="n hl">83%</div><div class="l">LongMemEval_S 准确率</div></div>
+    <div class="stat rv in d2"><div class="n hl">83.6%</div><div class="l">LongMemEval_S 准确率</div></div>
     <div class="stat rv in d3"><div class="n hl">8×</div><div class="l">比塞全文更省 token</div></div>
     <div class="stat rv in d3"><div class="n hl">5 类</div><div class="l">类型化记忆</div></div>
     <div class="stat rv in d4"><div class="n hl">100%</div><div class="l">开源 · 可复现</div></div>
@@ -183,7 +183,7 @@
         <li>提炼成结构化记忆,提问时<b>精准检索</b></li>
         <li>只用 <b>~9.5k token</b>(<b style="color:var(--teal)">省 8 倍</b>)</li>
         <li>去掉噪声、只留精华 → 更聚焦</li>
-        <li>准确率 <b style="color:var(--teal)">83%</b>,且历史再长也不崩</li>
+        <li>准确率 <b style="color:var(--teal)">83.6%</b>,且历史再长也不崩</li>
       </ul>
     </div>
   </div>
@@ -247,7 +247,7 @@
       <h3 style="font-size:18px">⚡ Engram 精简检索</h3>
       <div class="grid" id="gg"></div>
       <div class="vtok" style="color:var(--teal)">9.5k <small>token · 只取相关片</small></div>
-      <div style="margin-top:10px;color:var(--teal)">✓ 更聚焦 · 83% 准 · 可扩展到百万字</div>
+      <div style="margin-top:10px;color:var(--teal)">✓ 更聚焦 · 83.6% 准 · 可扩展到百万字</div>
     </div>
   </div>
 </div></section>
@@ -259,16 +259,16 @@
   <p class="lead rv d2">LongMemEval_S 基准 · 500 题 · 用<b>和腾讯混元同款的 DeepSeek 判分器</b>,所以公平可比 —— 不是换个宽松判分器自我安慰。</p>
   <div class="bars">
     <div class="bar rv d2" style="--h:74.8%"><div class="c" style="background:linear-gradient(180deg,#fb7185,#9f1239);color:#fff">74.8</div><div class="nm">裸塞全文<br><small>79k token</small></div></div>
-    <div class="bar rv d3" style="--h:83%"><div class="c" style="background:linear-gradient(180deg,var(--cyan),var(--violet))">83</div><div class="nm" style="color:var(--cyan)"><b>Engram</b><br><small>9.5k token · 8× 精简</small></div></div>
+    <div class="bar rv d3" style="--h:83.6%"><div class="c" style="background:linear-gradient(180deg,var(--cyan),var(--violet))">83.6</div><div class="nm" style="color:var(--cyan)"><b>Engram</b><br><small>9.5k token · 8× 精简</small></div></div>
     <div class="bar rv d4" style="--h:85.2%"><div class="c" style="background:linear-gradient(180deg,#94a3b8,#475569);color:#fff">85.2</div><div class="nm">腾讯混元<br><small>闭源商用</small></div></div>
   </div>
   <table class="bm rv d3">
     <tr><th>系统</th><th>总分</th><th>平均 token</th><th>开源?</th></tr>
-    <tr class="winrow"><td><b>Engram</b>(本项目)</td><td class="sc hl">83%</td><td style="text-align:right">9.5k</td><td>✅ Apache-2.0</td></tr>
+    <tr class="winrow"><td><b>Engram</b>(本项目)</td><td class="sc hl">83.6%</td><td style="text-align:right">9.5k</td><td>✅ Apache-2.0</td></tr>
     <tr><td>裸塞全文(同 backbone)</td><td class="sc">74.8%</td><td style="text-align:right">79k</td><td>—</td></tr>
     <tr><td>腾讯混元 Hy-Memory</td><td class="sc">85.2%</td><td style="text-align:right">—</td><td>❌ 闭源</td></tr>
   </table>
-  <p class="note rv d3"><b>诚实定位:</b>Engram 远超裸全文(+8 分)且省 8 倍 token,与混元同梯队(略低),但<b>全开源、可复现、可扩展到百万字</b>。500 题最终验证进行中,当前 ≈83%。</p>
+  <p class="note rv d3"><b>诚实定位:</b>Engram 远超裸全文(+8 分)且省 8 倍 token,与混元同梯队(略低),但<b>全开源、可复现、可扩展到百万字</b>。500 题最终验证进行中,当前 ≈83.6%。</p>
   <div class="repro rv d4">
 <span class="c1"># 每个数字都能自己跑一遍验证:</span><br>
 git clone https://github.com/ly-wang19/engram-memory && cd engram-memory<br>
