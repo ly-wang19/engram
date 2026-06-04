@@ -37,3 +37,6 @@ class Config:
     # semantic conflict detection: invalidate a stale fact when a later same-subject fact is this
     # embedding-near (same attribute, different free-form predicate). Tuned on the harness.
     conflict_sim_threshold: float = 0.80
+    # escalate borderline conflicts (similarity just below threshold) to an LLM adjudicator (§3.2 step 3).
+    # Off by default: keeps consolidation LLM-free per fact (Bet C); enable for max precision.
+    conflict_llm_escalation: bool = False

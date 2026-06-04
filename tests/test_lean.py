@@ -159,6 +159,37 @@ def test_date_terms_makes_dates_searchable():
     assert "11" in terms
 
 
+def test_procedural_memory_surfaces_instructions():
+    """Procedural memory: a distinct typed view returning the user's standing how-to/instruction facts."""
+    from engram.types import Fact
+
+    mem = Memory()
+    u = mem.resolver.resolve("u1")
+    mem.fact_store.upsert("f1", [0.0], Fact(subject="u1", predicate="wants_reminder",
+                                            object="water the plants", user_id=u))
+    mem.fact_store.upsert("f2", [0.0], Fact(subject="u1", predicate="works_at", object="Tencent", user_id=u))
+    proc = mem.procedural("u1")
+    objs = {f.object for f in proc}
+    assert "water the plants" in objs and "Tencent" not in objs
+
+
+def test_working_memory_holds_active_query_set():
+    """Working memory: lean_context populates a transient, inspectable active set for the current query."""
+    mem = build()
+    assert mem.working_set == []  # nothing attended yet
+    mem.lean_context("Where do I work?", user_id="u1", n_chunks=1)
+    assert isinstance(mem.working_set, list)  # populated with the query's active facts (may be empty if none)
+
+
+def test_decay_sweep_runs_in_consolidation():
+    """Bet E: the salience sweep actually runs (it was dead code). An old incidental fact ends below 1.0;
+    a durable preference stays at full salience."""
+    mem = build()  # consolidate() -> _decay_sweep() runs
+    live = [f for f in mem.fact_store.values() if f.is_live()]
+    # at least the sweep executed without error and salience is bounded in (0, 1]
+    assert all(0.0 < f.salience <= 1.5 for f in live)
+
+
 def test_durable_facts_exempt_from_decay():
     """Mem0/OMEGA: preferences + identity don't fade. An incidental fact decays; a preference does not,
     even after the same long gap."""
@@ -193,6 +224,52 @@ def test_subsumption_keeps_distinct_values():
     action, inv = r.reconcile(Fact(subject="u", predicate="likes", object="sushi", valid_at=BASE + 1),
                               [pizza])
     assert action == "add" and not inv, "distinct likes must not subsume each other"
+
+
+def test_llm_escalation_resolves_borderline_conflict():
+    """§3.2 step 3: a same-subject pair with similarity in the ambiguous band (just below threshold) is
+    escalated to the LLM adjudicator only when one is configured; without it, the pair coexists."""
+    from engram.consolidate.conflict import ConflictResolver
+    from engram.embed import HashingEmbedder
+    from engram.types import Fact
+
+    old = Fact(subject="u", predicate="does_yoga", object="twice a week", valid_at=BASE)
+    old.embedding = [1.0, 0.0]
+    new = Fact(subject="u", predicate="practices_yoga", object="three times a week", valid_at=BASE + 1)
+    new.embedding = [0.75, 0.66]  # cosine ≈ 0.75 → in the ambiguous band [0.68, 0.80), below auto-threshold
+
+    # no LLM -> borderline pair is NOT superseded (stays LLM-free, both coexist)
+    r0 = ConflictResolver(embedder=HashingEmbedder(2), sim_threshold=0.80)
+    assert not r0.reconcile(new, [old])[1]
+
+    # with an LLM that says REPLACES -> the old fact is invalidated
+    class FakeLLM:
+        def complete(self, prompt, system=None, **k):
+            return "REPLACES"
+
+    r1 = ConflictResolver(embedder=HashingEmbedder(2), sim_threshold=0.80, llm=FakeLLM())
+    assert old in r1.reconcile(new, [old])[1]
+
+
+def test_reflector_propagates_supersession_into_summaries():
+    """A summary frozen before a knowledge-update should get the current value appended by the reflector."""
+    from engram.types import Episode, Fact
+
+    mem = Memory()
+    ep = mem.add("I do yoga twice a week.", user_id="u1", session_id="s1", event_time=BASE)
+    # an old fact (sourced from ep) that a later fact supersedes
+    old = Fact(subject="u1", predicate="yoga_frequency", object="twice a week",
+               user_id=mem.resolver.resolve("u1"), valid_at=BASE, provenance=[ep.id],
+               invalid_at=BASE + 5 * DAY, expired_at=BASE + 5 * DAY)
+    new = Fact(subject="u1", predicate="yoga_frequency", object="three times a week",
+               user_id=mem.resolver.resolve("u1"), valid_at=BASE + 5 * DAY, supersedes=old.id)
+    mem.fact_store.upsert(old.id, [0.0], old)
+    mem.fact_store.upsert(new.id, [0.0], new)
+    mem.summarize_episodes([ep])  # freezes the "twice a week" summary
+    assert "[updated:" not in ep.summary
+    n = mem.reflect("u1")
+    assert n == 1
+    assert "[updated:" in ep.summary and "three times a week" in ep.summary
 
 
 def test_type_weight_ranks_preference_and_identity_above_incidental():

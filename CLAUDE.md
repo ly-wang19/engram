@@ -98,9 +98,10 @@ These are the differentiators. Every design decision must serve at least one.
   questions into sub-queries, walk the graph, aggregate. This is the field's soft spot; we make it our
   strength.
 - **Bet C — Bi-temporal + cheap conflict detection as core primitives.** Adopt Zep's `valid_at/invalid_at`
-  + transaction-time model, but detect contradictions *without an LLM call per fact* (slot model +
-  embedding/NLI heuristics, escalate to LLM only when ambiguous). Non-destructive invalidation + full
-  provenance/audit trail. This nails knowledge-updates and temporal categories.
+  + transaction-time model, but detect contradictions *without an LLM call per fact* (exact-slot model +
+  embedding-similarity + content-subsumption heuristics; optional LLM adjudication only when ambiguous).
+  Non-destructive invalidation + full provenance/audit trail. This nails knowledge-updates and temporal
+  categories.
 - **Bet D — The reproducible-harness moat.** One fixed, open, neutral eval pipeline across all benchmarks;
   corrected LOCOMO keys; strong judge; report tokens+latency+accuracy together; publish it and invite
   replication. In a field where every number is contested, *being the trustworthy scoreboard* is power.
@@ -173,7 +174,8 @@ of bolted-on. **Never hard-delete a contradicted fact — invalidate it** (set `
 ### 3.2 Conflict resolution (cheap, then escalate)
 
 When a new fact arrives for an existing `(subject, predicate)` slot with a different object:
-1. **Slot match** (exact) → likely update; **embedding distance / NLI** → contradiction vs. elaboration.
+1. **Slot match** (exact) → likely update; **embedding similarity** (same attribute under different free-form
+   predicate) and **content subsumption** (one claim ⊂ the other) → contradiction vs. elaboration.
 2. If clearly contradictory and temporally ordered → invalidate the old (`old.invalid_at = new.valid_at`),
    set `new.supersedes = old.id`. No LLM call.
 3. Only ambiguous cases escalate to an LLM adjudicator. This is the cost win over "LLM on every fact".

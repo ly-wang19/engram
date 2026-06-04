@@ -83,12 +83,35 @@ def _supersede(old: Fact, new: Fact) -> None:
     new.supersedes = old.id
 
 
+_ADJUDICATE_SYSTEM = (
+    "You decide whether a NEW statement about a user contradicts (replaces) an OLD one, or coexists with "
+    "it. Reply with exactly one word: REPLACES if the new fact updates/overrides the old (same attribute, "
+    "new value), or COEXISTS if both can be true at once. Nothing else."
+)
+
+
 class ConflictResolver:
-    def __init__(self, embedder: Optional[Embedder] = None, sim_threshold: float = 0.80) -> None:
+    def __init__(self, embedder: Optional[Embedder] = None, sim_threshold: float = 0.80,
+                 llm=None, ambiguous_band: float = 0.12) -> None:
         # embedder is used ONLY for the semantic path; when None (offline/hashing) only exact-slot fires,
         # keeping the zero-dep demo + tests fully deterministic.
         self.embedder = embedder
         self.sim_threshold = sim_threshold
+        # Optional LLM adjudicator (CLAUDE.md §3.2 step 3): for the AMBIGUOUS band just below the
+        # auto-supersede threshold, ask the LLM whether the new fact replaces the old. Off unless an llm is
+        # passed — so the common case stays LLM-free (Bet C) and only genuinely borderline pairs escalate.
+        self.llm = llm
+        self.ambiguous_band = ambiguous_band
+
+    def _llm_says_replaces(self, new: Fact, old: Fact) -> bool:
+        if self.llm is None:
+            return False
+        try:
+            verdict = self.llm.complete(
+                f"OLD: {old.text}\nNEW: {new.text}\n\nDoes NEW replace OLD?", system=_ADJUDICATE_SYSTEM)
+            return "replace" in verdict.strip().lower()
+        except Exception:  # noqa: BLE001 -- never let adjudication break consolidation
+            return False
 
     def reconcile(self, new: Fact, live: list[Fact]) -> tuple[str, list[Fact]]:
         """Return (action, invalidated_facts). action is "add" or "duplicate"."""
@@ -141,7 +164,12 @@ class ConflictResolver:
                         continue
                     if new.valid_at < old.valid_at:
                         continue
-                    if cosine(new.embedding, old.embedding) >= self.sim_threshold:
+                    sim = cosine(new.embedding, old.embedding)
+                    if sim >= self.sim_threshold:
+                        _supersede(old, new)
+                        invalidated.append(old)
+                    elif sim >= self.sim_threshold - self.ambiguous_band and self._llm_says_replaces(new, old):
+                        # borderline similarity -> let the LLM adjudicate (only when one is configured)
                         _supersede(old, new)
                         invalidated.append(old)
 

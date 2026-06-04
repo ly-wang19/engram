@@ -2,6 +2,7 @@
 build the bi-temporal graph. Runs off the critical path (async / sleep-time in production)."""
 from __future__ import annotations
 
+import math
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Optional
 
@@ -10,7 +11,9 @@ from ..embed import Embedder
 from ..llm import LLM
 from ..store import GraphStore, VectorStore
 from ..types import Episode
+from ..util import DAY
 from .conflict import ConflictResolver
+from .decay import is_durable
 from .extractor import RuleExtractor
 from .graph_builder import GraphBuilder
 from .summarizer import ProfileBuilder
@@ -42,7 +45,9 @@ class ConsolidationEngine:
         from ..embed import HashingEmbedder
 
         sem_embedder = None if isinstance(embedder, HashingEmbedder) else embedder
-        self.conflict = ConflictResolver(sem_embedder, config.conflict_sim_threshold)
+        self.conflict = ConflictResolver(
+            sem_embedder, config.conflict_sim_threshold,
+            llm=llm if config.conflict_llm_escalation else None)
         self.profiles = ProfileBuilder()
 
     def consolidate(self, episodes: list[Episode]) -> dict[str, int]:
@@ -83,7 +88,24 @@ class ConsolidationEngine:
                 self.graph_builder.add_fact(fact)
                 stats["facts_added"] += 1
             ep.consolidated = True
+
+        # Step 3: salience forgetting sweep (Bet E). Unreinforced INCIDENTAL facts fade with age, so the
+        # hot set stays small at scale and stale one-offs rank below durable knowledge. Durable
+        # (preference/identity) and already-reinforced facts are exempt; a floor keeps faded facts
+        # retrievable (live, just deprioritized) so multi-evidence recall isn't destroyed.
+        self._decay_sweep()
         return stats
+
+    def _decay_sweep(self) -> None:
+        live = [f for f in self.fact_store.values() if f.is_live()]
+        if not live:
+            return
+        now_t = max(f.valid_at for f in live)  # latest world-time we know about = "now" for this store
+        for f in live:
+            if is_durable(f.predicate) or f.access_count > 0:
+                continue  # who-they-are / what-they-like, and anything already used, don't fade
+            days = max(0.0, (now_t - f.valid_at) / DAY)
+            f.salience = max(0.3, math.exp(-self.config.salience_decay_per_day * days))
 
     def self_name(self, user_id: str) -> str:
         return self.extractor.self_of(user_id)

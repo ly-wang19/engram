@@ -84,6 +84,9 @@ class Memory:
         self.summarizer = SessionSummarizer(llm)
         self.profiles = ProfileBuilder()
         self._persona_cache: dict[str, str] = {}
+        # Working memory: the small, currently-attended set assembled for the latest query (the OS-paging
+        # "hot" context). Populated by lean_context; inspectable, transient — distinct from the durable stores.
+        self.working_set: list[Fact] = []
 
     # --- write path ---
     def add(
@@ -124,6 +127,10 @@ class Memory:
         stats["summaries"] = self.summarize_episodes(
             summary_episodes if summary_episodes is not None else self.ingestor.pending()
         )
+        # Reflector: propagate any post-summary knowledge-updates into the L2 layer so the lean read
+        # never surfaces a stale value that a later fact already corrected.
+        stats["reflected"] = sum(self.reflect(uid) for uid in {
+            ep.user_id for ep in (summary_episodes or self.episodes_doc.values())})
         return stats
 
     def link_identity(self, a: str, b: str) -> str:
@@ -174,6 +181,50 @@ class Memory:
             eps = [eps[i] for i in order]
         return eps[:k]
 
+    def reflect(self, user_id: str = "default") -> int:
+        """Reflector (Mastra-style summary maintenance, CLAUDE.md §3). An L2 summary is frozen when its
+        session is summarized; if a fact it states is SUPERSEDED later, the stale value lingers in the
+        summary text and the lean read would surface it. This appends the current value to any summary
+        whose source facts were invalidated, so knowledge-updates propagate into the abstraction layer.
+        Returns the number of summaries corrected."""
+        user = self.resolver.resolve(user_id)
+        facts = [f for f in self.fact_store.values() if f.user_id == user]
+        replacement = {f.supersedes: f for f in facts if f.supersedes and f.is_live()}
+        by_episode: dict[str, list] = {}
+        for old in facts:
+            if old.is_live() or old.id not in replacement:
+                continue
+            for ep_id in old.provenance:
+                by_episode.setdefault(ep_id, []).append(old)
+        corrected = 0
+        for ep in self.summary_vec.values():
+            if ep.user_id != user or "[updated:" in (ep.summary or ""):
+                continue
+            stale = by_episode.get(ep.id)
+            if not stale:
+                continue
+            current = "; ".join(replacement[o.id].text for o in stale if o.id in replacement)
+            if current:
+                ep.summary = f"{ep.summary or ''} [updated: {current}]".strip()
+                corrected += 1
+        return corrected
+
+    # Procedural memory: how-to / instruction knowledge — the rules the user has stated for how things
+    # should be done ("always remind me…", "I prefer responses in bullet points"). A distinct typed view
+    # over the fact store (CLAUDE.md §3 typed memory), surfaced so the assistant follows standing instructions.
+    _INSTRUCTION_PREDS = frozenset({
+        "wants", "wants_reminder", "instruction", "prefers", "prefers_format", "asks_to", "always",
+        "never", "remind", "rule", "routine", "how_to", "procedure", "wants_me_to",
+    })
+
+    def procedural(self, user_id: str = "default") -> list[Fact]:
+        """Standing instructions / how-to facts for this user (procedural memory)."""
+        user = self.resolver.resolve(user_id)
+        return [f for f in self.fact_store.values()
+                if f.user_id == user and f.is_live()
+                and (f.predicate.lower() in self._INSTRUCTION_PREDS
+                     or any(f.predicate.lower().startswith(p + "_") for p in ("wants", "prefers", "remind")))]
+
     def build_persona(self, user_id: str = "default") -> str:
         """L3: a compact narrative profile (preferences/habits/possessions) synthesized from live facts."""
         user = self.resolver.resolve(user_id)
@@ -221,11 +272,19 @@ class Memory:
                 blocks.append(f"USER PROFILE:\n{p}")
 
         ranked, _ = self.retriever.retrieve(query, user, as_of, top_k or n_facts)
-        if ranked:
-            for f, _ in ranked:  # reinforcement-on-access: surfaced facts stay salient (spacing effect)
+        fact_ids = {f.id for f, _ in ranked}
+        # n-hop graph expansion: pull facts about the entities named in the query that hybrid ranking
+        # missed. This is the cross-session discovery mechanism the SOTA credits for multi-session gains —
+        # facts connected to a query entity but not lexically/semantically top-ranked on their own.
+        related = [f for f in self._graph_related_facts(query, user, as_of, limit=n_facts)
+                   if f.id not in fact_ids]
+        all_facts = [f for f, _ in ranked] + related
+        self.working_set = all_facts  # working memory: the active set for this query
+        if all_facts:
+            for f in all_facts:  # reinforcement-on-access: surfaced facts stay salient (spacing effect)
                 reinforce(f, self.config.access_boost)
-            by_date = sorted(ranked, key=lambda x: x[0].valid_at, reverse=True)  # latest first (updates)
-            fl = "\n".join(f"- [{fmt_date(f.valid_at)}] {f.text}" for f, _ in by_date)
+            by_date = sorted(all_facts, key=lambda f: f.valid_at, reverse=True)  # latest first (updates)
+            fl = "\n".join(f"- [{fmt_date(f.valid_at)}] {f.text}" for f in by_date)
             blocks.append(f"FACTS (current, dated):\n{fl}")
 
         summaries = [e for e in self.retrieve_summaries(query, user, n_summaries) if e.id not in detail_ids]
