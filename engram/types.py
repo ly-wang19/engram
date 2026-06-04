@@ -153,3 +153,25 @@ class WorkingMemory:
         if session_id is not None and self.session_id != session_id:
             return False
         return True
+
+
+@dataclass
+class Conflict:
+    """A SUSPECTED conflict between two of the user's facts, surfaced for the user to confirm rather than
+    auto-resolved (the safe path for the ambiguous tail the cheap rules can't catch: an LLM in System-2
+    only DETECTS it; the user decides). `older`/`newer` are by valid time; resolving keeps one and
+    supersedes the other. Never auto-applied — no silent corruption."""
+
+    older: str  # fact id with the earlier valid_at (the candidate-outdated one)
+    newer: str  # fact id with the later valid_at (the candidate-current one)
+    text_older: str = ""  # display snapshots (facts may be edited/deleted later)
+    text_newer: str = ""
+    user_id: str = "default"
+    reason: str = ""
+    status: str = "pending"  # pending | resolved | dismissed
+    detected_at: float = field(default_factory=now)
+    id: str = field(default_factory=lambda: gen_id("cf"))
+
+    @property
+    def pair_key(self) -> tuple:
+        return tuple(sorted((self.older, self.newer)))

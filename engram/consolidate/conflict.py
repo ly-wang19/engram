@@ -74,6 +74,21 @@ def _norm(s: str) -> str:
     return s.strip().lower()
 
 
+# Preference polarity — used to detect a like↔dislike REVERSAL on the same object.
+_POS_PREF = {"likes", "like", "loves", "love", "enjoys", "enjoy", "prefers", "prefer", "favorite",
+             "favourite", "fond_of", "into", "interested_in", "fan_of"}
+_NEG_PREF = {"dislikes", "dislike", "hates", "hate", "avoids", "avoid", "not_into", "disinterested_in"}
+
+
+def _pref_polarity(pred: str) -> Optional[str]:
+    p = pred.lower()
+    if p in _POS_PREF or p.startswith(("favorite", "favourite", "likes_", "loves_", "enjoys_", "prefers_")):
+        return "like"
+    if p in _NEG_PREF or p.startswith(("dislikes_", "dislike_", "hates_", "avoids_", "doesn't_", "does_not_")):
+        return "dislike"
+    return None
+
+
 def _protected(old: Fact, new: Fact) -> bool:
     """A user-asserted fact is never auto-superseded by an extracted one."""
     return old.source == "user" and new.source != "user"
@@ -135,6 +150,24 @@ class ConflictResolver:
                 return ("duplicate", [])
 
         invalidated: list[Fact] = []
+
+        # PREFERENCE REVERSAL: an opposite-polarity preference about the SAME object supersedes the old
+        # stance ("我喜欢跳舞" then "我不喜欢跳舞" -> only the dislike stays). Predicates differ (likes vs
+        # dislikes -> different slots) and the object is identical (so the semantic path skips it), so this
+        # contradiction is otherwise missed and both coexist. Multi-valued accumulation is unaffected:
+        # DIFFERENT objects (likes pizza + likes pasta) still coexist; only a like<->dislike flip on the
+        # SAME object resolves. (PRD 治理: "修正否定" / "用户表达了与已有记忆相反的偏好".)
+        new_pol = _pref_polarity(new.predicate)
+        if new_pol is not None:
+            for old in live:
+                if _protected(old, new):
+                    continue
+                if _norm(old.subject) != _norm(new.subject) or _norm(old.object) != _norm(new.object):
+                    continue
+                old_pol = _pref_polarity(old.predicate)
+                if old_pol is not None and old_pol != new_pol and new.valid_at >= old.valid_at:
+                    _supersede(old, new)
+                    invalidated.append(old)
 
         # Subsumption / "Contained" (MemoryScope contra_repeat): if the new claim's content words are a
         # STRICT SUBSET of an existing same-slot fact, the new fact adds nothing -> drop it (dedup). If it

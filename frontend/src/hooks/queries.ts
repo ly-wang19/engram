@@ -13,6 +13,7 @@ export const qk = {
   policy: () => ['policy', ns()] as const,
   profile: () => ['profile', ns()] as const,
   working: () => ['working', ns()] as const,
+  conflicts: () => ['conflicts', ns()] as const,
   health: () => ['health'] as const,
 }
 
@@ -54,6 +55,25 @@ export function useStructuredProfile() {
 export function useWorking() {
   const enabled = !!useAuth((s) => s.apiKey)
   return useQuery({ queryKey: qk.working(), queryFn: () => api.working(), enabled, retry: false })
+}
+
+export function useConflicts() {
+  const enabled = !!useAuth((s) => s.apiKey)
+  return useQuery({ queryKey: qk.conflicts(), queryFn: api.conflicts, enabled, retry: false })
+}
+
+export function useResolveConflict() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, keep }: { id: string; keep: 'newer' | 'older' | 'both' }) =>
+      api.resolveConflict(id, keep),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: qk.conflicts() })
+      qc.invalidateQueries({ queryKey: qk.memories() })
+      qc.invalidateQueries({ queryKey: qk.profile() })
+      qc.invalidateQueries({ queryKey: qk.graph() })
+    },
+  })
 }
 
 export function useAddWorking() {

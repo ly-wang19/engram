@@ -1,10 +1,17 @@
 import { useMemo, useState } from 'react'
-import { Lock, Pencil, Plus, Search, ShieldAlert, Trash2 } from 'lucide-react'
+import { GitMerge, Lock, Pencil, Plus, Search, ShieldAlert, Trash2 } from 'lucide-react'
 
-import { Badge, Button, Card, EmptyState, ErrorState, Field, PageHeader, Spinner } from '../components/ui'
+import { Badge, Button, Card, CardTitle, EmptyState, ErrorState, Field, PageHeader, Spinner } from '../components/ui'
 import { ConfirmDialog, Modal } from '../components/Modal'
 import { toast } from '../components/Toast'
-import { useAddFact, useDeleteFact, useEditFact, useMemories } from '../hooks/queries'
+import {
+  useAddFact,
+  useConflicts,
+  useDeleteFact,
+  useEditFact,
+  useMemories,
+  useResolveConflict,
+} from '../hooks/queries'
 import type { MemoryFact } from '../types'
 
 export default function Facts() {
@@ -45,6 +52,9 @@ export default function Facts() {
           </Button>
         }
       />
+
+      <ConflictsCard />
+
 
       <Card className="!p-3">
         <div className="flex flex-wrap items-center gap-3">
@@ -184,6 +194,54 @@ export default function Facts() {
         }}
       />
     </div>
+  )
+}
+
+function ConflictsCard() {
+  const { data } = useConflicts()
+  const resolve = useResolveConflict()
+  const items = data?.conflicts ?? []
+  if (!items.length) return null
+
+  const act = (id: string, keep: 'newer' | 'older' | 'both', label: string) =>
+    resolve.mutate(
+      { id, keep },
+      { onSuccess: () => toast.success(label), onError: (e) => toast.error(String((e as Error).message)) },
+    )
+
+  return (
+    <Card className="!border-brand-amber/30 !bg-brand-amber/[0.06]">
+      <CardTitle hint="LLM 检测 · 你来定 · 绝不自动覆盖">
+        <span className="inline-flex items-center gap-2 text-brand-amber">
+          <GitMerge className="h-4 w-4" /> 记忆冲突待确认 · {items.length}
+        </span>
+      </CardTitle>
+      <ul className="space-y-3">
+        {items.map((c) => (
+          <li key={c.id} className="rounded-xl border border-line bg-white/[0.02] p-3">
+            <div className="grid gap-1.5 sm:grid-cols-2">
+              <div className="rounded-lg bg-brand-mint/10 px-2.5 py-1.5 text-sm">
+                <span className="text-[10px] text-brand-mint">新</span>
+                <div className="text-slate-100">{c.newer_text}</div>
+              </div>
+              <div className="rounded-lg bg-white/5 px-2.5 py-1.5 text-sm">
+                <span className="text-[10px] text-ghost">旧</span>
+                <div className="text-ghost line-through">{c.older_text}</div>
+              </div>
+            </div>
+            <div className="mt-2.5 flex flex-wrap gap-2">
+              <Button onClick={() => act(c.id, 'newer', '已保留新的，旧的失效')}>保留新的（覆盖旧）</Button>
+              <Button variant="ghost" onClick={() => act(c.id, 'older', '已保留旧的')}>
+                保留旧的
+              </Button>
+              <Button variant="ghost" onClick={() => act(c.id, 'both', '已忽略，两条都保留')}>
+                都保留
+              </Button>
+            </div>
+          </li>
+        ))}
+      </ul>
+    </Card>
   )
 }
 

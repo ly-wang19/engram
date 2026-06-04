@@ -60,6 +60,11 @@ class MemoryManager:
         self.embedder = make_embedder(os.environ.get("ENGRAM_EMBEDDER", "bge-small"))
         llm_name = os.environ.get("ENGRAM_LLM", "")
         self.llm = make_llm(llm_name) if llm_name else None  # no LLM -> deterministic rule extractor
+        from ..config import Config
+        self.config = Config()
+        # opt-in System-2 LLM conflict detection -> the detect->confirm loop (needs an LLM)
+        if os.environ.get("ENGRAM_CONFLICT_DETECTION") == "1" and self.llm is not None:
+            self.config.conflict_detection = True
         self._hot: "OrderedDict[str, Memory]" = OrderedDict()
         self._locks: dict[str, threading.Lock] = {}
         self._g = threading.Lock()
@@ -77,7 +82,7 @@ class MemoryManager:
             if user in self._hot:
                 self._hot.move_to_end(user)
                 return self._hot[user]
-        mem = Memory.open(self._path(user), embedder=self.embedder, llm=self.llm)
+        mem = Memory.open(self._path(user), embedder=self.embedder, llm=self.llm, config=self.config)
         with self._g:
             self._hot[user] = mem
             self._hot.move_to_end(user)
@@ -468,6 +473,40 @@ def clear_working(session_id: str, user: str = Depends(auth)):
         n = mem.clear_session(user, session_id)
         mem.save()
         return {"ok": True, "cleared": n}
+
+
+# --- suspected conflicts (LLM-detected, user-confirmed) ---
+class ResolveReq(BaseModel):
+    keep: str = "newer"  # newer | older | both(=dismiss)
+
+
+@app.get("/v1/conflicts")
+def conflicts(user: str = Depends(auth)):
+    """Suspected conflicts awaiting the user's decision (never auto-resolved)."""
+    from ..localize import display_of
+    mem = mgr().get(user)
+
+    def disp(fid, fallback):
+        f = mem.fact_store.get(fid)
+        return display_of(f) if f is not None else fallback
+
+    return {"conflicts": [{
+        "id": c.id, "older": c.older, "newer": c.newer,
+        "older_text": disp(c.older, c.text_older), "newer_text": disp(c.newer, c.text_newer),
+        "reason": c.reason,
+    } for c in mem.pending_conflicts(user)]}
+
+
+@app.post("/v1/conflicts/{conflict_id}/resolve")
+def resolve_conflict(conflict_id: str, req: ResolveReq, user: str = Depends(auth)):
+    """Apply the user's decision: keep newer/older (supersede the other) or both (dismiss)."""
+    m = mgr()
+    with m.lock(user):
+        mem = m.get(user)
+        ok = (mem.dismiss_conflict(conflict_id) if req.keep == "both"
+              else mem.resolve_conflict(conflict_id, keep=req.keep))
+        mem.save()
+        return {"ok": ok}
 
 
 # --- ② semantic graph for the 关系图谱 visualization ---

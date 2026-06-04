@@ -647,3 +647,63 @@ def test_costated_facts_do_not_semantic_supersede():
     later.embedding = [1.0, 0.0]
     _, inval2 = r.reconcile(later, [old])
     assert old in inval2, "a later separate-episode near-duplicate should still supersede"
+
+
+def test_preference_reversal_supersedes_same_object_opposite_polarity():
+    """User-reported: '我喜欢跳舞' then '我不喜欢跳舞' showed BOTH (+跳舞 and -跳舞). A like<->dislike flip
+    on the SAME object is a reversal — the newer stance supersedes the old (PRD 治理: 修正否定). Different
+    objects still accumulate (multi-valued)."""
+    from engram.consolidate.conflict import ConflictResolver
+    from engram.types import Fact
+    r = ConflictResolver()
+    old = Fact("user", "likes", "跳舞", valid_at=100.0)
+    new = Fact("user", "dislikes", "跳舞", valid_at=200.0)
+    _, invalidated = r.reconcile(new, [old])
+    assert old in invalidated, "later opposite-polarity preference on the same object must supersede"
+    # a DIFFERENT object is untouched — multi-valued accumulation preserved
+    other = Fact("user", "likes", "唱歌", valid_at=50.0)
+    _, inval2 = r.reconcile(Fact("user", "likes", "跳舞", valid_at=300.0), [other])
+    assert other not in inval2
+
+
+def test_conflict_detection_flags_candidates_and_coexist_default():
+    """System-2 LLM detection: only flag genuine suspected conflicts among candidate pairs; COEXIST is the
+    default (unrelated / model-unsure pairs are never flagged)."""
+    from engram.consolidate.detect import detect_conflicts
+    from engram.types import Fact
+
+    class Judge:
+        def complete(self, prompt, system=""):
+            return "CONFLICT" if ("北京" in prompt and "上海" in prompt) else "COEXIST"
+
+    a = Fact("user", "lives_in", "北京", valid_at=100.0); a.embedding = [1.0, 0.0]
+    b = Fact("user", "based_in", "上海", valid_at=200.0); b.embedding = [0.8, 0.6]   # ~0.8 cos: in band
+    c = Fact("user", "likes", "咖啡", valid_at=150.0); c.embedding = [0.0, 1.0]       # unrelated (cos<0.62)
+    flagged = detect_conflicts([a, b, c], Judge(), "user", seen=set())
+    assert len(flagged) == 1, "only the genuine conflict pair is flagged (coexist default)"
+    cf = flagged[0]
+    assert cf.newer == b.id and cf.older == a.id  # newer = later valid_at
+
+
+def test_conflict_resolve_and_dismiss_are_user_driven():
+    """Detection NEVER auto-resolves — only the user's resolve()/dismiss() acts; resolving supersedes the
+    chosen loser, dismiss keeps both."""
+    from engram.types import Conflict
+    m = Memory()
+    fa = m.add_fact("user", "likes", "北京", user_id="u")   # multi-valued -> both coexist (no auto-merge)
+    fb = m.add_fact("user", "likes", "上海", user_id="u")
+    cf = Conflict(older=fa.id, newer=fb.id, user_id="u")
+    m.conflicts[cf.id] = cf
+    assert m.pending_conflicts("u"), "both live -> pending"
+
+    assert m.resolve_conflict(cf.id, keep="newer")
+    assert not fa.is_live() and fb.is_live(), "keep=newer supersedes the older"
+    assert cf.status == "resolved" and m.pending_conflicts("u") == []
+
+    # dismiss keeps both
+    g1 = m.add_fact("user", "likes", "茶", user_id="u")
+    g2 = m.add_fact("user", "likes", "奶茶", user_id="u")
+    cf2 = Conflict(older=g1.id, newer=g2.id, user_id="u")
+    m.conflicts[cf2.id] = cf2
+    assert m.dismiss_conflict(cf2.id) and g1.is_live() and g2.is_live()
+    assert m.pending_conflicts("u") == []

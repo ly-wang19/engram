@@ -40,3 +40,7 @@ class Config:
     # escalate borderline conflicts (similarity just below threshold) to an LLM adjudicator (§3.2 step 3).
     # Off by default: keeps consolidation LLM-free per fact (Bet C); enable for max precision.
     conflict_llm_escalation: bool = False
+    # System-2 LLM conflict DETECTION for the ambiguous tail: surface suspected conflicts the cheap rules
+    # can't enumerate as pending items for the USER to confirm (never auto-resolved). Off by default so
+    # offline / tests stay deterministic; enable in production for the detect->confirm loop.
+    conflict_detection: bool = False

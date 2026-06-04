@@ -30,7 +30,10 @@ EXTRACT_SYSTEM = (
 
 EXTRACT_TEMPLATE = "Conversation:\n{content}\n\nJSON facts:"
 
-_NAME_PREDICATES = {"name", "name_is", "is_named", "called"}
+# predicates that declare a name/nickname for the user — all registered as the user's aliases so any of
+# them used later as a subject normalizes to one canonical identity (the user may have several: 李雷/小雷).
+_NAME_PREDICATES = {"name", "name_is", "is_named", "called", "nickname", "call_me", "preferred_name",
+                    "name_preference", "称呼", "昵称"}
 # first-person / user references normalized to the user's canonical name (EN + ZH coreference)
 _SELF_REFS = {"user", "i", "me", "myself", "用户", "我", "本人", "自己", "俺", "咱"}
 
@@ -68,7 +71,8 @@ class LLMExtractor:
         # Optional per-user directive appended to the system prompt: WHAT the user wants recorded (or not).
         # Set from Memory.policy["extract_instruction"] — the headline "要记录什么记忆" knob in the console.
         self.instruction = ""
-        self.self_name: dict[str, str] = {}
+        self.self_name: dict[str, str] = {}        # user_id -> canonical name (the first one declared)
+        self.aliases: dict[str, set] = {}          # user_id -> {all declared names/nicknames} (coreference)
 
     def self_of(self, user_id: str) -> str:
         return self.self_name.get(user_id, user_id)
@@ -90,13 +94,15 @@ class LLMExtractor:
             if not subj or not pred or not obj:
                 continue
             if pred in _NAME_PREDICATES:
-                # register identity; rewrite the placeholder subject so later facts attribute correctly
-                self.self_name[ep.user_id] = obj
+                # register every declared name/nickname as a user alias; the FIRST one is the canonical
+                # subject. So 李雷 / 小雷 / 我 / 用户 all normalize to one identity below.
+                self.aliases.setdefault(ep.user_id, set()).add(obj.lower())
+                self.self_name.setdefault(ep.user_id, obj)
                 continue
-            if subj.lower() in _SELF_REFS:
-                # first-person / user reference (EN + ZH) -> normalize to the user's known name, so all of
-                # the user's own facts share ONE canonical subject (otherwise 我/用户/李雷 split apart and
-                # the profile can't tell which facts are about the user).
+            if subj.lower() in _SELF_REFS or subj.lower() in self.aliases.get(ep.user_id, ()):
+                # first-person / user reference OR any of the user's declared names (我/用户/李雷/小雷) ->
+                # normalize to ONE canonical subject, so all of the user's own facts share it (otherwise they
+                # split across subjects and the profile / conflict-resolution can't tell they're the user's).
                 subj = self.self_of(ep.user_id) if self.self_of(ep.user_id) != ep.user_id else subj
             facts.append(
                 Fact(

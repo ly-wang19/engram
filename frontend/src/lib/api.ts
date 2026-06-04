@@ -1,5 +1,6 @@
 import { currentKey, useAuth } from '../store/auth'
 import type {
+  Conflict,
   Focus,
   FactEdit,
   FactWrite,
@@ -110,6 +111,11 @@ export const api = {
     request<{ ok: boolean; cleared: number }>(`/v1/working?session_id=${encodeURIComponent(session_id)}`, {
       method: 'DELETE',
     }),
+
+  conflicts: () => request<{ conflicts: Conflict[] }>('/v1/conflicts'),
+
+  resolveConflict: (id: string, keep: 'newer' | 'older' | 'both') =>
+    request<{ ok: boolean }>(`/v1/conflicts/${id}/resolve`, { method: 'POST', body: json({ keep }) }),
 
   /** Trigger a browser download of the full data export (keeps the Bearer header). */
   async exportDownload(filenameHint = 'me', includeSensitive = true): Promise<void> {

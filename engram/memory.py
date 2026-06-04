@@ -39,7 +39,7 @@ from .store import (
     VectorStore,
 )
 from .retrieve.lexical import bm25_scores, overlap_terms
-from .types import Episode, Fact, WorkingMemory
+from .types import Conflict, Episode, Fact, WorkingMemory
 from .util import fmt_date, now
 
 # words too generic to confirm an attribute on their own ("favorite food" must not match
@@ -115,6 +115,9 @@ class Memory:
         # Resolved user identity (user_id -> self-name, e.g. "user123" -> "李雷"). Persisted so the
         # first-person normalization and the profile know who the user is after a reload.
         self._identity: dict[str, str] = {}
+        self._aliases: dict[str, set] = {}  # user_id -> {all declared names/nicknames} (coreference)
+        # Suspected conflicts surfaced for the user to confirm (System-2 LLM detection; never auto-applied).
+        self.conflicts: dict[str, Conflict] = {}
         self._persist_path: Optional[str] = None
         self._rewire()
 
@@ -130,6 +133,9 @@ class Memory:
         ex = getattr(self.engine, "extractor", None)
         if ex is not None and hasattr(ex, "self_name"):
             ex.self_name.update(getattr(self, "_identity", {}))
+            if hasattr(ex, "aliases"):
+                for k, v in getattr(self, "_aliases", {}).items():
+                    ex.aliases.setdefault(k, set()).update(v)
 
     # --- persistence (so memory survives across processes/sessions; CLAUDE.md §6) ---
     def save(self, path: Optional[str] = None) -> None:
@@ -151,7 +157,7 @@ class Memory:
                 "summary_vec": self.summary_vec, "graph": self.graph,
                 "resolver": self.resolver, "persona_cache": self._persona_cache,
                 "focus": self.focus, "policy": self.policy, "working_mem": self.working_mem,
-                "identity": self._identity,
+                "identity": self._identity, "aliases": self._aliases, "conflicts": self.conflicts,
             }, fh)
 
     @classmethod
@@ -175,6 +181,8 @@ class Memory:
                                                     "summary_system": "", "persona_system": ""}
                 mem.working_mem = blob.get("working_mem") or {}
                 mem._identity = blob.get("identity") or {}
+                mem._aliases = {k: set(v) for k, v in (blob.get("aliases") or {}).items()}
+                mem.conflicts = blob.get("conflicts") or {}
             else:  # legacy 8-tuple snapshot (pre-focus)
                 (mem.episodes_doc, mem.episodes_vec, mem.fact_store, mem.cold_store,
                  mem.summary_vec, mem.graph, mem.resolver, mem._persona_cache) = blob
@@ -226,10 +234,13 @@ class Memory:
         self._apply_policy()  # honor the user's editable extraction prompt / "what to record" directive
         self.sweep_working()  # housekeeping: drop expired/consumed ephemeral items
         stats = self.engine.consolidate(eps)
-        ex = getattr(self.engine, "extractor", None)  # capture any newly-resolved self-name to persist it
+        ex = getattr(self.engine, "extractor", None)  # capture any newly-resolved identity to persist it
         if ex is not None and hasattr(ex, "self_name"):
             self._identity.update(ex.self_name)
+            for k, v in getattr(ex, "aliases", {}).items():
+                self._aliases.setdefault(k, set()).update(v)
         self._classify()  # feature ⑤: tag new facts with a category + sensitivity flag (rule-based)
+        self._detect_conflicts()  # System-2: surface suspected conflicts for the user (opt-in, gated)
         self._persona_cache.clear()  # facts changed -> any cached persona is stale
         return stats
 
@@ -473,6 +484,58 @@ class Memory:
         for i in dead:
             del self.working_mem[i]
         return len(dead)
+
+    # --- conflict detection -> pending (LLM detects the ambiguous tail; the USER confirms) ---
+    def _detect_conflicts(self) -> None:
+        if not (self.llm is not None and self.config.conflict_detection):
+            return  # opt-in; offline / rule-only mode stays deterministic
+        from .consolidate.detect import detect_conflicts
+        seen = {c.pair_key for c in self.conflicts.values()}
+        for user in {f.user_id for f in self.fact_store.values()}:
+            live = [f for f in self.fact_store.values() if f.user_id == user and f.is_live()]
+            for c in detect_conflicts(live, self.llm, user, seen, self.embedder):
+                self.conflicts[c.id] = c
+                seen.add(c.pair_key)
+
+    def pending_conflicts(self, user_id: str = "default") -> list[Conflict]:
+        """Suspected conflicts awaiting the user's decision (both facts must still be live)."""
+        user = self.resolver.resolve(user_id)
+        out = []
+        for c in self.conflicts.values():
+            if c.user_id != user or c.status != "pending":
+                continue
+            a, b = self.fact_store.get(c.older), self.fact_store.get(c.newer)
+            if a is not None and b is not None and a.is_live() and b.is_live():
+                out.append(c)
+            else:
+                c.status = "dismissed"  # one side already changed -> no longer a live conflict
+        return out
+
+    def resolve_conflict(self, conflict_id: str, keep: str = "newer") -> bool:
+        """Apply the user's decision: keep='newer'|'older' supersedes the other; keep='both' just dismisses.
+        This is the ONLY path that acts on a detected conflict — always user-driven."""
+        c = self.conflicts.get(conflict_id)
+        if c is None:
+            return False
+        newer, older = self.fact_store.get(c.newer), self.fact_store.get(c.older)
+        if keep in ("newer", "older") and newer is not None and older is not None:
+            winner, loser = (newer, older) if keep == "newer" else (older, newer)
+            if loser.invalid_at is None:
+                loser.invalid_at = max(winner.valid_at, loser.valid_at)
+            loser.expired_at = now()
+            winner.supersedes = loser.id
+            self.engine.graph_builder.invalidate(loser.id, loser.expired_at)
+            self._persona_cache.clear()
+        c.status = "resolved"
+        return True
+
+    def dismiss_conflict(self, conflict_id: str) -> bool:
+        """Not a conflict (keep both) — won't be flagged again."""
+        c = self.conflicts.get(conflict_id)
+        if c is None:
+            return False
+        c.status = "dismissed"
+        return True
 
     # --- classification + sensitivity (feature ⑤) ---
     def _classify(self) -> None:

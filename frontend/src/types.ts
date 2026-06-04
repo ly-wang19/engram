@@ -21,6 +21,15 @@ export interface MemoryFact {
   provenance: string[]
 }
 
+export interface Conflict {
+  id: string
+  older: string
+  newer: string
+  older_text: string
+  newer_text: string
+  reason: string
+}
+
 export interface WorkingItem {
   id: string
   content: string
