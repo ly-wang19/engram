@@ -14,12 +14,14 @@ class Config:
     w_rec: float = 0.3  # recency decay
     w_sal: float = 0.25  # salience / importance
 
-    # Type-weighted fusion (MemoryScope `type_ratio`, OMEGA 2x-for-decisions): a consolidated, durable
-    # fact about who the user IS or what they PREFER is worth more at retrieval than an incidental mention.
-    # Applied as a multiplier on the fused score. This is where Hunyuan banked its big preference (+21) and
-    # knowledge-update (+21) gains — surfacing identity/preference facts ahead of noise.
-    w_type_preference: float = 1.5
-    w_type_identity: float = 1.3
+    # Type-weighted retrieval (MemoryScope `type_ratio`, OMEGA 2x-for-decisions): a durable fact about who
+    # the user IS or what they PREFER outranks an incidental mention OF SIMILAR RELEVANCE. Critically the
+    # multiplier is applied to the SEMANTIC score — which is ~0 for irrelevant facts — so it can only
+    # reorder among already-relevant candidates, never pull an off-topic fact to the top (an earlier
+    # version multiplied the fused rank score and wrongly surfaced 'favorite_language' for "where do you
+    # work?"). Gentle by design; gated to a real embedder (the hashing fallback's cosines are noise).
+    w_type_preference: float = 1.25
+    w_type_identity: float = 1.15
 
     recency_tau_days: float = 45.0
     top_k: int = 5

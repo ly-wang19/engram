@@ -211,3 +211,23 @@ def test_type_weight_ranks_preference_and_identity_above_incidental():
     assert fact_type_weight(ident, cfg) == cfg.w_type_identity
     assert fact_type_weight(incidental, cfg) == 1.0
     assert cfg.w_type_preference > cfg.w_type_identity > 1.0
+
+
+def test_type_weighting_is_relevance_gated_and_embedder_gated():
+    """Two safety properties of the corrected type-weighting:
+      (1) it is applied to the SEMANTIC score, so it reorders among relevant facts but never lifts an
+          off-topic one — 'where do I work?' must still return the employer, not a favorite;
+      (2) it is gated off for the offline HashingEmbedder (noisy cosines)."""
+    from engram.embed import HashingEmbedder
+    from engram.retrieve.hybrid import HybridRetriever
+    from engram.store import InMemoryGraphStore, InMemoryVectorStore
+    from engram.config import Config
+
+    r = HybridRetriever(InMemoryVectorStore(), InMemoryGraphStore(), HashingEmbedder(64), Config())
+    assert r._semantic is False, "type-weighting must be gated off for the hashing embedder"
+
+    # relevance still wins (this is the regression the earlier multiplier caused: a 'favorite_language'
+    # fact outranking 'works_at' for a work query)
+    mem = build()
+    ans = mem.search("Where do I work?", user_id="u1").answer().lower()
+    assert "tencent" in ans, "relevance must win — a preference fact must not outrank the employer"

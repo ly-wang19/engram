@@ -57,6 +57,10 @@ class HybridRetriever:
         self.graph = graph
         self.embedder = embedder
         self.config = config
+        # Type weighting needs a real semantic signal; the offline HashingEmbedder's cosines are noise, so
+        # gate it off there (same pattern as the conflict resolver) — keeps the zero-dep demo deterministic.
+        from ..embed import HashingEmbedder
+        self._semantic = not isinstance(embedder, HashingEmbedder)
 
     def query_entity_ids(self, query: str, user_id: str) -> set[str]:
         """Entity nodes whose full name appears in the query (the query's anchor entities)."""
@@ -104,6 +108,15 @@ class HybridRetriever:
 
         qvec = self.embedder.embed(query)
         sem = {f.id: cosine(qvec, f.embedding or []) for f in live}
+        # Type-weighted retrieval: scale the SEMANTIC score by fact type. Because an off-topic fact has
+        # sem≈0, the multiplier only reorders among genuinely-relevant candidates (a preference fact beats
+        # an equally-relevant incidental one) and can never lift an irrelevant fact. Gated to real
+        # embeddings — the hashing fallback's cosines are noise and a multiplier there would misrank.
+        if self._semantic:
+            for f in live:
+                tw = fact_type_weight(f, self.config)
+                if tw != 1.0:
+                    sem[f.id] *= tw
         # include each fact's date as searchable tokens so time-named queries ('May 2023') match by date
         lex = bm25_scores(query, [(f.id, f"{f.text} {date_terms(f.valid_at)}") for f in live])
         gph, qids = self._graph_scores(query, user_id, live, as_of)
@@ -126,11 +139,6 @@ class HybridRetriever:
             "sal": self.config.w_sal,
         }
         fused = weighted_rrf(rankings, weights, self.config.rrf_k)
-        # Type weighting (insight/preference > incidental) is realized STRUCTURALLY in the lean read path —
-        # the L3 persona and L1 facts occupy dedicated, always-included blocks above the L2 summaries and
-        # raw chunks. We deliberately do NOT multiply per-fact here: an unconditional type multiplier
-        # overrides query relevance (a 'favorite_language' fact would outrank 'works_at' for "where do you
-        # work?"). Relevance must win the fact ranking; type priority is expressed by block, not by score.
         ranked = sorted(live, key=lambda f: fused.get(f.id, 0.0), reverse=True)[:top_k]
         diag = {"sem": sem, "lex": lex, "fused": fused, "qids": qids}
         return [(f, fused.get(f.id, 0.0)) for f in ranked], diag
