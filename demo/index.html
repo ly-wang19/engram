@@ -1,10 +1,10 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Engram · 给 AI 一个会记事的大脑 | 开源长期记忆引擎</title>
-<meta name="description" content="Engram 是一个开源的 LLM 长期记忆引擎:像人脑一样提炼事实、双时间轴追踪、精准检索。LongMemEval 上用 1/8 的 token 大幅超过全文基线,全部可复现。">
+<title>Engram · Give your AI a brain that remembers | open-source long-term memory engine</title>
+<meta name="description" content="Engram is an open-source long-term memory engine for LLMs: distills facts like a brain, tracks them bi-temporally, retrieves precisely. On LongMemEval it beats the full-context baseline on 1/8 the tokens — all reproducible.">
 <style>
   :root{
     --bg:#070b14; --ink:#eaf0ff; --dim:#8a97b8; --dim2:#64708f;
@@ -26,6 +26,10 @@
   h2{font-size:clamp(26px,4vw,42px);font-weight:800;letter-spacing:-.5px;line-height:1.2;margin-bottom:18px}
   h2 .hl,.hl{background:linear-gradient(90deg,var(--cyan),var(--teal),var(--violet));-webkit-background-clip:text;background-clip:text;color:transparent}
   .lead{font-size:clamp(16px,2vw,19px);color:var(--dim);max-width:720px}
+  /* i18n: English by default; .zh on body flips to Chinese */
+  .i18n-zh{display:none}
+  body.zh .i18n-en{display:none}
+  body.zh .i18n-zh{display:revert}
   /* reveal on scroll */
   .rv{opacity:0;transform:translateY(26px);transition:opacity .7s ease,transform .7s cubic-bezier(.2,.7,.2,1)}
   .rv.in{opacity:1;transform:none}
@@ -39,8 +43,12 @@
   .logo .o{width:14px;height:14px;border-radius:50%;background:linear-gradient(135deg,var(--cyan),var(--violet));box-shadow:0 0 16px var(--cyan)}
   .nlinks{display:flex;gap:22px;font-size:14px;color:var(--dim)}
   .nlinks a:hover{color:var(--cyan)}
+  .navright{display:flex;align-items:center;gap:10px}
   .ghbtn{border:1px solid var(--line);border-radius:999px;padding:7px 15px;font-size:13.5px;text-decoration:none}
   .ghbtn:hover{border-color:var(--cyan);color:var(--cyan)}
+  .langtoggle{border:1px solid var(--line);border-radius:999px;padding:7px 12px;font-size:13px;cursor:pointer;
+    background:transparent;color:var(--dim);font-family:inherit}
+  .langtoggle:hover{border-color:var(--cyan);color:var(--cyan)}
   @media(max-width:720px){.nlinks{display:none}}
 
   /* hero */
@@ -133,57 +141,65 @@
   .pill{display:inline-flex;align-items:center;gap:8px;border:1px solid var(--line);background:var(--card);border-radius:999px;padding:7px 15px;font-size:13px}
 </style>
 </head>
-<body>
+<body class="en">
 
 <nav><div class="wrap">
   <div class="logo"><span class="o"></span> Engram</div>
   <div class="nlinks">
-    <a href="#problem">痛点</a><a href="#how">怎么做</a><a href="#example">例子</a>
-    <a href="#lean">核心绝活</a><a href="#bench">成绩单</a><a href="#sources">完整架构</a><a href="#use">怎么调用</a>
+    <a href="#problem"><span class="i18n-en">Problem</span><span class="i18n-zh">痛点</span></a>
+    <a href="#how"><span class="i18n-en">How</span><span class="i18n-zh">怎么做</span></a>
+    <a href="#example"><span class="i18n-en">Example</span><span class="i18n-zh">例子</span></a>
+    <a href="#lean"><span class="i18n-en">The edge</span><span class="i18n-zh">核心绝活</span></a>
+    <a href="#bench"><span class="i18n-en">Results</span><span class="i18n-zh">成绩单</span></a>
+    <a href="#sources"><span class="i18n-en">Architecture</span><span class="i18n-zh">完整架构</span></a>
+    <a href="#use"><span class="i18n-en">Use it</span><span class="i18n-zh">怎么调用</span></a>
   </div>
-  <a class="ghbtn" href="https://github.com/ly-wang19/engram" target="_blank">★ GitHub</a>
+  <div class="navright">
+    <button class="langtoggle" onclick="toggleLang()">中文</button>
+    <a class="ghbtn" href="https://github.com/ly-wang19/engram" target="_blank">★ GitHub</a>
+  </div>
 </div></nav>
 
 <!-- HERO -->
 <header class="hero"><div class="wrap">
-  <div class="eyebrow rv in">开源 · 长期记忆引擎</div>
-  <h1 class="rv in d1">给 AI 一个<br><span class="hl">会记事的大脑</span></h1>
-  <p class="tag rv in d2">像人脑一样:聊天时悄悄提炼「事实」、随时间更新而不忘历史、<br>提问时只取出相关的一小片 —— 用 1/8 的信息,答得反而更准。</p>
+  <div class="eyebrow rv in"><span class="i18n-en">Open source · long-term memory engine</span><span class="i18n-zh">开源 · 长期记忆引擎</span></div>
+  <h1 class="rv in d1"><span class="i18n-en">Give your AI a<br><span class="hl">brain that remembers</span></span><span class="i18n-zh">给 AI 一个<br><span class="hl">会记事的大脑</span></span></h1>
+  <p class="tag rv in d2"><span class="i18n-en">Like a human brain: it quietly distills <b>facts</b> as you chat, updates them over time without forgetting history,<br>and at question time pulls only the relevant slice — answering <b>more accurately on 1/8 the context</b>.</span><span class="i18n-zh">像人脑一样:聊天时悄悄提炼「事实」、随时间更新而不忘历史、<br>提问时只取出相关的一小片 —— 用 1/8 的信息,答得反而更准。</span></p>
   <div class="stats">
-    <div class="stat rv in d2"><div class="n hl">83.6%</div><div class="l">LongMemEval_S 准确率</div></div>
-    <div class="stat rv in d3"><div class="n hl">8×</div><div class="l">比塞全文更省 token</div></div>
-    <div class="stat rv in d3"><div class="n hl">5 类</div><div class="l">类型化记忆</div></div>
-    <div class="stat rv in d4"><div class="n hl">100%</div><div class="l">开源 · 可复现</div></div>
+    <div class="stat rv in d2"><div class="n hl">83.6%</div><div class="l"><span class="i18n-en">LongMemEval_S accuracy</span><span class="i18n-zh">LongMemEval_S 准确率</span></div></div>
+    <div class="stat rv in d3"><div class="n hl">8×</div><div class="l"><span class="i18n-en">fewer tokens than full-context</span><span class="i18n-zh">比塞全文更省 token</span></div></div>
+    <div class="stat rv in d3"><div class="n hl"><span class="i18n-en">5</span><span class="i18n-zh">5 类</span></div><div class="l"><span class="i18n-en">typed memory stores</span><span class="i18n-zh">类型化记忆</span></div></div>
+    <div class="stat rv in d4"><div class="n hl">100%</div><div class="l"><span class="i18n-en">open source · reproducible</span><span class="i18n-zh">开源 · 可复现</span></div></div>
   </div>
   <div class="cta rv in d4">
-    <a class="b1" href="https://github.com/ly-wang19/engram" target="_blank">★ 在 GitHub 上看</a>
-    <a class="b2" href="#how">看看它怎么工作 ↓</a>
+    <a class="b1" href="https://github.com/ly-wang19/engram" target="_blank"><span class="i18n-en">★ View on GitHub</span><span class="i18n-zh">★ 在 GitHub 上看</span></a>
+    <a class="b2" href="#how"><span class="i18n-en">See how it works ↓</span><span class="i18n-zh">看看它怎么工作 ↓</span></a>
   </div>
-  <p class="note rv in d5" style="margin-top:18px">真实数据 · 严格的 DeepSeek 判分器 · 每个数字都能自己跑一遍验证</p>
+  <p class="note rv in d5" style="margin-top:18px"><span class="i18n-en">Real numbers · strict DeepSeek judge · every figure you can reproduce yourself</span><span class="i18n-zh">真实数据 · 严格的 DeepSeek 判分器 · 每个数字都能自己跑一遍验证</span></p>
 </div></header>
 
 <!-- PROBLEM -->
 <section id="problem"><div class="wrap">
-  <div class="eyebrow rv">为什么需要它</div>
-  <h2 class="rv d1">AI 会忘事。<span class="hl">而"全记住"是个坑。</span></h2>
-  <p class="lead rv d2">每开一段新对话,AI 就不记得你是谁。最笨的补救是把所有历史重新塞进去 —— 但这又慢又贵,还会"迷失在中间"读串。</p>
+  <div class="eyebrow rv"><span class="i18n-en">Why it matters</span><span class="i18n-zh">为什么需要它</span></div>
+  <h2 class="rv d1"><span class="i18n-en">AI forgets. And "remember everything" is a <span class="hl">trap.</span></span><span class="i18n-zh">AI 会忘事。<span class="hl">而"全记住"是个坑。</span></span></h2>
+  <p class="lead rv d2"><span class="i18n-en">Every new session, the AI forgets who you are. The naive fix is to replay the whole history — but that's slow, expensive, and "lost in the middle" makes it misread.</span><span class="i18n-zh">每开一段新对话,AI 就不记得你是谁。最笨的补救是把所有历史重新塞进去 —— 但这又慢又贵,还会"迷失在中间"读串。</span></p>
   <div class="split">
     <div class="pcard bad rv d2">
-      <h3>🐢 笨办法:每次塞全部历史</h3>
+      <h3><span class="i18n-en">🐢 The naive way: replay all history</span><span class="i18n-zh">🐢 笨办法:每次塞全部历史</span></h3>
       <ul>
-        <li>50 段对话 ≈ <b>7.9 万 token</b>,全部重读一遍</li>
-        <li>又慢、又贵,token 随历史无限增长</li>
-        <li>信息太多 → "迷失在中间" → 反而答错</li>
-        <li>准确率只有 <b style="color:var(--red)">73.2%</b></li>
+        <li><span class="i18n-en">50 sessions ≈ <b>79k tokens</b>, re-read every time</span><span class="i18n-zh">50 段对话 ≈ <b>7.9 万 token</b>,全部重读一遍</span></li>
+        <li><span class="i18n-en">Slow and expensive; tokens grow without bound</span><span class="i18n-zh">又慢、又贵,token 随历史无限增长</span></li>
+        <li><span class="i18n-en">Too much context → "lost in the middle" → wrong answers</span><span class="i18n-zh">信息太多 → "迷失在中间" → 反而答错</span></li>
+        <li><span class="i18n-en">Only <b style="color:var(--red)">73.2%</b> accurate</span><span class="i18n-zh">准确率只有 <b style="color:var(--red)">73.2%</b></span></li>
       </ul>
     </div>
     <div class="pcard good rv d3">
-      <h3>⚡ Engram:只取相关一小片</h3>
+      <h3><span class="i18n-en">⚡ Engram: retrieve only the relevant slice</span><span class="i18n-zh">⚡ Engram:只取相关一小片</span></h3>
       <ul>
-        <li>提炼成结构化记忆,提问时<b>精准检索</b></li>
-        <li>只用 <b>~9.6k token</b>(<b style="color:var(--teal)">省 8 倍</b>)</li>
-        <li>去掉噪声、只留精华 → 更聚焦</li>
-        <li>准确率 <b style="color:var(--teal)">83.6%</b>,且历史再长也不崩</li>
+        <li><span class="i18n-en">Distills structured memory; <b>retrieves precisely</b> at query time</span><span class="i18n-zh">提炼成结构化记忆,提问时<b>精准检索</b></span></li>
+        <li><span class="i18n-en">Only <b>~9.6k tokens</b> (<b style="color:var(--teal)">8× leaner</b>)</span><span class="i18n-zh">只用 <b>~9.6k token</b>(<b style="color:var(--teal)">省 8 倍</b>)</span></li>
+        <li><span class="i18n-en">Drops the noise, keeps the signal → more focused</span><span class="i18n-zh">去掉噪声、只留精华 → 更聚焦</span></li>
+        <li><span class="i18n-en"><b style="color:var(--teal)">83.6%</b> accurate, and it holds up as history grows</span><span class="i18n-zh">准确率 <b style="color:var(--teal)">83.6%</b>,且历史再长也不崩</span></li>
       </ul>
     </div>
   </div>
@@ -191,112 +207,120 @@
 
 <!-- HOW -->
 <section id="how" style="background:linear-gradient(180deg,transparent,rgba(34,211,238,.04),transparent)"><div class="wrap">
-  <div class="eyebrow rv">它怎么工作 · 双过程,仿人脑</div>
-  <h2 class="rv d1">写入不挡路,<span class="hl">整理在后台</span></h2>
-  <p class="lead rv d2">和人脑一样分两条路:<b>System-1</b> 边聊边快速记下(&lt;50ms,不卡你);<b>System-2</b> 像睡觉时一样,在后台把记忆提炼、建图、解决矛盾。</p>
+  <div class="eyebrow rv"><span class="i18n-en">How it works · dual-process, brain-inspired</span><span class="i18n-zh">它怎么工作 · 双过程,仿人脑</span></div>
+  <h2 class="rv d1"><span class="i18n-en">Writes never block; <span class="hl">structuring happens in the background</span></span><span class="i18n-zh">写入不挡路,<span class="hl">整理在后台</span></span></h2>
+  <p class="lead rv d2"><span class="i18n-en">Two paths, like the brain: <b>System-1</b> jots things down as you chat (&lt;50ms, never blocks you); <b>System-2</b>, like sleep, distills memory, builds the graph, and resolves contradictions in the background.</span><span class="i18n-zh">和人脑一样分两条路:<b>System-1</b> 边聊边快速记下(&lt;50ms,不卡你);<b>System-2</b> 像睡觉时一样,在后台把记忆提炼、建图、解决矛盾。</span></p>
 
   <div class="flow">
-    <div class="fstep rv d2"><div class="ms">&lt;50ms</div><div class="ic">💬</div><div class="t">你聊天</div><div class="s">原始对话无损存下(带时间)</div></div>
+    <div class="fstep rv d2"><div class="ms">&lt;50ms</div><div class="ic">💬</div><div class="t"><span class="i18n-en">You chat</span><span class="i18n-zh">你聊天</span></div><div class="s"><span class="i18n-en">raw turn stored losslessly (timestamped)</span><span class="i18n-zh">原始对话无损存下(带时间)</span></div></div>
     <div class="farrow rv d2">→</div>
-    <div class="fstep rv d3"><div class="ic">⚗️</div><div class="t">提炼事实</div><div class="s">抽出原子事实<br>(主语·谓语·宾语)</div></div>
+    <div class="fstep rv d3"><div class="ic">⚗️</div><div class="t"><span class="i18n-en">Distill facts</span><span class="i18n-zh">提炼事实</span></div><div class="s"><span class="i18n-en">atomic facts<br>(subject·predicate·object)</span><span class="i18n-zh">抽出原子事实<br>(主语·谓语·宾语)</span></div></div>
     <div class="farrow rv d3">→</div>
-    <div class="fstep rv d3"><div class="ic">🕸️</div><div class="t">双时间轴图谱</div><div class="s">建实体关系图<br>解决矛盾不覆盖</div></div>
+    <div class="fstep rv d3"><div class="ic">🕸️</div><div class="t"><span class="i18n-en">Bi-temporal graph</span><span class="i18n-zh">双时间轴图谱</span></div><div class="s"><span class="i18n-en">entities + relations;<br>resolve conflicts, never overwrite</span><span class="i18n-zh">建实体关系图<br>解决矛盾不覆盖</span></div></div>
     <div class="farrow rv d4">→</div>
-    <div class="fstep rv d4"><div class="ms">&lt;100ms</div><div class="ic">🎯</div><div class="t">精准检索</div><div class="s">提问 → 取相关一小片 → 作答</div></div>
+    <div class="fstep rv d4"><div class="ms">&lt;100ms</div><div class="ic">🎯</div><div class="t"><span class="i18n-en">Precise recall</span><span class="i18n-zh">精准检索</span></div><div class="s"><span class="i18n-en">question → relevant slice → answer</span><span class="i18n-zh">提问 → 取相关一小片 → 作答</span></div></div>
   </div>
 
-  <h3 class="rv d3" style="text-align:center;margin-top:54px;font-size:20px;color:var(--dim)">五类记忆,各管一摊(就像大脑的不同区域)</h3>
+  <h3 class="rv d3" style="text-align:center;margin-top:54px;font-size:20px;color:var(--dim)"><span class="i18n-en">Five memory types, each its own job (like brain regions)</span><span class="i18n-zh">五类记忆,各管一摊(就像大脑的不同区域)</span></h3>
   <div class="mem">
-    <div class="mcard rv d2"><div class="e">📔</div><div class="t">情节记忆</div><div class="s">原始对话/事件</div></div>
-    <div class="mcard rv d2"><div class="e">🕸️</div><div class="t">语义记忆</div><div class="s">事实 + 双时间轴图谱</div></div>
-    <div class="mcard rv d3"><div class="e">👤</div><div class="t">用户画像</div><div class="s">偏好/习惯/身份</div></div>
-    <div class="mcard rv d3"><div class="e">📐</div><div class="t">程序记忆</div><div class="s">你定的规则/指令</div></div>
-    <div class="mcard rv d4"><div class="e">⚡</div><div class="t">工作记忆</div><div class="s">当前问题的活跃片</div></div>
+    <div class="mcard rv d2"><div class="e">📔</div><div class="t"><span class="i18n-en">Episodic</span><span class="i18n-zh">情节记忆</span></div><div class="s"><span class="i18n-en">raw turns & events</span><span class="i18n-zh">原始对话/事件</span></div></div>
+    <div class="mcard rv d2"><div class="e">🕸️</div><div class="t"><span class="i18n-en">Semantic</span><span class="i18n-zh">语义记忆</span></div><div class="s"><span class="i18n-en">facts + bi-temporal graph</span><span class="i18n-zh">事实 + 双时间轴图谱</span></div></div>
+    <div class="mcard rv d3"><div class="e">👤</div><div class="t"><span class="i18n-en">Profile</span><span class="i18n-zh">用户画像</span></div><div class="s"><span class="i18n-en">preferences / habits / identity</span><span class="i18n-zh">偏好/习惯/身份</span></div></div>
+    <div class="mcard rv d3"><div class="e">📐</div><div class="t"><span class="i18n-en">Procedural</span><span class="i18n-zh">程序记忆</span></div><div class="s"><span class="i18n-en">your rules & instructions</span><span class="i18n-zh">你定的规则/指令</span></div></div>
+    <div class="mcard rv d4"><div class="e">⚡</div><div class="t"><span class="i18n-en">Working</span><span class="i18n-zh">工作记忆</span></div><div class="s"><span class="i18n-en">the active slice for now</span><span class="i18n-zh">当前问题的活跃片</span></div></div>
   </div>
 </div></section>
 
 <!-- EXAMPLE -->
 <section id="example"><div class="wrap">
-  <div class="eyebrow rv">一个真实例子 · 双时间轴</div>
-  <h2 class="rv d1">你换工作了?它<span class="hl">不搞混、也不忘</span></h2>
-  <p class="lead rv d2">大多数系统要么记串、要么直接覆盖旧信息。Engram 把旧事实标成"历史"、新事实标成"当前" —— 既答得对"现在",又记得住"过去"。</p>
+  <div class="eyebrow rv"><span class="i18n-en">A real example · bi-temporal</span><span class="i18n-zh">一个真实例子 · 双时间轴</span></div>
+  <h2 class="rv d1"><span class="i18n-en">Changed jobs? It <span class="hl">neither confuses nor forgets</span></span><span class="i18n-zh">你换工作了?它<span class="hl">不搞混、也不忘</span></span></h2>
+  <p class="lead rv d2"><span class="i18n-en">Most systems either cross wires or overwrite the old value. Engram marks the old fact "past" and the new one "current" — so it answers "now" correctly and still remembers "then".</span><span class="i18n-zh">大多数系统要么记串、要么直接覆盖旧信息。Engram 把旧事实标成"历史"、新事实标成"当前" —— 既答得对"现在",又记得住"过去"。</span></p>
   <div class="tl">
-    <div class="tlrow old rv d2"><div class="dt">2023-05</div><div class="bd"><div class="say">"我在<b>腾讯</b>工作。"</div><div class="fx"><span class="tag2 tag-old">历史</span>在腾讯工作 · 有效期 2023-05 → 2024-03</div></div></div>
-    <div class="tlrow rv d3"><div class="dt">2024-03</div><div class="bd"><div class="say">"我跳槽了,现在在 <b>Moonshot AI</b>。"</div><div class="fx"><span class="tag2 tag-cur">当前</span>在 Moonshot AI 工作 · 有效期 2024-03 → 至今</div></div></div>
-    <div class="tlrow rv d4" style="border-color:transparent"><div class="dt">提问</div><div class="bd">
-      <div class="say">问"我<b>现在</b>在哪上班?" → <b style="color:var(--teal)">Moonshot AI</b> ✓</div>
-      <div class="say" style="margin-top:6px">问"我<b>去年</b>在哪上班?" → <b style="color:var(--cyan)">腾讯</b> ✓(回到那个时点)</div>
+    <div class="tlrow old rv d2"><div class="dt">2023-05</div><div class="bd"><div class="say"><span class="i18n-en">"I work at <b>Tencent</b>."</span><span class="i18n-zh">"我在<b>腾讯</b>工作。"</span></div><div class="fx"><span class="tag2 tag-old"><span class="i18n-en">past</span><span class="i18n-zh">历史</span></span><span class="i18n-en">works at Tencent · valid 2023-05 → 2024-03</span><span class="i18n-zh">在腾讯工作 · 有效期 2023-05 → 2024-03</span></div></div></div>
+    <div class="tlrow rv d3"><div class="dt">2024-03</div><div class="bd"><div class="say"><span class="i18n-en">"I switched jobs — now at <b>Moonshot AI</b>."</span><span class="i18n-zh">"我跳槽了,现在在 <b>Moonshot AI</b>。"</span></div><div class="fx"><span class="tag2 tag-cur"><span class="i18n-en">current</span><span class="i18n-zh">当前</span></span><span class="i18n-en">works at Moonshot AI · valid 2024-03 → now</span><span class="i18n-zh">在 Moonshot AI 工作 · 有效期 2024-03 → 至今</span></div></div></div>
+    <div class="tlrow rv d4" style="border-color:transparent"><div class="dt"><span class="i18n-en">Ask</span><span class="i18n-zh">提问</span></div><div class="bd">
+      <div class="say"><span class="i18n-en">"Where do I work <b>now</b>?" → <b style="color:var(--teal)">Moonshot AI</b> ✓</span><span class="i18n-zh">问"我<b>现在</b>在哪上班?" → <b style="color:var(--teal)">Moonshot AI</b> ✓</span></div>
+      <div class="say" style="margin-top:6px"><span class="i18n-en">"Where did I work <b>last year</b>?" → <b style="color:var(--cyan)">Tencent</b> ✓ (as-of that time)</span><span class="i18n-zh">问"我<b>去年</b>在哪上班?" → <b style="color:var(--cyan)">腾讯</b> ✓(回到那个时点)</span></div>
     </div></div>
   </div>
-  <p class="note rv d4">还带"溯源":每条事实都能回答"它从哪来""替换了谁" —— 不黑盒、可审计。</p>
+  <p class="note rv d4"><span class="i18n-en">With provenance: every fact answers "where did this come from?" and "what did it replace?" — auditable, not a black box.</span><span class="i18n-zh">还带"溯源":每条事实都能回答"它从哪来""替换了谁" —— 不黑盒、可审计。</span></p>
 </div></section>
 
 <!-- LEAN vs FULL -->
 <section id="lean" style="background:linear-gradient(180deg,transparent,rgba(167,139,250,.05),transparent)"><div class="wrap">
-  <div class="eyebrow rv">核心绝活</div>
-  <h2 class="rv d1">用 <span class="hl">1/8 的信息</span>,答得反而更准</h2>
-  <p class="lead rv d2">问"我现在在哪上班?"时 —— 笨办法把 50 段对话全读一遍;Engram 只取出相关的几条事实 + 几段原文。去掉噪声,模型更聚焦。</p>
+  <div class="eyebrow rv"><span class="i18n-en">The core edge</span><span class="i18n-zh">核心绝活</span></div>
+  <h2 class="rv d1"><span class="i18n-en"><span class="hl">1/8 the context</span>, yet more accurate</span><span class="i18n-zh">用 <span class="hl">1/8 的信息</span>,答得反而更准</span></h2>
+  <p class="lead rv d2"><span class="i18n-en">Asked "where do I work now?" — the naive way re-reads all 50 sessions; Engram pulls just the relevant facts + a few raw snippets. Less noise, sharper model.</span><span class="i18n-zh">问"我现在在哪上班?"时 —— 笨办法把 50 段对话全读一遍;Engram 只取出相关的几条事实 + 几段原文。去掉噪声,模型更聚焦。</span></p>
   <div class="vs">
     <div class="vcard bad rv d2">
-      <h3 style="font-size:18px">🐢 塞全文</h3>
+      <h3 style="font-size:18px"><span class="i18n-en">🐢 Full-context</span><span class="i18n-zh">🐢 塞全文</span></h3>
       <div class="grid" id="gb"></div>
-      <div class="vtok" style="color:var(--red)">79k <small>token · 全读一遍</small></div>
-      <div style="margin-top:10px;color:var(--red)">❌ 迷失在中间 · 73.2% 准</div>
+      <div class="vtok" style="color:var(--red)">79k <small><span class="i18n-en">tokens · read it all</span><span class="i18n-zh">token · 全读一遍</span></small></div>
+      <div style="margin-top:10px;color:var(--red)"><span class="i18n-en">❌ lost in the middle · 73.2%</span><span class="i18n-zh">❌ 迷失在中间 · 73.2% 准</span></div>
     </div>
     <div class="vcard win rv d3">
-      <h3 style="font-size:18px">⚡ Engram 精简检索</h3>
+      <h3 style="font-size:18px"><span class="i18n-en">⚡ Engram lean retrieval</span><span class="i18n-zh">⚡ Engram 精简检索</span></h3>
       <div class="grid" id="gg"></div>
-      <div class="vtok" style="color:var(--teal)">9.6k <small>token · 只取相关片</small></div>
-      <div style="margin-top:10px;color:var(--teal)">✓ 更聚焦 · 83.6% 准 · 历史再长成本也不涨</div>
+      <div class="vtok" style="color:var(--teal)">9.6k <small><span class="i18n-en">tokens · only the relevant slice</span><span class="i18n-zh">token · 只取相关片</span></small></div>
+      <div style="margin-top:10px;color:var(--teal)"><span class="i18n-en">✓ sharper · 83.6% · cost stays flat as history grows</span><span class="i18n-zh">✓ 更聚焦 · 83.6% 准 · 历史再长成本也不涨</span></div>
     </div>
   </div>
 </div></section>
 
 <!-- BENCHMARK -->
 <section id="bench"><div class="wrap">
-  <div class="eyebrow rv">真实成绩单 · 不挑数据</div>
-  <h2 class="rv d1">严格判分器下,<span class="hl">大幅超过全文基线</span></h2>
-  <p class="lead rv d2">LongMemEval_S 基准 · 500 题 · 用<b>标准、严格的 DeepSeek 判分器</b>,所以是公平的数字 —— 不是换个宽松判分器自我安慰。</p>
+  <div class="eyebrow rv"><span class="i18n-en">Real results · no cherry-picking</span><span class="i18n-zh">真实成绩单 · 不挑数据</span></div>
+  <h2 class="rv d1"><span class="i18n-en">Beats the full-context baseline, <span class="hl">under a strict judge</span></span><span class="i18n-zh">严格判分器下,<span class="hl">大幅超过全文基线</span></span></h2>
+  <p class="lead rv d2"><span class="i18n-en">LongMemEval_S · 500 questions · graded by a <b>standard, strict DeepSeek judge</b> — a fair number, not a friendly one.</span><span class="i18n-zh">LongMemEval_S 基准 · 500 题 · 用<b>标准、严格的 DeepSeek 判分器</b>,所以是公平的数字 —— 不是换个宽松判分器自我安慰。</span></p>
   <div class="bars">
-    <div class="bar rv d2" style="--h:73.2%"><div class="c" style="background:linear-gradient(180deg,#fb7185,#9f1239);color:#fff">73.2</div><div class="nm">裸塞全文<br><small>79k token</small></div></div>
-    <div class="bar rv d3" style="--h:83.6%"><div class="c" style="background:linear-gradient(180deg,var(--cyan),var(--violet))">83.6</div><div class="nm" style="color:var(--cyan)"><b>Engram</b><br><small>9.6k token · 8× 精简</small></div></div>
+    <div class="bar rv d2" style="--h:73.2%"><div class="c" style="background:linear-gradient(180deg,#fb7185,#9f1239);color:#fff">73.2</div><div class="nm"><span class="i18n-en">Full-context<br><small>79k tokens</small></span><span class="i18n-zh">裸塞全文<br><small>79k token</small></span></div></div>
+    <div class="bar rv d3" style="--h:83.6%"><div class="c" style="background:linear-gradient(180deg,var(--cyan),var(--violet))">83.6</div><div class="nm" style="color:var(--cyan)"><b>Engram</b><br><small><span class="i18n-en">9.6k tokens · 8× leaner</span><span class="i18n-zh">9.6k token · 8× 精简</span></small></div></div>
   </div>
   <table class="bm rv d3">
-    <tr><th>系统</th><th>总分</th><th>平均 token</th><th>开源?</th></tr>
-    <tr class="winrow"><td><b>Engram</b>(本项目)</td><td class="sc hl">83.6%</td><td style="text-align:right">9.6k</td><td>✅ AGPL-3.0</td></tr>
-    <tr><td>裸塞全文(同 backbone)</td><td class="sc">73.2%</td><td style="text-align:right">79k</td><td>—</td></tr>
+    <tr><th><span class="i18n-en">System</span><span class="i18n-zh">系统</span></th><th><span class="i18n-en">Overall</span><span class="i18n-zh">总分</span></th><th><span class="i18n-en">Avg tokens</span><span class="i18n-zh">平均 token</span></th><th><span class="i18n-en">Open source?</span><span class="i18n-zh">开源?</span></th></tr>
+    <tr class="winrow"><td><b>Engram</b><span class="i18n-en"> (this project)</span><span class="i18n-zh">(本项目)</span></td><td class="sc hl">83.6%</td><td style="text-align:right">9.6k</td><td>✅ AGPL-3.0</td></tr>
+    <tr><td><span class="i18n-en">Full-context (same backbone)</span><span class="i18n-zh">裸塞全文(同 backbone)</span></td><td class="sc">73.2%</td><td style="text-align:right">79k</td><td>—</td></tr>
   </table>
-  <p class="note rv d3"><b>它的定位:</b>Engram 远超裸全文(<b>+10.4 分</b>)且省约 8 倍 token,<b>全开源、可复现、历史再长成本也不涨</b>。500 题官方判分 ≈83.6%,每题原始日志公开。</p>
+  <p class="note rv d3"><span class="i18n-en"><b>Where it stands:</b> Engram beats full-context by <b>+10.4</b> at ~8× fewer tokens — fully open, reproducible, cost flat as history grows. 83.6% on the official 500-question judge, every per-question log published.</span><span class="i18n-zh"><b>它的定位:</b>Engram 远超裸全文(<b>+10.4 分</b>)且省约 8 倍 token,<b>全开源、可复现、历史再长成本也不涨</b>。500 题官方判分 ≈83.6%,每题原始日志公开。</span></p>
   <div class="repro rv d4">
-<span class="c1"># 每个数字都能自己跑一遍验证:</span><br>
+<span class="c1"># <span class="i18n-en">Reproduce every number yourself:</span><span class="i18n-zh">每个数字都能自己跑一遍验证:</span></span><br>
 git clone https://github.com/ly-wang19/engram && cd engram<br>
-pytest&nbsp;&nbsp;<span class="c1"># 80+ 个单元测试,零依赖、不要 key</span><br>
+pytest&nbsp;&nbsp;<span class="c1"># <span class="i18n-en">80+ unit tests, zero deps, no API key</span><span class="i18n-zh">80+ 个单元测试,零依赖、不要 key</span></span><br>
 python eval/bench.py --data s --limit 500 --systems engram_lean,full_context ...
   </div>
 </div></section>
 
 <!-- SOURCES -->
 <section id="sources" style="background:linear-gradient(180deg,transparent,rgba(34,211,238,.04),transparent)"><div class="wrap">
-  <div class="eyebrow rv">完整架构 · 每个声称都有代码 + 测试</div>
-  <h2 class="rv d1">不是单点技巧,是<span class="hl">一整套记忆引擎</span></h2>
-  <p class="lead rv d2">从写入、固化到检索,逐层设计、可复现、成本随历史增长保持平稳 —— 每个能力都有对应的代码和单元测试。</p>
+  <div class="eyebrow rv"><span class="i18n-en">Full architecture · every claim has code + tests</span><span class="i18n-zh">完整架构 · 每个声称都有代码 + 测试</span></div>
+  <h2 class="rv d1"><span class="i18n-en">Not a single trick — <span class="hl">a whole memory engine</span></span><span class="i18n-zh">不是单点技巧,是<span class="hl">一整套记忆引擎</span></span></h2>
+  <p class="lead rv d2"><span class="i18n-en">From write to consolidation to retrieval — layered, reproducible, cost stays flat as history grows; every capability has code and unit tests behind it.</span><span class="i18n-zh">从写入、固化到检索,逐层设计、可复现、成本随历史增长保持平稳 —— 每个能力都有对应的代码和单元测试。</span></p>
   <div class="chips">
-    <div class="chip rv d2"><b>双过程写入 / 固化</b> · System-1 热写入(不调 LLM、&lt;50ms)+ System-2 异步抽取建图</div>
-    <div class="chip rv d2"><b>双时间轴事实</b> · 有效时间 + 事务时间,<b>as-of 时点查询</b>、知识更新一等公民</div>
-    <div class="chip rv d3"><b>非破坏式冲突解决</b> · 精确槽 + 语义 + 子集,仅模糊时 LLM 裁决;<b>失效不删除、全溯源</b></div>
-    <div class="chip rv d3"><b>混合检索</b> · 语义 + 词法 BM25 + 图 n 跳 + 时近/显著度,<b>RRF 融合</b>(可选重排)</div>
-    <div class="chip rv d4"><b>类型化记忆</b> · 情节 / 语义图谱 / 画像身份 / 程序性 / 工作记忆,各有存储与策略</div>
-    <div class="chip rv d4"><b>显著度衰减 + Reflector</b> · 强化与遗忘、摘要刷新、答案验证回路</div>
+    <div class="chip rv d2"><span class="i18n-en"><b>Dual-process write / consolidate</b> · System-1 hot write (no LLM, &lt;50ms) + System-2 async extract & graph</span><span class="i18n-zh"><b>双过程写入 / 固化</b> · System-1 热写入(不调 LLM、&lt;50ms)+ System-2 异步抽取建图</span></div>
+    <div class="chip rv d2"><span class="i18n-en"><b>Bi-temporal facts</b> · valid-time + transaction-time, <b>as-of queries</b>, knowledge-updates first-class</span><span class="i18n-zh"><b>双时间轴事实</b> · 有效时间 + 事务时间,<b>as-of 时点查询</b>、知识更新一等公民</span></div>
+    <div class="chip rv d3"><span class="i18n-en"><b>Non-destructive conflict resolution</b> · slot + semantic + subsumption, LLM only when ambiguous; <b>invalidate (not delete), full provenance</b></span><span class="i18n-zh"><b>非破坏式冲突解决</b> · 精确槽 + 语义 + 子集,仅模糊时 LLM 裁决;<b>失效不删除、全溯源</b></span></div>
+    <div class="chip rv d3"><span class="i18n-en"><b>Hybrid retrieval</b> · semantic + BM25 lexical + graph n-hop + recency/salience, fused with <b>RRF</b> (optional rerank)</span><span class="i18n-zh"><b>混合检索</b> · 语义 + 词法 BM25 + 图 n 跳 + 时近/显著度,<b>RRF 融合</b>(可选重排)</span></div>
+    <div class="chip rv d4"><span class="i18n-en"><b>Typed memory</b> · episodic / semantic graph / profile / procedural / working, each with its own store & policy</span><span class="i18n-zh"><b>类型化记忆</b> · 情节 / 语义图谱 / 画像身份 / 程序性 / 工作记忆,各有存储与策略</span></div>
+    <div class="chip rv d4"><span class="i18n-en"><b>Salience decay + Reflector</b> · reinforce & forget, summary refresh, answer-verification loop</span><span class="i18n-zh"><b>显著度衰减 + Reflector</b> · 强化与遗忘、摘要刷新、答案验证回路</span></div>
   </div>
-  <p class="note rv d4" style="margin-top:24px">一切可插拔:LLM / 嵌入器 / 向量库 / 图库都在接口背后,带<b>零依赖离线兜底</b> —— 不用 key、不用任何服务即可 <code>pytest</code> 全绿。</p>
+  <p class="note rv d4" style="margin-top:24px"><span class="i18n-en">Everything pluggable: LLM / embedder / vector store / graph store sit behind interfaces with <b>zero-dep offline fallbacks</b> — <code>pytest</code> passes green with no key and no services.</span><span class="i18n-zh">一切可插拔:LLM / 嵌入器 / 向量库 / 图库都在接口背后,带<b>零依赖离线兜底</b> —— 不用 key、不用任何服务即可 <code>pytest</code> 全绿。</span></p>
 </div></section>
 
 <!-- HOW TO CALL -->
 <section id="use"><div class="wrap">
-  <div class="eyebrow rv">三行就能用 · 零搭建</div>
-  <h2 class="rv d1">怎么<span class="hl">调用</span></h2>
-  <p class="lead rv d2">Bearer key 随便起一个,它就是你的私有记忆空间。也可以 <code>pip install</code> 自部署,数据全在自己机器。</p>
-  <div class="repro rv d3">
+  <div class="eyebrow rv"><span class="i18n-en">Three lines to use it · zero setup</span><span class="i18n-zh">三行就能用 · 零搭建</span></div>
+  <h2 class="rv d1"><span class="i18n-en">How to <span class="hl">call it</span></span><span class="i18n-zh">怎么<span class="hl">调用</span></span></h2>
+  <p class="lead rv d2"><span class="i18n-en">Pick any Bearer key — that's your private memory namespace. Or <code>pip install</code> and self-host, data entirely on your own machine.</span><span class="i18n-zh">Bearer key 随便起一个,它就是你的私有记忆空间。也可以 <code>pip install</code> 自部署,数据全在自己机器。</span></p>
+  <div class="repro rv d3 i18n-en">
+<span class="c1"># Call the hosted API (any key = your isolated namespace):</span><br>
+B=http://42.193.220.197:8456 ; K=my-app<br>
+<span class="c1"># Remember (auto-extracts facts; records in your input's language):</span><br>
+curl -X POST $B/v1/remember -H "Authorization: Bearer $K" -d '{"content":"I do backend at ByteDance; favorite singer is Jay Chou"}'<br>
+<span class="c1"># Recall (lean context + an answer + token savings):</span><br>
+curl -X POST $B/v1/recall -H "Authorization: Bearer $K" -d '{"query":"who is my favorite singer?"}'
+  </div>
+  <div class="repro rv d3 i18n-zh">
 <span class="c1"># 直接调托管 API(任意 key = 你的隔离空间):</span><br>
 B=http://42.193.220.197:8456 ; K=my-app<br>
 <span class="c1"># 记一条(自动抽取事实,按原文语种记录):</span><br>
@@ -304,21 +328,39 @@ curl -X POST $B/v1/remember -H "Authorization: Bearer $K" -d '{"content":"我在
 <span class="c1"># 召回(精炼上下文 + 答案 + 省 token):</span><br>
 curl -X POST $B/v1/recall -H "Authorization: Bearer $K" -d '{"query":"我喜欢哪个歌手"}'
   </div>
-  <p class="note rv d4" style="margin-top:18px"><b>MCP</b>(给 Claude Desktop / Cursor 加持久记忆):<code>pip install "engram-memory[mcp]" &amp;&amp; python -m engram.mcp</code> &nbsp;·&nbsp; <b>SDK / OpenAI 兼容</b>:把 base_url 指到上面这个地址即可 &nbsp;·&nbsp; 完整接口见仓库 <code>API.md</code>。</p>
+  <p class="note rv d4" style="margin-top:18px"><span class="i18n-en"><b>MCP</b> (persistent memory for Claude Desktop / Cursor): <code>pip install "engram-memory[mcp]" &amp;&amp; python -m engram.mcp</code> &nbsp;·&nbsp; <b>SDK / OpenAI-compatible</b>: point your base_url at the address above &nbsp;·&nbsp; full API in the repo's <code>API.md</code>.</span><span class="i18n-zh"><b>MCP</b>(给 Claude Desktop / Cursor 加持久记忆):<code>pip install "engram-memory[mcp]" &amp;&amp; python -m engram.mcp</code> &nbsp;·&nbsp; <b>SDK / OpenAI 兼容</b>:把 base_url 指到上面这个地址即可 &nbsp;·&nbsp; 完整接口见仓库 <code>API.md</code>。</span></p>
   <div class="cta rv d4" style="margin-top:24px">
-    <a class="b1" href="http://42.193.220.197:8456/ui" target="_blank">▶ 打开控制台(体验 key: 1)</a>
-    <a class="b2" href="https://github.com/ly-wang19/engram" target="_blank">★ GitHub / 文档</a>
+    <a class="b1" href="http://42.193.220.197:8456/ui" target="_blank"><span class="i18n-en">▶ Open the console (demo key: 1)</span><span class="i18n-zh">▶ 打开控制台(体验 key: 1)</span></a>
+    <a class="b2" href="https://github.com/ly-wang19/engram" target="_blank"><span class="i18n-en">★ GitHub / docs</span><span class="i18n-zh">★ GitHub / 文档</span></a>
   </div>
 </div></section>
 
 <footer><div class="wrap">
-  <div class="pill" style="margin-bottom:18px">⭐ 开源 · AGPL-3.0 · 商用需授权 · 可复现</div>
-  <div style="font-size:20px;font-weight:800;color:var(--ink);margin-bottom:8px">Engram — 让 AI 真正记住你</div>
+  <div class="pill" style="margin-bottom:18px"><span class="i18n-en">⭐ Open source · AGPL-3.0 · commercial license available · reproducible</span><span class="i18n-zh">⭐ 开源 · AGPL-3.0 · 商用需授权 · 可复现</span></div>
+  <div style="font-size:20px;font-weight:800;color:var(--ink);margin-bottom:8px"><span class="i18n-en">Engram — give your AI real long-term memory</span><span class="i18n-zh">Engram — 让 AI 真正记住你</span></div>
   <a href="https://github.com/ly-wang19/engram" target="_blank" style="color:var(--cyan)">github.com/ly-wang19/engram</a>
-  <p style="margin-top:18px;font-size:12.5px">数字基于 LongMemEval_S · doubao-seed-2.0-pro 作答 · DeepSeek-V3.2 判分 · 500 题全集 · 每题原始日志公开</p>
+  <p style="margin-top:18px;font-size:12.5px"><span class="i18n-en">Numbers on LongMemEval_S · doubao-seed-2.0-pro answerer · DeepSeek-V3.2 judge · full 500 questions · every per-question log published</span><span class="i18n-zh">数字基于 LongMemEval_S · doubao-seed-2.0-pro 作答 · DeepSeek-V3.2 判分 · 500 题全集 · 每题原始日志公开</span></p>
 </div></footer>
 
 <script>
+  // language toggle (English default; persisted)
+  const TITLE={en:"Engram · Give your AI a brain that remembers | open-source long-term memory engine",
+               zh:"Engram · 给 AI 一个会记事的大脑 | 开源长期记忆引擎"};
+  function setLang(l){
+    document.body.classList.toggle('zh', l==='zh');
+    document.documentElement.lang = l==='zh' ? 'zh-CN' : 'en';
+    document.title = TITLE[l]||TITLE.en;
+    document.querySelectorAll('.langtoggle').forEach(b=>b.textContent = l==='zh' ? 'EN' : '中文');
+    try{ localStorage.setItem('engram_lang', l); }catch(e){}
+  }
+  function toggleLang(){
+    const next = document.body.classList.contains('zh') ? 'en' : 'zh';
+    setLang(next);
+    // a manual toggle: reveal everything so content swapped in below the fold isn't stuck hidden
+    document.querySelectorAll('.rv').forEach(e=>e.classList.add('in'));
+  }
+  (function(){ let s=null; try{ s=localStorage.getItem('engram_lang'); }catch(e){} setLang(s||'en'); })();
+
   // scroll reveal
   const io=new IntersectionObserver((es)=>es.forEach(e=>{if(e.isIntersecting){e.target.classList.add('in');io.unobserve(e.target);}}),{threshold:.16});
   document.querySelectorAll('.rv:not(.in)').forEach(el=>io.observe(el));
