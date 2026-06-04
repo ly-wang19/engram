@@ -132,6 +132,66 @@ print(mem.search("Where does Wei work?", user_id="u1").answer())
 # -> "Moonshot AI"（被推翻的旧事实是失效，而非删除 —— 历史被完整保留）
 ```
 
+## 怎么调用 / 接入你的应用
+
+Engram 自带完整**接入层**:HTTP API + MCP + JS/TS SDK + OpenAI 兼容,都走同一个多租户核心
+（`MemoryService`），**每个 API key 就是一个互相隔离的记忆空间**。
+
+### 直接调用托管 API（零搭建）
+
+Bearer key 随便起一个，它就是你的私有命名空间。完整接口见 [`API.md`](API.md)；浏览器控制台:
+**http://42.193.220.197:8456/ui**（体验 key `1`）。
+
+```bash
+B=http://42.193.220.197:8456 ; K=my-app          # 任意 key = 你自己的隔离空间
+
+# 1) 灌一条记忆（自动抽取原子事实，按你输入的语言记录）
+curl -s -X POST $B/v1/remember -H "Authorization: Bearer $K" -H "Content-Type: application/json" \
+  -d '{"content":"我在字节跳动做后端，最喜欢周杰伦。"}'
+
+# 2) 召回：一小片精炼上下文 + 答案 + 省 token 对比
+curl -s -X POST $B/v1/recall -H "Authorization: Bearer $K" -H "Content-Type: application/json" \
+  -d '{"query":"我最喜欢哪个歌手"}'
+# -> {"answer":"你最喜欢周杰伦。","context":"…","tokens_est":120,"full_tokens":1400}
+```
+
+### MCP server（给 Claude Desktop / Cursor 加持久记忆）
+
+```bash
+pip install "engram-memory[mcp]"
+python -m engram.mcp                 # 本地记忆，零外部服务
+# 或代理一个运行中的服务： python -m engram.mcp --api-url http://42.193.220.197:8456 --api-key my-app
+```
+```jsonc
+// claude_desktop_config.json
+{ "mcpServers": { "engram": { "command": "python", "args": ["-m", "engram.mcp"] } } }
+```
+
+### JS/TS SDK + OpenAI 兼容（改一个 URL，你现有的 OpenAI 代码就有了记忆）
+
+```ts
+import { EngramClient } from 'engram-memory'                  // npm i engram-memory
+const engram = new EngramClient({ baseUrl: 'http://42.193.220.197:8456', apiKey: 'my-app' })
+await engram.remember('我在字节做后端，最喜欢周杰伦。')
+const { context } = await engram.recall('我喜欢哪个歌手？')
+
+// 直接替换 OpenAI 的 base_url 即可（官方 openai SDK 也行）：
+const out = await engram.chat.completions.create({ model: 'engram', messages: [
+  { role: 'user', content: '提醒我一下我最喜欢的歌手' } ] })
+```
+
+### 自部署（数据完全在你自己机器上）
+
+```bash
+pip install "engram-memory[serve]"
+export ENGRAM_OPEN=1                # 开发：bearer 文本即命名空间（生产用 ENGRAM_API_KEYS）
+export ENGRAM_EMBEDDER=bge-small
+export ENGRAM_LLM=deepseek          # 可选：启用 /v1/chat/completions 生成
+uvicorn engram.server.app:app --port 8000        # HTTP API + 控制台在 /ui
+```
+
+批量导入见 [`examples/batch_import.py`](examples/batch_import.py)，完整接口文档见 [`API.md`](API.md)。
+
 ## 复现基准
 
 ```bash

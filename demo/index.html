@@ -139,7 +139,7 @@
   <div class="logo"><span class="o"></span> Engram</div>
   <div class="nlinks">
     <a href="#problem">痛点</a><a href="#how">怎么做</a><a href="#example">例子</a>
-    <a href="#lean">核心绝活</a><a href="#bench">成绩单</a><a href="#sources">完整架构</a>
+    <a href="#lean">核心绝活</a><a href="#bench">成绩单</a><a href="#sources">完整架构</a><a href="#use">怎么调用</a>
   </div>
   <a class="ghbtn" href="https://github.com/ly-wang19/engram" target="_blank">★ GitHub</a>
 </div></nav>
@@ -289,6 +289,26 @@ python eval/bench.py --data s --limit 500 --systems engram_lean,full_context ...
     <div class="chip rv d4"><b>显著度衰减 + Reflector</b> · 强化与遗忘、摘要刷新、答案验证回路</div>
   </div>
   <p class="note rv d4" style="margin-top:24px">一切可插拔:LLM / 嵌入器 / 向量库 / 图库都在接口背后,带<b>零依赖离线兜底</b> —— 不用 key、不用任何服务即可 <code>pytest</code> 全绿。</p>
+</div></section>
+
+<!-- HOW TO CALL -->
+<section id="use"><div class="wrap">
+  <div class="eyebrow rv">三行就能用 · 零搭建</div>
+  <h2 class="rv d1">怎么<span class="hl">调用</span></h2>
+  <p class="lead rv d2">Bearer key 随便起一个,它就是你的私有记忆空间。也可以 <code>pip install</code> 自部署,数据全在自己机器。</p>
+  <div class="repro rv d3">
+<span class="c1"># 直接调托管 API(任意 key = 你的隔离空间):</span><br>
+B=http://42.193.220.197:8456 ; K=my-app<br>
+<span class="c1"># 记一条(自动抽取事实,按原文语种记录):</span><br>
+curl -X POST $B/v1/remember -H "Authorization: Bearer $K" -d '{"content":"我在字节做后端,最爱周杰伦"}'<br>
+<span class="c1"># 召回(精炼上下文 + 答案 + 省 token):</span><br>
+curl -X POST $B/v1/recall -H "Authorization: Bearer $K" -d '{"query":"我喜欢哪个歌手"}'
+  </div>
+  <p class="note rv d4" style="margin-top:18px"><b>MCP</b>(给 Claude Desktop / Cursor 加持久记忆):<code>pip install "engram-memory[mcp]" &amp;&amp; python -m engram.mcp</code> &nbsp;·&nbsp; <b>SDK / OpenAI 兼容</b>:把 base_url 指到上面这个地址即可 &nbsp;·&nbsp; 完整接口见仓库 <code>API.md</code>。</p>
+  <div class="cta rv d4" style="margin-top:24px">
+    <a class="b1" href="http://42.193.220.197:8456/ui" target="_blank">▶ 打开控制台(体验 key: 1)</a>
+    <a class="b2" href="https://github.com/ly-wang19/engram" target="_blank">★ GitHub / 文档</a>
+  </div>
 </div></section>
 
 <footer><div class="wrap">

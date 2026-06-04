@@ -92,6 +92,26 @@ print(mem.search("Where does Wei work?", user_id="u1").answer())
 Engram ships a full **access layer** so any agent or app can use it — all backed by one multi-tenant
 service (`MemoryService`), where each API key is an isolated memory namespace.
 
+### Call it right now — hosted API, zero setup
+
+Your Bearer key **is** your private memory namespace (pick anything). Full reference: [`API.md`](API.md);
+browse a loaded memory in the console at **http://42.193.220.197:8456/ui** (demo key `1`).
+
+```bash
+B=http://42.193.220.197:8456 ; K=my-app          # any key = your own isolated namespace
+
+# 1) remember — auto-extracts atomic, bi-temporal facts (records in your input's language)
+curl -s -X POST $B/v1/remember -H "Authorization: Bearer $K" -H "Content-Type: application/json" \
+  -d '{"content":"我在字节跳动做后端，最喜欢周杰伦。"}'
+
+# 2) recall — a small grounded slice + an answer + the token saving vs full-context
+curl -s -X POST $B/v1/recall -H "Authorization: Bearer $K" -H "Content-Type: application/json" \
+  -d '{"query":"我最喜欢哪个歌手"}'
+# -> {"answer":"你最喜欢周杰伦。","context":"…","tokens_est":120,"full_tokens":1400}
+```
+
+### Or self-host (your data, your machine)
+
 ```bash
 pip install "engram-memory[serve]"
 export ENGRAM_OPEN=1                # dev: bearer text is the namespace (use ENGRAM_API_KEYS in prod)
@@ -106,7 +126,8 @@ uvicorn engram.server.app:app --port 8000        # HTTP API + management console
 ```bash
 pip install "engram-memory[mcp]"
 python -m engram.mcp                 # local memory at ~/.engram/data (zero external service)
-# or proxy the server above:  python -m engram.mcp --api-url http://localhost:8000 --api-key sk-…
+# or proxy a running server (hosted or self-hosted):
+#   python -m engram.mcp --api-url http://42.193.220.197:8456 --api-key my-app
 ```
 ```jsonc
 // claude_desktop_config.json
@@ -118,7 +139,7 @@ recall + inject before the model answers, remember the turn after.
 
 ```ts
 import { EngramClient } from 'engram-memory'                  // npm i engram-memory
-const engram = new EngramClient({ baseUrl: 'http://localhost:8000', apiKey: 'sk-alice-123' })
+const engram = new EngramClient({ baseUrl: 'http://42.193.220.197:8456', apiKey: 'my-app' })  // or your own host
 await engram.remember('I live in Shenzhen and work at Tencent.')
 const { context } = await engram.recall('where do I live?')
 
