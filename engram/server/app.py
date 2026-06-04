@@ -127,12 +127,14 @@ def auth(authorization: str = Header(default="")) -> str:
 class RememberReq(BaseModel):
     content: str
     session_id: str = "default"
+    scope: str = "auto"  # auto (route by ephemerality) | long (force long-term) | working (force ephemeral)
 
 
 class RecallReq(BaseModel):
     query: str
     lean: bool = True
     n_chunks: int = 6
+    session_id: Optional[str] = None  # when set, recall also surfaces this session's working memory
 
 
 @app.get("/health")
@@ -237,6 +239,12 @@ def remember(req: RememberReq, user: str = Depends(auth)):
     m = mgr()
     with m.lock(user):
         mem = m.get(user)
+        # Route ephemeral state ("today my throat hurts") to the WORKING-memory tier so it never pollutes
+        # long-term. `scope=auto` decides by heuristic; the caller can force either tier.
+        if req.scope == "working" or (req.scope == "auto" and Memory.is_ephemeral(req.content)):
+            wm = mem.remember_working(req.content, user_id=user, session_id=req.session_id)
+            mem.save()
+            return {"ok": True, "scope": "working", "id": wm.id, "kind": wm.kind}
         mem.add(req.content, user_id=user, session_id=req.session_id)
         # Consolidation/summarization use the LLM; make them BEST-EFFORT so a transient model outage never
         # loses the memory — the raw episode is already stored and recallable either way.
@@ -256,7 +264,7 @@ def remember(req: RememberReq, user: str = Depends(auth)):
 def recall(req: RecallReq, user: str = Depends(auth)):
     mem = mgr().get(user)
     if req.lean:
-        ctx = mem.lean_context(req.query, user_id=user, n_chunks=req.n_chunks)
+        ctx = mem.lean_context(req.query, user_id=user, n_chunks=req.n_chunks, session_id=req.session_id)
         return {"context": ctx, "tokens_est": len(ctx.split())}
     res = mem.search(req.query, user_id=user)
     return {"answer": res.answer(), "facts": [f.text for f in res.facts[:10]]}
@@ -298,6 +306,7 @@ def memories(user: str = Depends(auth)):
             "status": "live" if f.is_live() else "superseded",
             "source": f.source,
             "supersedes": f.supersedes,
+            "category": getattr(f, "category", ""), "sensitive": getattr(f, "sensitive", False),
             "salience": round(f.salience, 2), "provenance": f.provenance,
         } for f in facts],
         "episodes": [{"date": ep.metadata.get("date") or fmt_date(ep.event_time),
@@ -323,6 +332,8 @@ class FactEdit(BaseModel):
     subject: Optional[str] = None
     predicate: Optional[str] = None
     object: Optional[str] = None
+    sensitive: Optional[bool] = None  # user override of the auto sensitivity flag (⑤)
+    category: Optional[str] = None
 
 
 @app.post("/v1/facts")
@@ -342,7 +353,8 @@ def edit_fact(fact_id: str, req: FactEdit, user: str = Depends(auth)):
     m = mgr()
     with m.lock(user):
         mem = m.get(user)
-        f = mem.update_fact(fact_id, subject=req.subject, predicate=req.predicate, object=req.object)
+        f = mem.update_fact(fact_id, subject=req.subject, predicate=req.predicate, object=req.object,
+                            sensitive=req.sensitive, category=req.category)
         if f is None:
             raise HTTPException(404, "fact not found")
         mem.save()
@@ -410,6 +422,50 @@ def put_policy(req: PolicyReq, user: str = Depends(auth)):
         return {"ok": True, **result}
 
 
+# --- ① working memory: ephemeral, session/TTL-scoped state kept out of long-term ---
+class WorkingReq(BaseModel):
+    content: str
+    session_id: str = "default"
+    kind: str = "state"  # state | intent | schedule | note | ...
+    ttl_seconds: Optional[float] = None  # hard expiry; None => lives until the session is cleared
+
+
+@app.post("/v1/working")
+def add_working(req: WorkingReq, user: str = Depends(auth)):
+    """Store an ephemeral item (won't be consolidated into long-term or the profile)."""
+    m = mgr()
+    with m.lock(user):
+        mem = m.get(user)
+        wm = mem.remember_working(req.content, user_id=user, session_id=req.session_id,
+                                  kind=req.kind, ttl_seconds=req.ttl_seconds)
+        mem.save()
+        return {"ok": True, "id": wm.id, "kind": wm.kind, "expires_at": wm.expires_at}
+
+
+@app.get("/v1/working")
+def list_working(session_id: Optional[str] = None, user: str = Depends(auth)):
+    """Live working-memory items (optionally scoped to a session). Expired/consumed are excluded."""
+    from ..util import fmt_date
+    mem = mgr().get(user)
+    items = mem.working_memory(user, session_id=session_id)
+    return {"items": [{
+        "id": w.id, "content": w.content, "kind": w.kind, "session_id": w.session_id,
+        "created": fmt_date(w.created_at),
+        "expires_at": fmt_date(w.expires_at) if w.expires_at else None,
+    } for w in items]}
+
+
+@app.delete("/v1/working")
+def clear_working(session_id: str, user: str = Depends(auth)):
+    """End-of-session / power-cycle clear: drop this session's working memory."""
+    m = mgr()
+    with m.lock(user):
+        mem = m.get(user)
+        n = mem.clear_session(user, session_id)
+        mem.save()
+        return {"ok": True, "cleared": n}
+
+
 # --- ② semantic graph for the 关系图谱 visualization ---
 @app.get("/v1/graph")
 def graph(user: str = Depends(auth)):
@@ -419,13 +475,15 @@ def graph(user: str = Depends(auth)):
 
 # --- ④ privacy: full data export (GDPR-style portability); erase is POST /v1/forget ---
 @app.get("/v1/export")
-def export(user: str = Depends(auth)):
+def export(include_sensitive: bool = True, user: str = Depends(auth)):
     """Download EVERYTHING stored for this user as a single JSON (data portability). Full fidelity:
-    every fact's bi-temporal stamps + provenance, raw episodes, summaries, profile, and focus."""
+    every fact's bi-temporal stamps + provenance, raw episodes, summaries, profile, and focus.
+    `include_sensitive=false` redacts facts tagged sensitive (feature ⑤) for safe sharing."""
     from fastapi.responses import JSONResponse
 
     from ..util import fmt_date
     mem = mgr().get(user)
+    _facts = [f for f in mem.fact_store.values() if include_sensitive or not getattr(f, "sensitive", False)]
     data = {
         "engram_export_version": 1,
         "user": user,
@@ -434,12 +492,13 @@ def export(user: str = Depends(auth)):
         "facts": [{
             "id": f.id, "subject": f.subject, "predicate": f.predicate, "object": f.object,
             "text": f.text, "source": f.source, "status": "live" if f.is_live() else "superseded",
+            "category": getattr(f, "category", ""), "sensitive": getattr(f, "sensitive", False),
             "salience": round(f.salience, 3), "confidence": f.confidence,
             "valid_at": f.valid_at, "valid_at_h": fmt_date(f.valid_at),
             "invalid_at": f.invalid_at, "invalid_at_h": fmt_date(f.invalid_at) if f.invalid_at else None,
             "created_at": f.created_at, "expired_at": f.expired_at,
             "supersedes": f.supersedes, "provenance": f.provenance,
-        } for f in sorted(mem.fact_store.values(), key=lambda x: x.valid_at, reverse=True)],
+        } for f in sorted(_facts, key=lambda x: x.valid_at, reverse=True)],
         "episodes": [{
             "id": ep.id, "session_id": ep.session_id, "speaker": ep.speaker,
             "event_time": ep.event_time, "date": ep.metadata.get("date") or fmt_date(ep.event_time),

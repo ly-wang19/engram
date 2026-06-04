@@ -12,6 +12,7 @@ export const qk = {
   focus: () => ['focus', ns()] as const,
   policy: () => ['policy', ns()] as const,
   profile: () => ['profile', ns()] as const,
+  working: () => ['working', ns()] as const,
   health: () => ['health'] as const,
 }
 
@@ -48,6 +49,28 @@ function useInvalidateMemory() {
 export function useStructuredProfile() {
   const enabled = !!useAuth((s) => s.apiKey)
   return useQuery({ queryKey: qk.profile(), queryFn: api.structuredProfile, enabled, retry: false })
+}
+
+export function useWorking() {
+  const enabled = !!useAuth((s) => s.apiKey)
+  return useQuery({ queryKey: qk.working(), queryFn: () => api.working(), enabled, retry: false })
+}
+
+export function useAddWorking() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ content, kind, ttl }: { content: string; kind?: string; ttl?: number }) =>
+      api.addWorking(content, kind, ttl),
+    onSuccess: () => qc.invalidateQueries({ queryKey: qk.working() }),
+  })
+}
+
+export function useClearWorking() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (session_id?: string) => api.clearWorking(session_id),
+    onSuccess: () => qc.invalidateQueries({ queryKey: qk.working() }),
+  })
 }
 
 export function useRemember() {

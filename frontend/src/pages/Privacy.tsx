@@ -13,12 +13,13 @@ export default function Privacy() {
   const forget = useForget()
   const [exporting, setExporting] = useState(false)
   const [confirm, setConfirm] = useState(false)
+  const [excludeSensitive, setExcludeSensitive] = useState(false)
 
   const onExport = async () => {
     setExporting(true)
     try {
-      await api.exportDownload(user.replace(/[^a-zA-Z0-9]/g, '') || 'me')
-      toast.success('已开始下载你的数据')
+      await api.exportDownload(user.replace(/[^a-zA-Z0-9]/g, '') || 'me', !excludeSensitive)
+      toast.success(excludeSensitive ? '已开始下载（已排除敏感数据）' : '已开始下载你的数据')
     } catch (e) {
       toast.error(String((e as Error).message))
     } finally {
@@ -40,6 +41,10 @@ export default function Privacy() {
           <p className="text-sm leading-relaxed text-ghost">
             下载一份完整 JSON，包含：用户画像、全部事实（含双时间轴、来源、provenance）、原始对话、会话摘要、关注点、关系图谱。
           </p>
+          <label className="mt-3 flex select-none items-center gap-2 text-sm text-ghost">
+            <input type="checkbox" checked={excludeSensitive} onChange={(e) => setExcludeSensitive(e.target.checked)} className="accent-brand-rose" />
+            排除敏感数据（健康/财务/证件等）
+          </label>
           <Button className="mt-4" onClick={onExport} loading={exporting}>
             <Download className="h-4 w-4" /> 导出全部数据（JSON）
           </Button>

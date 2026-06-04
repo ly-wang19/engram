@@ -14,8 +14,19 @@ export interface MemoryFact {
   status: FactStatus
   source: FactSource
   supersedes: string | null
+  category: string
+  sensitive: boolean
   salience: number
   provenance: string[]
+}
+
+export interface WorkingItem {
+  id: string
+  content: string
+  kind: string
+  session_id: string
+  created: string
+  expires_at: string | null
 }
 
 export interface MemoryEpisode {
@@ -69,6 +80,8 @@ export interface RememberResult {
   total_facts?: number
   degraded?: string
   stored_raw?: boolean
+  scope?: 'working' | 'long' // 'working' = routed to ephemeral tier (not long-term)
+  kind?: string
 }
 
 export interface RecallResult {
@@ -86,6 +99,8 @@ export interface FactEdit {
   subject?: string
   predicate?: string
   object?: string
+  sensitive?: boolean
+  category?: string
 }
 
 export interface Health {

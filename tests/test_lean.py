@@ -527,3 +527,58 @@ def test_structured_profile_tiers_display_only_and_preserves_recall():
     # RECALL INVARIANT: the tentative fact is display-tiered, NOT removed — still in the store and live
     assert m.fact_store.get(casual.id) is not None and casual.is_live()
     assert any(f.object == "jazz" for f in m.fact_store.values() if f.is_live())
+
+
+def test_working_memory_is_ephemeral_and_never_enters_long_term(tmp_path):
+    """Feature ①: the working-memory tier holds transient state OUT of long-term, scoped by session + TTL,
+    cleared on session end. The core invariant: ephemeral items NEVER become durable facts."""
+    import engram.util as u
+    m = Memory()
+    assert Memory.is_ephemeral("today my throat hurts") and not Memory.is_ephemeral("I have diabetes")
+
+    m.remember_working("today my throat hurts", user_id="u", session_id="s1", kind="state")
+    m.remember_working("this trip front seat is my wife", user_id="u", session_id="s1",
+                       kind="passenger", ttl_seconds=7200)
+    m.remember_working("note in another session", user_id="u", session_id="s2")
+
+    # session-scoped + kept out of long-term entirely
+    assert {w.content for w in m.working_memory("u", session_id="s1")} == {
+        "today my throat hurts", "this trip front seat is my wife"}
+    assert list(m.fact_store.values()) == [], "working memory must NOT create long-term facts"
+
+    # surfaced in the read context for that session, but ephemeral
+    ctx = m.lean_context("how am I", user_id="u", session_id="s1", n_chunks=0)
+    assert "WORKING MEMORY" in ctx and "throat" in ctx.lower()
+
+    # hard TTL expiry, then power-cycle clear
+    later = u.now() + 8000
+    assert [w.kind for w in m.working_memory("u", session_id="s1", as_of=later)] == ["state"]
+    assert m.clear_session("u", "s1") == 1 and m.working_memory("u", session_id="s1") == []
+
+    # persists across save/open
+    m.remember_working("persist me", user_id="u", session_id="s3")
+    p = str(tmp_path / "u.pkl")
+    m.save(p)
+    assert [w.content for w in Memory.open(p).working_memory("u", session_id="s3")] == ["persist me"]
+
+
+def test_classification_and_sensitivity_redaction_preserves_recall():
+    """Feature ⑤: facts get a rule-based category + sensitivity flag; sensitive facts can be REDACTED from
+    a shared/export context — while staying fully in the store (recall + the owner's own view intact)."""
+    from engram.consolidate.classify import classify
+    assert classify("has_disease", "diabetes", "user has_disease diabetes") == ("健康", True)
+    assert classify("salary", "25000", "user salary 25000")[1] is True
+    assert classify("works_at", "Acme", "user works_at Acme") == ("工作", False)
+    assert classify("id_number", "310101199001011234", "x")[1] is True  # digit-run PII
+
+    m = Memory()
+    m.add_fact("user", "has_disease", "diabetes", user_id="u")  # sensitive
+    m.add_fact("user", "works_at", "Acme", user_id="u")          # not sensitive
+    sensitive_fact = next(f for f in m.fact_store.values() if f.object == "diabetes")
+    assert sensitive_fact.sensitive and sensitive_fact.category == "健康"
+
+    redacted = m.lean_context("about me", user_id="u", n_chunks=0, redact_sensitive=True)
+    assert "diabetes" not in redacted.lower(), "sensitive fact must be redacted from a shared context"
+    assert "acme" in redacted.lower(), "non-sensitive facts stay"
+    # recall invariant: redaction is a view filter, not deletion — the fact is still stored & live
+    assert any(f.object == "diabetes" for f in m.fact_store.values() if f.is_live())

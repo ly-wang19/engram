@@ -27,7 +27,8 @@ export default function Dashboard() {
     remember.mutate(content, {
       onSuccess: (r) => {
         setText('')
-        if (r.degraded) toast.info('已存为原始记忆（抽取暂时降级）')
+        if (r.scope === 'working') toast.info('临时状态 → 工作记忆（不进长期）')
+        else if (r.degraded) toast.info('已存为原始记忆（抽取暂时降级）')
         else toast.success(`已记住，抽取出 ${r.extracted} 条新事实`)
       },
       onError: (e) => toast.error(String((e as Error).message)),
