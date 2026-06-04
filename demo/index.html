@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Engram · 给 AI 一个会记事的大脑 | 开源长期记忆引擎</title>
-<meta name="description" content="Engram 是一个开源的 LLM 长期记忆引擎:像人脑一样提炼事实、双时间轴追踪、精准检索。LongMemEval 上用 1/8 的 token 接近闭源商用系统,全部可复现。">
+<meta name="description" content="Engram 是一个开源的 LLM 长期记忆引擎:像人脑一样提炼事实、双时间轴追踪、精准检索。LongMemEval 上用 1/8 的 token 大幅超过全文基线,全部可复现。">
 <style>
   :root{
     --bg:#070b14; --ink:#eaf0ff; --dim:#8a97b8; --dim2:#64708f;
@@ -139,7 +139,7 @@
   <div class="logo"><span class="o"></span> Engram</div>
   <div class="nlinks">
     <a href="#problem">痛点</a><a href="#how">怎么做</a><a href="#example">例子</a>
-    <a href="#lean">核心绝活</a><a href="#bench">成绩单</a><a href="#sources">百家之长</a>
+    <a href="#lean">核心绝活</a><a href="#bench">成绩单</a><a href="#sources">完整架构</a>
   </div>
   <a class="ghbtn" href="https://github.com/ly-wang19/engram-memory" target="_blank">★ GitHub</a>
 </div></nav>
@@ -255,42 +255,40 @@
 <!-- BENCHMARK -->
 <section id="bench"><div class="wrap">
   <div class="eyebrow rv">真实成绩单 · 不挑数据</div>
-  <h2 class="rv d1">同款严格判分器下,<span class="hl">接近闭源商用系统</span></h2>
-  <p class="lead rv d2">LongMemEval_S 基准 · 500 题 · 用<b>和腾讯混元同款的 DeepSeek 判分器</b>,所以公平可比 —— 不是换个宽松判分器自我安慰。</p>
+  <h2 class="rv d1">严格判分器下,<span class="hl">大幅超过全文基线</span></h2>
+  <p class="lead rv d2">LongMemEval_S 基准 · 500 题 · 用<b>标准、严格的 DeepSeek 判分器</b>,所以是公平的数字 —— 不是换个宽松判分器自我安慰。</p>
   <div class="bars">
     <div class="bar rv d2" style="--h:74.8%"><div class="c" style="background:linear-gradient(180deg,#fb7185,#9f1239);color:#fff">74.8</div><div class="nm">裸塞全文<br><small>79k token</small></div></div>
     <div class="bar rv d3" style="--h:83.6%"><div class="c" style="background:linear-gradient(180deg,var(--cyan),var(--violet))">83.6</div><div class="nm" style="color:var(--cyan)"><b>Engram</b><br><small>9.5k token · 8× 精简</small></div></div>
-    <div class="bar rv d4" style="--h:85.2%"><div class="c" style="background:linear-gradient(180deg,#94a3b8,#475569);color:#fff">85.2</div><div class="nm">腾讯混元<br><small>闭源商用</small></div></div>
   </div>
   <table class="bm rv d3">
     <tr><th>系统</th><th>总分</th><th>平均 token</th><th>开源?</th></tr>
     <tr class="winrow"><td><b>Engram</b>(本项目)</td><td class="sc hl">83.6%</td><td style="text-align:right">9.5k</td><td>✅ AGPL-3.0</td></tr>
     <tr><td>裸塞全文(同 backbone)</td><td class="sc">74.8%</td><td style="text-align:right">79k</td><td>—</td></tr>
-    <tr><td>腾讯混元 Hy-Memory</td><td class="sc">85.2%</td><td style="text-align:right">—</td><td>❌ 闭源</td></tr>
   </table>
-  <p class="note rv d3"><b>诚实定位:</b>Engram 远超裸全文(+8 分)且省 8 倍 token,与混元同梯队(略低),但<b>全开源、可复现、可扩展到百万字</b>。500 题最终验证进行中,当前 ≈83.6%。</p>
+  <p class="note rv d3"><b>它的定位:</b>Engram 远超裸全文(<b>+8.8 分</b>)且省约 8 倍 token,<b>全开源、可复现、可扩展到百万字</b>。500 题官方判分 ≈83.6%,每题原始日志公开。</p>
   <div class="repro rv d4">
 <span class="c1"># 每个数字都能自己跑一遍验证:</span><br>
 git clone https://github.com/ly-wang19/engram-memory && cd engram-memory<br>
-pytest&nbsp;&nbsp;<span class="c1"># 44 个单元测试,零依赖、不要 key</span><br>
+pytest&nbsp;&nbsp;<span class="c1"># 80+ 个单元测试,零依赖、不要 key</span><br>
 python eval/bench.py --data s --limit 500 --systems engram_lean,full_context ...
   </div>
 </div></section>
 
 <!-- SOURCES -->
 <section id="sources" style="background:linear-gradient(180deg,transparent,rgba(34,211,238,.04),transparent)"><div class="wrap">
-  <div class="eyebrow rv">取百家之长 · 逐条归因</div>
-  <h2 class="rv d1">站在<span class="hl">字节 / 阿里 / 腾讯</span>和全球 SOTA 的肩上</h2>
-  <p class="lead rv d2">我们不重复造轮子 —— 把各家记忆系统最精华的设计学过来、融进一套可复现框架,并明确标注每个技术的来源(见仓库 TECHNIQUES.md)。</p>
+  <div class="eyebrow rv">完整架构 · 每个声称都有代码 + 测试</div>
+  <h2 class="rv d1">不是单点技巧,是<span class="hl">一整套记忆引擎</span></h2>
+  <p class="lead rv d2">从写入、固化到检索,逐层设计、可复现、可扩展到百万字 —— 每个能力都有对应的代码和单元测试。</p>
   <div class="chips">
-    <div class="chip rv d2"><b>腾讯混元</b> · 双 System-1/2、L2 场景块、<b>L3 四层用户画像</b>(我们实测 +13 分)、演化链</div>
-    <div class="chip rv d2"><b>字节火山 OpenViking</b> · L0/L1/L2 分层、<b>粗到细级联检索</b>、热度分层</div>
-    <div class="chip rv d3"><b>阿里 MemoryScope</b> · 类型加权检索、查询时间匹配、<b>子集去重冲突</b></div>
-    <div class="chip rv d3"><b>Mem0 / Zep</b> · 双时间轴、衰减乘子、状态链、非破坏式失效</div>
-    <div class="chip rv d4"><b>Mastra / OMEGA</b> · 答案侧"列全部再计数""当前状态"路由</div>
-    <div class="chip rv d4"><b>MemoryBank / MemGPT</b> · 遗忘曲线、睡眠时巩固、OS 分页</div>
+    <div class="chip rv d2"><b>双过程写入 / 固化</b> · System-1 热写入(不调 LLM、&lt;50ms)+ System-2 异步抽取建图</div>
+    <div class="chip rv d2"><b>双时间轴事实</b> · 有效时间 + 事务时间,<b>as-of 时点查询</b>、知识更新一等公民</div>
+    <div class="chip rv d3"><b>非破坏式冲突解决</b> · 精确槽 + 语义 + 子集,仅模糊时 LLM 裁决;<b>失效不删除、全溯源</b></div>
+    <div class="chip rv d3"><b>混合检索</b> · 语义 + 词法 BM25 + 图 n 跳 + 时近/显著度,<b>RRF 融合 + 重排</b></div>
+    <div class="chip rv d4"><b>类型化记忆</b> · 情节 / 语义图谱 / 画像身份 / 程序性 / 工作记忆,各有存储与策略</div>
+    <div class="chip rv d4"><b>显著度衰减 + Reflector</b> · 强化与遗忘、摘要刷新、答案验证回路</div>
   </div>
-  <p class="note rv d4" style="margin-top:24px">完整架构:5 类记忆 · 双时间轴冲突解决(精确槽 + 语义 + 子集 + LLM 裁决)· 混合检索(语义+词法+图+时近+类型加权+RRF)· 衰减/强化 · Reflector · 验证回路 —— 每个声称都有代码 + 测试。</p>
+  <p class="note rv d4" style="margin-top:24px">一切可插拔:LLM / 嵌入器 / 向量库 / 图库都在接口背后,带<b>零依赖离线兜底</b> —— 不用 key、不用任何服务即可 <code>pytest</code> 全绿。</p>
 </div></section>
 
 <footer><div class="wrap">

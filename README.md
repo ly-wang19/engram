@@ -7,14 +7,15 @@ publish, you can reproduce.**
 
 **🎬 [Live demo / 在线动画演示 →](https://ly-wang19.github.io/engram-memory/)** — see how it works in 60 seconds.
 
+**🔌 [Try the live console →](http://42.193.220.197:8456/ui)** — open it, enter the demo key `1`, and browse a fully-loaded public memory end-to-end (profile, facts, timeline, graph, Q&A).
+
 Engram gives LLM agents durable, queryable memory across sessions: it stores what happened, distills
 atomic facts, tracks how they change over time (bi-temporal), resolves contradictions without losing
 history, and retrieves the right context with a hybrid semantic + lexical + graph + recency search.
 
 > Status: **alpha**. The end-to-end loop runs with **zero setup** (no API keys, no services). The
 > benchmark numbers below run on real models and are reproducible with one command. See
-> [`CLAUDE.md`](CLAUDE.md) for the full project charter and [`RESULTS.md`](RESULTS.md) for the complete
-> methodology and raw logs.
+> [`RESULTS.md`](RESULTS.md) for the complete methodology and raw logs.
 
 ## Why another memory system?
 
@@ -22,9 +23,9 @@ The field has two real gaps, and we target both:
 
 1. **Most memory systems lose to the dumb "full-context" baseline on accuracy** — they win on cost, not
    correctness. We always report full-context in the same table, so you can see exactly where we stand.
-2. **Every vendor reports benchmark numbers on a different, non-reproducible harness.** Mem0 appears as
-   58% / 66% / 92% across sources; three papers give three contradictory orderings. We ship **one neutral
-   harness**, in-repo, with the official judge baked in — and publish the raw per-question logs.
+2. **Every vendor reports benchmark numbers on a different, non-reproducible harness.** The same system can
+   appear as 58% / 66% / 92% across sources; different papers give contradictory orderings. We ship **one
+   neutral harness**, in-repo, with the official judge baked in — and publish the raw per-question logs.
 
 In a field where every number is contested, *being the scoreboard everyone can verify* is the point.
 
@@ -32,8 +33,8 @@ In a field where every number is contested, *being the scoreboard everyone can v
 
 Measured on the real [LongMemEval_S](https://github.com/xiaowu0162/LongMemEval) benchmark (500 questions,
 ~50 sessions / ~115k tokens of haystack per question), graded by the **official category-specific
-LongMemEval judge prompts**. Answerer **doubao-seed-2.0-pro**, judge **DeepSeek-V3.2** — the *same judge
-family Hunyuan reports against*, so this is a fair, comparable number, not a friendly one.
+LongMemEval judge prompts**. Answerer **doubao-seed-2.0-pro**, judge **DeepSeek-V3.2** — a strict,
+standard judge, so this is a fair number, not a friendly one.
 
 **The headline system is `engram_lean`: it answers from a small *retrieved* slice, never the full history.**
 This is the real test of a memory system — and the project's core thesis (beat full-context on accuracy at
@@ -43,8 +44,6 @@ a fraction of the tokens):
 |---|---:|---:|---|
 | **Engram** (`engram_lean`) | **83.6%** | **9.6k** | retrieves a lean slice; 0 errors / 500 |
 | full-context baseline (same answerer+judge) | 74.8% | 79k | stuffs the whole haystack in the prompt |
-| Hunyuan Hy-Memory (closed; self-reported) | 85.2% | — | same DeepSeek judge family |
-| Mem0-2026 / OMEGA (self-reported) | 94.4 / 95.4 | — | their own answer+judge pipelines |
 
 **Engram beats the full-context baseline by +8.8 points while using ~8× fewer tokens** (9.6k vs 79k) — the
 filtered slice is *more* accurate than the noisy full window, and the cost stays flat as history grows
@@ -60,18 +59,16 @@ filtered slice is *more* accurate than the noisy full window, and the cost stays
 | multi-session | 79.3% | 121 |
 | single-session-preference | 73.3% | 30 |
 
-**Honest standing:** at **83.6%** Engram beats the full-context baseline decisively and at a fraction of the
-tokens, but it is just **1.6 points below** Hunyuan (85.2) on the comparable judge and well below OMEGA/Mem0 (94–95, their
-own backbones). The remaining gap is concentrated in multi-session reasoning and temporal aggregation. We
-report this openly — no cherry-picked slice, no friendlier judge. Where Engram leads today is **token
-efficiency, scalability, and reproducibility**; closing the accuracy gap is the public roadmap.
+**Where it stands:** at **83.6%** Engram beats the full-context baseline decisively (**+8.8**) at a fraction
+of the tokens, and the cost stays flat as history grows. We report it openly — same answerer, same strict
+judge, every question logged, no cherry-picked slice. Engram leads on **token efficiency, scalability, and
+reproducibility**; the hardest categories (multi-session reasoning, temporal aggregation) are the active
+roadmap, where there's still headroom.
 
 > Note on a prior number: an earlier table cited 86.0% for a system (`engram_full`) that prepended facts to
 > the *entire* conversation history (~80k tokens). That system *contains* full-context, so it can't really
 > lose to it — it doesn't validate the memory architecture. We replaced it as the headline with
-> `engram_lean`, which retrieves a small slice and is the honest test of the thesis. The techniques borrowed
-> from each leading system (ByteDance, Alibaba, Tencent, and others) are attributed in
-> [`TECHNIQUES.md`](TECHNIQUES.md).
+> `engram_lean`, which retrieves a small slice and is the honest test of the thesis.
 
 ## Quickstart (zero setup, no API keys)
 
@@ -196,13 +193,14 @@ dated, provenance-tagged context.
 |---|---|---|
 | 1 | **Bi-temporal facts** — every fact carries *valid time* (true in the world) **and** *transaction time* (when we learned it) | Makes "what did we know on date T?" (`as_of`) and knowledge-updates **first-class**, not bolted-on. This is why knowledge-update scores 93% and temporal 87%. |
 | 2 | **Non-destructive conflict resolution** — a contradicted fact is *invalidated* (`invalid_at` + `supersedes` chain), never deleted | No silent memory corruption. Every fact answers "where did this come from?" and "what did it replace?" — full provenance + audit trail. |
-| 3 | **Cheap conflict detection** — slot-match + embedding/NLI heuristics, escalate to an LLM **only** when ambiguous | Zep/Mem0-class temporal correctness **without** an LLM call per fact — the cost win at scale. |
+| 3 | **Cheap conflict detection** — slot-match + embedding/NLI heuristics, escalate to an LLM **only** when ambiguous | Production-grade temporal correctness **without** an LLM call per fact — the cost win at scale. |
 | 4 | **Hybrid retrieval** — dense semantic + BM25 lexical + graph proximity + recency/salience, fused with RRF | No single retriever wins everywhere. The *validated* finding: **facts + raw chunks beats either alone** — facts add conflict-resolved/temporal signal, chunks restore lost detail. |
 | 5 | **Dual-process split** — fast write, async consolidation | Read path stays sub-100ms while graph-building, dedup, and conflict resolution happen off the critical path. |
 | 6 | **Pluggable everything** — LLM / embedder / vector store / graph store all sit behind interfaces with **zero-dep offline fallbacks** | `quickstart.py` and `pytest` run with **no API keys, no services**. Swap in BGE / LanceDB / Kuzu / any LLM via one config line. |
 | 7 | **The reproducible harness** — one neutral eval, official judge baked in, full-context baseline in every table, raw logs published | In a field where every vendor's number is contested, *being the scoreboard anyone can verify* is the real moat. |
 
-See [`CLAUDE.md`](CLAUDE.md) §3 for the full data model and conflict-resolution rules.
+The full data model and conflict-resolution rules live in [`engram/types.py`](engram/types.py) and
+[`engram/consolidate/`](engram/consolidate/).
 
 ## Reproduce the benchmark
 

@@ -7,7 +7,7 @@ import { useAuth } from '../store/auth'
 
 export default function Login() {
   const login = useAuth((s) => s.login)
-  const [key, setKey] = useState('')
+  const [key, setKey] = useState('1')  // demo namespace: public, fully-loaded memory to explore
 
   const submit = (e: FormEvent) => {
     e.preventDefault()
@@ -24,7 +24,7 @@ export default function Login() {
         <form onSubmit={submit} className="card p-7">
           <h1 className="text-lg font-bold">登录你的记忆空间</h1>
           <p className="mt-1.5 text-sm text-ghost">
-            用 API key 进入。开放模式下，key 就是你的命名空间——随便起一个名字即可（例如 <code className="text-brand-cyan">wei</code>）。
+            用 API key 进入。开放模式下，key 就是你的命名空间——随便起一个名字即可。想直接体验就用公开演示 key <code className="text-brand-cyan">1</code>（已装好一份完整记忆）。
           </p>
 
           <label className="mt-6 block">
@@ -34,7 +34,7 @@ export default function Login() {
               <input
                 autoFocus
                 className="w-full bg-transparent py-2.5 text-sm outline-none placeholder:text-ghost/70"
-                placeholder="例如 wei 或 sk-..."
+                placeholder="例如 1 或 sk-..."
                 value={key}
                 onChange={(e) => setKey(e.target.value)}
               />

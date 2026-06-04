@@ -154,7 +154,7 @@ svg text{font-family:system-ui,sans-serif}
 </style></head><body>
 <h1>🧠 我的记忆 <span class=dim>Engram</span></h1>
 <p class=dim>输入你的 API key,看 / 编辑 / 删除你自己的记忆。你手动改的会被锁定 🔒,不会被自动覆盖。</p>
-<div class=bar><input id=key placeholder="API key(开放模式下随便填,比如 wei)" value="wei">
+<div class=bar><input id=key placeholder="API key(开放模式下随便填,比如 1)" value="1">
 <button onclick=load()>查看我的记忆</button></div>
 <div class=add><input id=msg placeholder="存一条新记忆,例如:我下周要去东京出差">
 <button onclick=remember()>记住</button></div>
