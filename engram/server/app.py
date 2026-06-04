@@ -287,12 +287,23 @@ def _answer_from_memory(answerer, query: str, ctx: str) -> str:
         return ""
 
 
+def _est_tokens(text: str) -> int:
+    """A token estimate that's fair for Chinese: each CJK char ≈ 1 token + each non-CJK word ≈ 1 token.
+    (`len(text.split())` undercounts Chinese badly since it isn't whitespace-separated.)"""
+    import re
+    cjk = len(re.findall(r"[一-鿿]", text))
+    words = len(re.findall(r"[A-Za-z0-9]+", re.sub(r"[一-鿿]", " ", text)))
+    return cjk + words
+
+
 @app.post("/v1/recall")
 def recall(req: RecallReq, user: str = Depends(auth)):
     mem = mgr().get(user)
     if req.lean:
         ctx = mem.lean_context(req.query, user_id=user, n_chunks=req.n_chunks, session_id=req.session_id)
-        return {"context": ctx, "tokens_est": len(ctx.split()),
+        # full-context baseline: what it would cost to stuff the ENTIRE history into the prompt
+        full = "\n".join(ep.content for ep in mem.episodes_doc.values())
+        return {"context": ctx, "tokens_est": _est_tokens(ctx), "full_tokens": _est_tokens(full),
                 "answer": _answer_from_memory(mgr().answerer, req.query, ctx)}
     res = mem.search(req.query, user_id=user)
     return {"answer": res.answer(), "facts": [f.text for f in res.facts[:10]]}

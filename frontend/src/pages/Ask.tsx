@@ -78,12 +78,27 @@ export default function Ask() {
             </Card>
           )}
 
-          <div className="flex items-center gap-3 rounded-xl border border-brand-cyan/20 bg-brand-cyan/5 p-4">
-            <Zap className="h-5 w-5 text-brand-cyan" />
-            <div className="text-sm">
-              <span className="font-semibold text-brand-cyan">约 {result.tokens_est} tokens</span>
-              <span className="text-ghost"> 的精炼上下文（而非整段历史）就能作答——这就是“lean 胜过 full-context”。</span>
+          <div className="rounded-xl border border-brand-cyan/20 bg-brand-cyan/5 p-4">
+            <div className="flex flex-wrap items-center gap-x-5 gap-y-2 text-sm">
+              <span className="inline-flex items-center gap-2">
+                <Zap className="h-5 w-5 text-brand-cyan" />
+                <span className="font-semibold text-brand-cyan">精炼上下文 {result.tokens_est} tokens</span>
+              </span>
+              {result.full_tokens != null && (
+                <span className="text-ghost">
+                  全量历史 <span className="text-slate-200">{result.full_tokens.toLocaleString()}</span> tokens
+                </span>
+              )}
+              {result.full_tokens != null && result.full_tokens > result.tokens_est && (
+                <span className="rounded-md bg-brand-mint/15 px-2 py-0.5 font-semibold text-brand-mint">
+                  省 {(result.full_tokens / Math.max(1, result.tokens_est)).toFixed(1)}× · 仅用{' '}
+                  {Math.max(1, Math.round((result.tokens_est / result.full_tokens) * 100))}%
+                </span>
+              )}
             </div>
+            <p className="mt-1.5 text-xs text-ghost">
+              只把相关的一小片喂给模型，而不是整段历史——历史越长，省得越多。
+            </p>
           </div>
 
           {blocks.length ? (

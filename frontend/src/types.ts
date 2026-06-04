@@ -96,7 +96,8 @@ export interface RememberResult {
 
 export interface RecallResult {
   context: string
-  tokens_est: number
+  tokens_est: number // lean retrieved context
+  full_tokens?: number // the whole history (the full-context baseline)
   answer?: string // the answer an agent would give from this memory (LLM over the lean context)
 }
 
