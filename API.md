@@ -13,8 +13,8 @@
 
 **B. 自己部署（数据完全本地）**
 ```bash
-git clone https://github.com/ly-wang19/engram-memory.git
-cd engram-memory
+git clone https://github.com/ly-wang19/engram.git
+cd engram
 pip install "engram-memory[server]"          # 或 pip install -e ".[server]"
 export ENGRAM_EMBEDDER=bge-small              # 本地嵌入，无需 key
 export ENGRAM_LLM=volcano:doubao-seed-1-6-flash-250615   # 抽取/答题用，需在 .env 配 ARK_API_KEY

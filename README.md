@@ -5,7 +5,7 @@
 **An open-source long-term memory engine for LLM agents — built around one principle: every number we
 publish, you can reproduce.**
 
-**🎬 [Live demo / 在线动画演示 →](https://ly-wang19.github.io/engram-memory/)** — see how it works in 60 seconds.
+**🎬 [Live demo / 在线动画演示 →](https://ly-wang19.github.io/engram/)** — see how it works in 60 seconds.
 
 **🔌 [Try the live console →](http://42.193.220.197:8456/ui)** — open it, enter the demo key `1`, and browse a fully-loaded public memory end-to-end (profile, facts, timeline, graph, Q&A).
 
