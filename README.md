@@ -5,6 +5,8 @@
 **An open-source long-term memory engine for LLM agents — built around one principle: every number we
 publish, you can reproduce.**
 
+**🎬 [Live demo / 在线动画演示 →](https://ly-wang19.github.io/engram-memory/)** — see how it works in 60 seconds.
+
 Engram gives LLM agents durable, queryable memory across sessions: it stores what happened, distills
 atomic facts, tracks how they change over time (bi-temporal), resolves contradictions without losing
 history, and retrieves the right context with a hybrid semantic + lexical + graph + recency search.
