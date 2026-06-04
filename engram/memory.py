@@ -112,6 +112,9 @@ class Memory:
         # summarizer / persona via _apply_policy(), and persisted with the snapshot.
         self.policy: dict[str, str] = {"extract_instruction": "", "extract_system": "",
                                        "summary_system": "", "persona_system": ""}
+        # Resolved user identity (user_id -> self-name, e.g. "user123" -> "李雷"). Persisted so the
+        # first-person normalization and the profile know who the user is after a reload.
+        self._identity: dict[str, str] = {}
         self._persist_path: Optional[str] = None
         self._rewire()
 
@@ -123,6 +126,10 @@ class Memory:
         self.engine = ConsolidationEngine(self.fact_store, self.graph, self.embedder, self.config, self.llm)
         self.retriever = HybridRetriever(self.fact_store, self.graph, self.embedder, self.config)
         self.planner = MultiHopPlanner(self.graph, self.fact_store, self.config)
+        # restore the persisted self-name into the (freshly built) extractor so identity survives reload
+        ex = getattr(self.engine, "extractor", None)
+        if ex is not None and hasattr(ex, "self_name"):
+            ex.self_name.update(getattr(self, "_identity", {}))
 
     # --- persistence (so memory survives across processes/sessions; CLAUDE.md §6) ---
     def save(self, path: Optional[str] = None) -> None:
@@ -144,6 +151,7 @@ class Memory:
                 "summary_vec": self.summary_vec, "graph": self.graph,
                 "resolver": self.resolver, "persona_cache": self._persona_cache,
                 "focus": self.focus, "policy": self.policy, "working_mem": self.working_mem,
+                "identity": self._identity,
             }, fh)
 
     @classmethod
@@ -166,6 +174,7 @@ class Memory:
                 mem.policy = blob.get("policy") or {"extract_instruction": "", "extract_system": "",
                                                     "summary_system": "", "persona_system": ""}
                 mem.working_mem = blob.get("working_mem") or {}
+                mem._identity = blob.get("identity") or {}
             else:  # legacy 8-tuple snapshot (pre-focus)
                 (mem.episodes_doc, mem.episodes_vec, mem.fact_store, mem.cold_store,
                  mem.summary_vec, mem.graph, mem.resolver, mem._persona_cache) = blob
@@ -217,6 +226,9 @@ class Memory:
         self._apply_policy()  # honor the user's editable extraction prompt / "what to record" directive
         self.sweep_working()  # housekeeping: drop expired/consumed ephemeral items
         stats = self.engine.consolidate(eps)
+        ex = getattr(self.engine, "extractor", None)  # capture any newly-resolved self-name to persist it
+        if ex is not None and hasattr(ex, "self_name"):
+            self._identity.update(ex.self_name)
         self._classify()  # feature ⑤: tag new facts with a category + sensitivity flag (rule-based)
         self._persona_cache.clear()  # facts changed -> any cached persona is stale
         return stats

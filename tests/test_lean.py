@@ -515,9 +515,10 @@ def test_structured_profile_tiers_display_only_and_preserves_recall():
 
     p = m.structured_profile("u")
     conf_items = [it["item"] for items in p["preferences"].values() for it in items]
-    tent_items = [t["item"] for t in p["tentative"]]
-    assert "周杰伦" in conf_items and "jazz" not in conf_items, "explicit favorite confirmed, casual not"
-    assert "jazz" in tent_items, "single casual mention must be shown as 待确认, not confirmed"
+    # an explicitly STATED preference is confirmed (the user said it — not a shaky inference); both the
+    # explicit favorite and the stated like show in the canonical profile, not as 待确认 candidates.
+    assert "周杰伦" in conf_items and "jazz" in conf_items, "stated preferences are confirmed"
+    assert [t["item"] for t in p["tentative"]] == [], "stated preferences are not held as 待确认"
 
     # honest evidence, never a fabricated numeric weight
     for items in p["preferences"].values():

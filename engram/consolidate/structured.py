@@ -46,23 +46,40 @@ _HABIT = {"usually", "often", "routine", "regularly", "habit", "tends_to", "comm
           "daily", "weekly", "every_day", "every_week", "every_morning"}
 
 # coarse category buckets for grouping preferences (keyword match on predicate + object)
+# keyword -> category, EN + ZH. First match wins, so ORDER matters: a phrase like "有游泳池的酒店"
+# contains both 酒店(出行) and 游泳(运动) — putting 出行 before 运动 keeps it under 出行.
 _CATEGORY_KW: list[tuple[str, tuple[str, ...]]] = [
-    ("健康禁忌", ("allergic", "allergy", "intoleran")),
-    ("音乐", ("music", "song", "artist", "singer", "band", "genre", "playlist")),
-    ("影视", ("movie", "film", "show", "tv", "series", "video", "cinema", "drama")),
+    ("健康禁忌", ("allergic", "allergy", "intoleran", "过敏", "忌口", "禁忌")),
     ("饮食", ("food", "eat", "cuisine", "dish", "restaurant", "drink", "coffee", "tea", "spicy",
-              "seafood", "meal", "cook", "snack", "fruit")),
-    ("出行", ("travel", "trip", "destination", "hotel", "route", "drive", "flight", "scenery", "poi")),
-    ("运动", ("sport", "exercise", "gym", "run", "fitness", "yoga", "basketball", "football", "hike")),
-    ("阅读", ("book", "read", "author", "novel", "podcast", "news")),
+              "seafood", "meal", "cook", "snack", "fruit",
+              "吃", "餐", "菜", "料", "火锅", "辣", "香菜", "甜", "咖啡", "茶", "清淡", "评分", "人均", "口味")),
+    ("出行", ("travel", "trip", "destination", "hotel", "route", "drive", "flight", "scenery", "poi",
+              "酒店", "住宿", "民宿", "高架", "路线", "停车", "充电", "景点", "旅游", "出差", "导航", "自驾")),
+    ("音乐", ("music", "song", "artist", "singer", "band", "genre", "playlist",
+              "歌", "音乐", "曲", "电音", "流行", "周杰伦", "五月天", "华语", "粤语", "民谣", "摇滚")),
+    ("影视", ("movie", "film", "show", "tv", "series", "video", "cinema", "drama", "director",
+              "片", "电影", "电视剧", "影视", "恐怖", "科幻", "诺兰", "导演", "综艺", "动画")),
+    ("运动", ("sport", "exercise", "gym", "run", "fitness", "yoga", "basketball", "football", "hike",
+              "跑步", "游泳", "健身", "篮球", "足球", "瑜伽", "运动", "球", "爬山", "登山")),
+    ("阅读", ("book", "read", "author", "novel", "podcast", "news", "书", "阅读", "新闻", "播客", "股票")),
+    ("兴趣", ("跳舞", "探店", "摄影", "自拍", "烘焙", "绘画", "手工")),
+    ("环境", ("安静", "氛围", "环境", "嘈杂", "空调", "温度", "座椅", "加热")),
 ]
 
 
+_POS_PREFIX = ("favorite", "favourite", "likes_", "loves_", "enjoys_", "prefers_", "prefer_",
+               "interested", "fond_", "fan_")
+_NEG_PREFIX = ("dislikes_", "dislike_", "hates_", "avoids_", "avoid_", "allergic", "cannot_",
+               "doesn't_", "does_not_", "do_not_", "not_", "no_")
+
+
 def _polarity(pred: str) -> str | None:
+    """like / dislike polarity of a preference predicate — handles compound predicates the LLM emits
+    (likes_quiet_environments, doesn't_drive_on_elevated_roads, ...) not just the canonical verbs."""
     p = pred.lower()
-    if p in _POSITIVE or p.startswith("favorite") or p.startswith("favourite"):
+    if p in _POSITIVE or p.startswith(_POS_PREFIX):
         return "like"
-    if p in _NEGATIVE:
+    if p in _NEGATIVE or p.startswith(_NEG_PREFIX):
         return "dislike"
     return None
 
@@ -97,23 +114,35 @@ def _evidence(f: Fact) -> dict:
 
 
 def _confirmed(f: Fact) -> bool:
-    """Promote to the canonical profile only on REAL evidence. Display-only — never gates retrieval."""
-    p = f.predicate.lower()
+    """Whether a preference shows in the canonical profile vs sits as a 待确认 candidate (display-only,
+    never gates retrieval). An EXPLICITLY STATED preference is confirmed — the user said it, it isn't a
+    shaky inference (the PRD treats 主动写入 as confidence 1.0). 待确认 is reserved for genuinely weak
+    signals (e.g. a future passive-inference path emitting sub-1.0 confidence)."""
     if f.source == "user":
         return True
-    if p.startswith("favorite") or p in {"allergic_to", "allergic", "cannot_eat"}:
-        return True  # explicit favorite / allergy — stated, not guessed
-    if len(set(f.provenance)) >= 2:
-        return True  # corroborated across independent sessions
-    if f.access_count >= 1:
-        return True  # reinforced on access
+    if _polarity(f.predicate) is not None:  # an explicitly stated like / dislike / favorite / allergy
+        return True
+    if len(set(f.provenance)) >= 2 or f.access_count >= 1:  # corroborated across sessions / reinforced
+        return True
     return False
+
+
+# Universal first-person / user references (EN + ZH coreference). These denote THE USER — not a
+# special case but the basic identity-resolution every memory system needs. Facts about other people
+# (儿子/外婆/朋友 ...) simply aren't in this set, so they're excluded without any kinship list or guessing.
+USER_REFS = {"user", "用户", "i", "我", "me", "myself", "本人", "自己", "俺"}
+
+
+def user_aliases(subject: str, user_id: str) -> set[str]:
+    """Subjects that denote the user: the resolved self-name (e.g. 李雷) + the user_id + USER_REFS.
+    Relies on extraction having normalized first-person subjects to the self-name (see LLMExtractor)."""
+    return {subject.lower(), user_id.lower()} | USER_REFS
 
 
 def build_structured_profile(facts: list[Fact], subject: str, user_id: str = "default") -> dict:
     """Group the user's live facts into basic info / weighted-free preferences / habits, split into
     confirmed vs tentative for display. `facts` should already be the live set."""
-    who = {subject.lower(), "user", user_id.lower(), "i"}
+    who = user_aliases(subject, user_id)
     mine = [f for f in facts if f.subject.lower() in who]
 
     basic: dict[str, dict] = {}
@@ -148,6 +177,11 @@ def build_structured_profile(facts: list[Fact], subject: str, user_id: str = "de
         if _is_habit(pred):
             habits.append({"text": f.text, "evidence": _evidence(f), "fact_id": f.id})
 
+    # The user's name is resolved into the identity (self-name) rather than stored as a fact, so surface
+    # it in 基本信息 explicitly when we have it (and no name fact already provided one).
+    if "name" not in basic and subject and subject.lower() not in (USER_REFS | {user_id.lower()}):
+        basic["name"] = {"field": "name", "label": "姓名", "value": subject,
+                         "evidence": {"kind": "mentions", "count": 1}, "source": "extracted", "fact_id": ""}
     for b in basic.values():
         b.pop("_rank", None)
     return {

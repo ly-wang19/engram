@@ -31,6 +31,8 @@ EXTRACT_SYSTEM = (
 EXTRACT_TEMPLATE = "Conversation:\n{content}\n\nJSON facts:"
 
 _NAME_PREDICATES = {"name", "name_is", "is_named", "called"}
+# first-person / user references normalized to the user's canonical name (EN + ZH coreference)
+_SELF_REFS = {"user", "i", "me", "myself", "用户", "我", "本人", "自己", "俺", "咱"}
 
 
 def _norm_predicate(p: str) -> str:
@@ -91,7 +93,10 @@ class LLMExtractor:
                 # register identity; rewrite the placeholder subject so later facts attribute correctly
                 self.self_name[ep.user_id] = obj
                 continue
-            if subj.lower() in {"user", "i", "me", "myself"}:
+            if subj.lower() in _SELF_REFS:
+                # first-person / user reference (EN + ZH) -> normalize to the user's known name, so all of
+                # the user's own facts share ONE canonical subject (otherwise 我/用户/李雷 split apart and
+                # the profile can't tell which facts are about the user).
                 subj = self.self_of(ep.user_id) if self.self_of(ep.user_id) != ep.user_id else subj
             facts.append(
                 Fact(
