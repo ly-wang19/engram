@@ -167,12 +167,20 @@ class ConflictResolver:
             #    predicate), different object, and the new fact is same-or-later in valid time.
             if self.embedder is not None and new.embedding:
                 done = {id(f) for f in invalidated}
+                new_prov = set(new.provenance)
                 for old in live:
                     if id(old) in done or old.slot == new.slot or _protected(old, new):
                         continue  # already handled by exact-slot, identical slot, or user-protected
                     if _norm(old.subject) != _norm(new.subject) or _norm(old.object) == _norm(new.object):
                         continue
                     if not is_single_valued(old.predicate) or not old.embedding:
+                        continue
+                    # CO-STATED guard: two facts extracted from the SAME episode were asserted together, so
+                    # they are complementary attributes (e.g. works_at 字节跳动 + job_title 后端开发 from one
+                    # sentence), NOT a contradiction/update. The embedding path otherwise over-merges short,
+                    # topically-similar facts — especially in Chinese — so never let it supersede across a
+                    # shared source. A genuine update arrives in a LATER, SEPARATE episode.
+                    if new_prov and new_prov & set(old.provenance):
                         continue
                     if new.valid_at < old.valid_at:
                         continue

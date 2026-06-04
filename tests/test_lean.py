@@ -619,3 +619,30 @@ def test_display_localization_keeps_canonical_predicate():
     m = Memory()
     f = m.add_fact("user", "works_at", "字节跳动", user_id="u")
     assert f.predicate == "works_at" and f.slot[2] == "works_at"
+
+
+def test_costated_facts_do_not_semantic_supersede():
+    """Regression (user-reported): two facts from the SAME episode ('我在字节跳动做后端开发' ->
+    works_at 字节跳动 + job_title 后端开发) are complementary attributes and must NOT supersede each other
+    via the embedding path, even though they're short, same-subject and topically near. A genuine update
+    must come from a LATER, SEPARATE episode."""
+    from engram.consolidate.conflict import ConflictResolver
+    from engram.types import Fact
+
+    class E:  # embedder returning identical vectors -> cosine 1.0 (worst case for the semantic path)
+        def embed(self, t):
+            return [1.0, 0.0]
+
+    r = ConflictResolver(embedder=E(), sim_threshold=0.8)
+    old = Fact("user", "works_at", "字节跳动", provenance=["ep1"])
+    old.embedding = [1.0, 0.0]
+    new = Fact("user", "job_title", "后端开发", provenance=["ep1"])  # SAME episode
+    new.embedding = [1.0, 0.0]
+    _, invalidated = r.reconcile(new, [old])
+    assert invalidated == [], "co-stated complementary facts must not supersede each other"
+
+    # a real update from a DIFFERENT, later episode still supersedes (guard is provenance-scoped)
+    later = Fact("user", "occupation", "产品经理", provenance=["ep9"])
+    later.embedding = [1.0, 0.0]
+    _, inval2 = r.reconcile(later, [old])
+    assert old in inval2, "a later separate-episode near-duplicate should still supersede"
