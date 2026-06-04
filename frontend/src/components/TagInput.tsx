@@ -1,6 +1,7 @@
 import { useState, type KeyboardEvent } from 'react'
 import { Plus, X } from 'lucide-react'
 
+import { useT } from '../i18n'
 import { cx } from './ui'
 
 export function TagInput({
@@ -14,12 +15,13 @@ export function TagInput({
   placeholder?: string
   tone?: 'cyan' | 'rose'
 }) {
+  const t = useT()
   const [value, setValue] = useState('')
 
   const add = () => {
     const v = value.trim()
     if (!v) return
-    if (!tags.some((t) => t.toLowerCase() === v.toLowerCase())) onChange([...tags, v])
+    if (!tags.some((tag) => tag.toLowerCase() === v.toLowerCase())) onChange([...tags, v])
     setValue('')
   }
   const remove = (i: number) => onChange(tags.filter((_, idx) => idx !== i))
@@ -40,10 +42,10 @@ export function TagInput({
   return (
     <div>
       <div className="mb-2 flex flex-wrap gap-2">
-        {tags.length === 0 && <span className="text-xs text-ghost">（暂无）</span>}
-        {tags.map((t, i) => (
-          <span key={`${t}-${i}`} className={cx('inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-sm', chip)}>
-            {t}
+        {tags.length === 0 && <span className="text-xs text-ghost">{t.common.none}</span>}
+        {tags.map((tag, i) => (
+          <span key={`${tag}-${i}`} className={cx('inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-sm', chip)}>
+            {tag}
             <button onClick={() => remove(i)} className="opacity-60 transition hover:opacity-100" aria-label="remove">
               <X className="h-3.5 w-3.5" />
             </button>
@@ -59,7 +61,7 @@ export function TagInput({
           onKeyDown={onKey}
         />
         <button className="btn-ghost shrink-0" onClick={add} type="button">
-          <Plus className="h-4 w-4" /> 加
+          <Plus className="h-4 w-4" /> {t.common.add}
         </button>
       </div>
     </div>

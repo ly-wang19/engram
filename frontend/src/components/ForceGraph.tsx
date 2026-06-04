@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
 
 import type { GraphData } from '../types'
+import { useT } from '../i18n'
 import { truncate } from '../lib/format'
 
 interface Positioned {
@@ -74,6 +75,7 @@ function layout(data: GraphData): { nodes: Positioned[]; index: Map<string, Posi
 }
 
 export function ForceGraph({ data }: { data: GraphData }) {
+  const t = useT()
   const { nodes, index } = useMemo(() => layout(data), [data])
   const [hover, setHover] = useState<string | null>(null)
 
@@ -95,7 +97,7 @@ export function ForceGraph({ data }: { data: GraphData }) {
       viewBox={`0 0 ${W} ${H}`}
       className="h-auto w-full rounded-xl bg-black/20"
       role="img"
-      aria-label="知识图谱"
+      aria-label={t.graph.ariaLabel}
     >
       <defs>
         <radialGradient id="node" cx="50%" cy="40%" r="65%">

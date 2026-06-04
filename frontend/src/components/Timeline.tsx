@@ -1,12 +1,14 @@
 import { ArrowUp, Lock } from 'lucide-react'
 
 import type { MemoryFact } from '../types'
+import { useT } from '../i18n'
 import { cx } from './ui'
 
 // Facts arrive newest-first (the server sorts by valid_at desc). The vertical rail +
 // colored dots make the bi-temporal evolution readable: green = currently true,
 // grey/strikethrough = superseded (a later fact replaced it), ↑ = this fact is an update.
 export function Timeline({ facts }: { facts: MemoryFact[] }) {
+  const t = useT()
   return (
     <div className="relative">
       <div className="absolute bottom-2 left-[104px] top-2 w-px bg-line" />
@@ -29,17 +31,18 @@ export function Timeline({ facts }: { facts: MemoryFact[] }) {
                 <span className="ml-2 inline-flex flex-wrap items-center gap-1.5 align-middle">
                   {f.source === 'user' && (
                     <span className="inline-flex items-center gap-1 text-[10px] text-brand-amber">
-                      <Lock className="h-3 w-3" /> 我设定
+                      <Lock className="h-3 w-3" /> {t.common.mine}
                     </span>
                   )}
                   {f.supersedes && (
                     <span className="inline-flex items-center gap-0.5 rounded border border-brand-violet/40 px-1.5 py-px text-[10px] text-brand-violet">
-                      <ArrowUp className="h-3 w-3" /> 更新
+                      <ArrowUp className="h-3 w-3" /> {t.common.updated}
                     </span>
                   )}
                   {!live && (
                     <span className="text-[10px] text-ghost">
-                      已被替代{f.invalid_at ? ` · ${f.invalid_at}` : ''}
+                      {t.common.superseded}
+                      {f.invalid_at ? ` · ${f.invalid_at}` : ''}
                     </span>
                   )}
                 </span>

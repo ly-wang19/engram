@@ -5,10 +5,12 @@ import { Button, Card, CardTitle, ErrorState, PageHeader, Spinner } from '../com
 import { TagInput } from '../components/TagInput'
 import { toast } from '../components/Toast'
 import { useFocus, useSetFocus } from '../hooks/queries'
+import { useT } from '../i18n'
 
 export default function FocusPage() {
   const { data, isLoading, isError, error } = useFocus()
   const save = useSetFocus()
+  const t = useT()
 
   const [track, setTrack] = useState<string[]>([])
   const [mute, setMute] = useState<string[]>([])
@@ -22,7 +24,7 @@ export default function FocusPage() {
     }
   }, [data, dirty])
 
-  if (isLoading) return <Spinner label="加载关注点…" />
+  if (isLoading) return <Spinner label={t.focus.loading} />
   if (isError) return <ErrorState message={(error as Error).message} />
 
   const update = (which: 'track' | 'mute', next: string[]) => {
@@ -37,7 +39,7 @@ export default function FocusPage() {
       {
         onSuccess: () => {
           setDirty(false)
-          toast.success('已保存——重点话题已加权，屏蔽话题已隐藏')
+          toast.success(t.focus.saved)
         },
         onError: (e) => toast.error(String((e as Error).message)),
       },
@@ -46,37 +48,41 @@ export default function FocusPage() {
   return (
     <div className="space-y-6">
       <PageHeader
-        title="关注点"
-        subtitle="定制记忆的重点。这不是摆设——会真正改变检索排名与是否出现在回忆里。"
+        title={t.focus.title}
+        subtitle={t.focus.subtitle}
         actions={
           <Button onClick={onSave} loading={save.isPending} disabled={!dirty}>
-            <Save className="h-4 w-4" /> 保存
+            <Save className="h-4 w-4" /> {t.common.save}
           </Button>
         }
       />
 
       <Card>
-        <CardTitle hint="提升 salience（检索打分 + 抗遗忘/驱逐）">
+        <CardTitle hint={t.focus.trackHint}>
           <span className="inline-flex items-center gap-2">
-            <Star className="h-4 w-4 text-brand-amber" /> 重点关注
+            <Star className="h-4 w-4 text-brand-amber" /> {t.focus.trackTitle}
           </span>
         </CardTitle>
         <p className="mb-3 text-sm text-ghost">
-          这些话题的相关记忆会被<span className="text-slate-200">提升权重</span>：检索时排名更高、更不容易被遗忘或被挤出热区。
+          {t.focus.trackDescPre}
+          <span className="text-slate-200">{t.focus.trackDescEmph}</span>
+          {t.focus.trackDescPost}
         </p>
-        <TagInput tags={track} onChange={(n) => update('track', n)} placeholder="例如：工作、健康、家人、AI" tone="cyan" />
+        <TagInput tags={track} onChange={(n) => update('track', n)} placeholder={t.focus.trackPlaceholder} tone="cyan" />
       </Card>
 
       <Card>
-        <CardTitle hint="从回忆上下文与画像中剔除">
+        <CardTitle hint={t.focus.muteHint}>
           <span className="inline-flex items-center gap-2">
-            <BellOff className="h-4 w-4 text-brand-rose" /> 屏蔽不记
+            <BellOff className="h-4 w-4 text-brand-rose" /> {t.focus.muteTitle}
           </span>
         </CardTitle>
         <p className="mb-3 text-sm text-ghost">
-          含这些词的事实<span className="text-slate-200">不会出现</span>在回忆上下文和用户画像里（数据仍保留，可随时取消屏蔽）。
+          {t.focus.muteDescPre}
+          <span className="text-slate-200">{t.focus.muteDescEmph}</span>
+          {t.focus.muteDescPost}
         </p>
-        <TagInput tags={mute} onChange={(n) => update('mute', n)} placeholder="例如：体重、某个旧项目" tone="rose" />
+        <TagInput tags={mute} onChange={(n) => update('mute', n)} placeholder={t.focus.mutePlaceholder} tone="rose" />
       </Card>
     </div>
   )

@@ -3,11 +3,13 @@ import { Share2 } from 'lucide-react'
 import { Card, CardTitle, EmptyState, ErrorState, PageHeader, Spinner } from '../components/ui'
 import { ForceGraph } from '../components/ForceGraph'
 import { useGraph } from '../hooks/queries'
+import { useT } from '../i18n'
 
 export default function GraphPage() {
   const { data, isLoading, isError, error } = useGraph()
+  const t = useT()
 
-  if (isLoading) return <Spinner label="构建关系图谱…" />
+  if (isLoading) return <Spinner label={t.graph.loading} />
   if (isError) return <ErrorState message={(error as Error).message} />
   if (!data) return null
 
@@ -15,7 +17,7 @@ export default function GraphPage() {
 
   return (
     <div className="space-y-6">
-      <PageHeader title="关系图谱" subtitle="语义记忆的实体与关系——多跳推理就在这张图上行走" />
+      <PageHeader title={t.graph.title} subtitle={t.graph.subtitle} />
 
       <Card>
         <CardTitle
@@ -23,26 +25,22 @@ export default function GraphPage() {
             hasGraph ? (
               <span className="flex items-center gap-3">
                 <span className="inline-flex items-center gap-1.5">
-                  <span className="h-px w-4 bg-brand-cyan" /> 当前关系
+                  <span className="h-px w-4 bg-brand-cyan" /> {t.graph.legendLive}
                 </span>
                 <span className="inline-flex items-center gap-1.5">
-                  <span className="h-px w-4 border-t border-dashed border-slate-500" /> 已失效
+                  <span className="h-px w-4 border-t border-dashed border-slate-500" /> {t.graph.legendOld}
                 </span>
               </span>
             ) : undefined
           }
         >
-          {data.nodes.length} 个实体 · {data.edges.length} 条关系
+          {t.graph.stats(data.nodes.length, data.edges.length)}
         </CardTitle>
 
         {hasGraph ? (
           <ForceGraph data={data} />
         ) : (
-          <EmptyState
-            title="图谱还是空的"
-            hint="多聊几句或加几条事实，实体（人、地点、物）和它们之间的关系就会浮现。悬停节点可高亮其邻居。"
-            icon={<Share2 className="h-6 w-6" />}
-          />
+          <EmptyState title={t.graph.emptyTitle} hint={t.graph.emptyHint} icon={<Share2 className="h-6 w-6" />} />
         )}
       </Card>
     </div>

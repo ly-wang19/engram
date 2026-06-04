@@ -21,6 +21,22 @@ customize, and export everything the engine remembers about you.
 No heavy graph/chart dependency: the knowledge-graph view (`src/components/ForceGraph.tsx`)
 uses a small dependency-free force-directed layout.
 
+## Internationalization (中文 / English)
+
+The whole UI ships in **both Chinese and English**, switchable live from the 中/EN toggle in the
+top bar (and on the login screen). No i18n library — it's a tiny type-safe layer on the same
+Zustand pattern the rest of the app uses:
+
+- `src/i18n/en.ts` is the canonical dictionary; `src/i18n/zh.ts` is typed `Dict` (= `typeof en`),
+  so a missing or extra key in either language is a **compile error** — the two stay in lockstep.
+- `useT()` returns the active dictionary and re-renders on change; `getT()` reads it outside React
+  (e.g. the fetch client's error messages in `src/lib/api.ts`).
+- The choice is persisted (`engram.lang` in localStorage). First visit defaults to the browser
+  language (`zh*` → Chinese, else English); `src/App.tsx` keeps `<html lang>` and the tab title in sync.
+
+To add a string: add the key to `en.ts`, then `zh.ts` (the compiler tells you if you forget), and
+use it via `const t = useT()` → `t.<section>.<key>`. Values can be functions for interpolation.
+
 ## Views
 
 - **总览 Dashboard** — stats, L3 persona, quick "remember".

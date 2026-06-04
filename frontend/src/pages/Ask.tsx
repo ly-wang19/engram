@@ -3,14 +3,21 @@ import { MessageSquare, Search, Sparkles, Zap } from 'lucide-react'
 
 import { Button, Card, EmptyState, ErrorState, PageHeader, Spinner } from '../components/ui'
 import { useRecall } from '../hooks/queries'
+import { useT } from '../i18n'
+import type { Dict } from '../i18n/en'
 
-// Pretty section titles for the assembled lean context blocks (engram.memory.lean_context).
-const SECTION_LABELS: Array<[RegExp, string]> = [
-  [/^USER PROFILE/i, '用户画像'],
-  [/^FACTS/i, '相关事实（含日期）'],
-  [/^TIMELINE/i, '时间线'],
-  [/^SESSION SUMMARIES/i, '会话摘要'],
-  [/^RELEVANT CONVERSATIONS/i, '原文片段'],
+// The lean-context blocks (engram.memory.lean_context) are emitted with English ALL-CAPS
+// headers regardless of UI language; we map each header to a localized section title.
+type SectionKey = Extract<
+  keyof Dict['ask'],
+  'sectionUserProfile' | 'sectionFacts' | 'sectionTimeline' | 'sectionSummaries' | 'sectionConversations'
+>
+const SECTION_KEYS: Array<[RegExp, SectionKey]> = [
+  [/^USER PROFILE/i, 'sectionUserProfile'],
+  [/^FACTS/i, 'sectionFacts'],
+  [/^TIMELINE/i, 'sectionTimeline'],
+  [/^SESSION SUMMARIES/i, 'sectionSummaries'],
+  [/^RELEVANT CONVERSATIONS/i, 'sectionConversations'],
 ]
 
 function splitBlocks(context: string) {
@@ -20,14 +27,16 @@ function splitBlocks(context: string) {
       const nl = block.indexOf('\n')
       const head = nl === -1 ? block : block.slice(0, nl)
       const body = nl === -1 ? '' : block.slice(nl + 1)
-      const label = SECTION_LABELS.find(([re]) => re.test(head))?.[1] ?? head.replace(/:$/, '')
-      return { label, body: body.trim() || head }
+      const key = SECTION_KEYS.find(([re]) => re.test(head))?.[1]
+      // `rawLabel` is the server's own header — used as-is when no localized title matches.
+      return { key, rawLabel: head.replace(/:$/, ''), body: body.trim() || head }
     })
     .filter((b) => b.body)
 }
 
 export default function Ask() {
   const recall = useRecall()
+  const t = useT()
   const [query, setQuery] = useState('')
 
   const submit = (e: FormEvent) => {
@@ -41,10 +50,7 @@ export default function Ask() {
 
   return (
     <div className="space-y-6">
-      <PageHeader
-        title="记忆问答"
-        subtitle="检索出一小片精炼上下文来回答——这正是 Engram 比塞入全部历史更省、更准的地方"
-      />
+      <PageHeader title={t.ask.title} subtitle={t.ask.subtitle} />
 
       <Card>
         <form onSubmit={submit} className="flex gap-2">
@@ -52,18 +58,18 @@ export default function Ask() {
             <Search className="h-4 w-4 text-ghost" />
             <input
               className="w-full bg-transparent py-2.5 text-sm outline-none placeholder:text-ghost/70"
-              placeholder="问点什么，例如：我对咖啡的偏好是什么？"
+              placeholder={t.ask.placeholder}
               value={query}
               onChange={(e) => setQuery(e.target.value)}
             />
           </div>
           <Button type="submit" loading={recall.isPending} disabled={!query.trim()}>
-            检索
+            {t.ask.searchBtn}
           </Button>
         </form>
       </Card>
 
-      {recall.isPending && <Spinner label="正在检索记忆…" />}
+      {recall.isPending && <Spinner label={t.ask.searching} />}
       {recall.isError && <ErrorState message={(recall.error as Error).message} />}
 
       {result && (
@@ -71,10 +77,10 @@ export default function Ask() {
           {result.answer && (
             <Card className="!border-brand-mint/30 !bg-brand-mint/[0.06]">
               <div className="mb-1.5 flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-brand-mint">
-                <MessageSquare className="h-4 w-4" /> 回答
+                <MessageSquare className="h-4 w-4" /> {t.ask.answer}
               </div>
               <p className="whitespace-pre-wrap text-[15px] leading-relaxed text-slate-100">{result.answer}</p>
-              <p className="mt-2 text-xs text-ghost">由答题模型基于下面这片记忆上下文生成。</p>
+              <p className="mt-2 text-xs text-ghost">{t.ask.answerNote}</p>
             </Card>
           )}
 
@@ -82,36 +88,38 @@ export default function Ask() {
             <div className="flex flex-wrap items-center gap-x-5 gap-y-2 text-sm">
               <span className="inline-flex items-center gap-2">
                 <Zap className="h-5 w-5 text-brand-cyan" />
-                <span className="font-semibold text-brand-cyan">精炼上下文 {result.tokens_est} tokens</span>
+                <span className="font-semibold text-brand-cyan">{t.ask.lean(result.tokens_est)}</span>
               </span>
               {result.full_tokens != null && (
                 <span className="text-ghost">
-                  全量历史 <span className="text-slate-200">{result.full_tokens.toLocaleString()}</span> tokens
+                  {t.ask.fullLabel} <span className="text-slate-200">{result.full_tokens.toLocaleString()}</span> tokens
                 </span>
               )}
               {result.full_tokens != null && result.full_tokens > result.tokens_est && (
                 <span className="rounded-md bg-brand-mint/15 px-2 py-0.5 font-semibold text-brand-mint">
-                  省 {(result.full_tokens / Math.max(1, result.tokens_est)).toFixed(1)}× · 仅用{' '}
-                  {Math.max(1, Math.round((result.tokens_est / result.full_tokens) * 100))}%
+                  {t.ask.savings(
+                    (result.full_tokens / Math.max(1, result.tokens_est)).toFixed(1),
+                    Math.max(1, Math.round((result.tokens_est / result.full_tokens) * 100)),
+                  )}
                 </span>
               )}
             </div>
-            <p className="mt-1.5 text-xs text-ghost">
-              只把相关的一小片喂给模型，而不是整段历史——历史越长，省得越多。
-            </p>
+            <p className="mt-1.5 text-xs text-ghost">{t.ask.leanNote}</p>
           </div>
 
           {blocks.length ? (
             <div className="space-y-4">
               {blocks.map((b, i) => (
                 <Card key={i}>
-                  <div className="mb-2 text-xs font-semibold uppercase tracking-wider text-brand-cyan">{b.label}</div>
+                  <div className="mb-2 text-xs font-semibold uppercase tracking-wider text-brand-cyan">
+                    {b.key ? t.ask[b.key] : b.rawLabel}
+                  </div>
                   <pre className="whitespace-pre-wrap text-sm leading-relaxed text-slate-200">{b.body}</pre>
                 </Card>
               ))}
             </div>
           ) : (
-            <EmptyState title="这条问题暂时没有检索到记忆" hint="换个说法，或先去存一些记忆。" icon={<Sparkles className="h-6 w-6" />} />
+            <EmptyState title={t.ask.emptyTitle} hint={t.ask.emptyHint} icon={<Sparkles className="h-6 w-6" />} />
           )}
         </>
       )}
