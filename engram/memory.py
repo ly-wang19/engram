@@ -78,16 +78,54 @@ class Memory:
         self.graph = graph_store_factory()
         self.resolver = IdentityResolver()
 
-        self.ingestor = Ingestor(self.episodes_doc, self.episodes_vec, self.embedder, self.resolver)
-        self.engine = ConsolidationEngine(self.fact_store, self.graph, self.embedder, self.config, llm)
-        self.retriever = HybridRetriever(self.fact_store, self.graph, self.embedder, self.config)
-        self.planner = MultiHopPlanner(self.graph, self.fact_store, self.config)
         self.summarizer = SessionSummarizer(llm)
         self.profiles = ProfileBuilder()
         self._persona_cache: dict[str, str] = {}
         # Working memory: the small, currently-attended set assembled for the latest query (the OS-paging
         # "hot" context). Populated by lean_context; inspectable, transient — distinct from the durable stores.
         self.working_set: list[Fact] = []
+        self._persist_path: Optional[str] = None
+        self._rewire()
+
+    def _rewire(self) -> None:
+        """(Re)bind the pipeline components to the current stores. Called at init and after loading a
+        snapshot, so persistence can swap the stores in without touching the embedder/llm (which aren't
+        serialized)."""
+        self.ingestor = Ingestor(self.episodes_doc, self.episodes_vec, self.embedder, self.resolver)
+        self.engine = ConsolidationEngine(self.fact_store, self.graph, self.embedder, self.config, self.llm)
+        self.retriever = HybridRetriever(self.fact_store, self.graph, self.embedder, self.config)
+        self.planner = MultiHopPlanner(self.graph, self.fact_store, self.config)
+
+    # --- persistence (so memory survives across processes/sessions; CLAUDE.md §6) ---
+    def save(self, path: Optional[str] = None) -> None:
+        """Snapshot the durable stores to disk. The embedder/llm are NOT serialized — they're re-attached
+        when you reopen. Plain dataclasses + dicts, so it's a single pickle."""
+        import os
+        import pickle
+
+        path = path or self._persist_path
+        if not path:
+            raise ValueError("no path to save to")
+        os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+        with open(path, "wb") as fh:
+            pickle.dump((self.episodes_doc, self.episodes_vec, self.fact_store, self.cold_store,
+                         self.summary_vec, self.graph, self.resolver, self._persona_cache), fh)
+
+    @classmethod
+    def open(cls, path: str, **kwargs) -> "Memory":
+        """Open a persistent Memory: load the snapshot at `path` if it exists, else start fresh. Pass the
+        same `embedder` / `llm` you want to use (they're not stored). Call `.save()` after writes."""
+        import os
+        import pickle
+
+        mem = cls(**kwargs)
+        if os.path.exists(path):
+            with open(path, "rb") as fh:
+                (mem.episodes_doc, mem.episodes_vec, mem.fact_store, mem.cold_store,
+                 mem.summary_vec, mem.graph, mem.resolver, mem._persona_cache) = pickle.load(fh)
+            mem._rewire()
+        mem._persist_path = path
+        return mem
 
     # --- write path ---
     def add(
