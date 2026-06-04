@@ -6,6 +6,7 @@ export type FactSource = 'extracted' | 'user'
 export interface MemoryFact {
   id: string
   text: string
+  display: string // localized rendering (中文 for Chinese-recorded facts); falls back to text
   subject: string
   predicate: string
   object: string

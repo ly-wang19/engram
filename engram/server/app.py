@@ -290,6 +290,7 @@ def structured_profile(user: str = Depends(auth)):
 def memories(user: str = Depends(auth)):
     """See EVERYTHING stored for this user — the raw episodes, the extracted bi-temporal facts (live and
     superseded, with provenance), and the L2 session summaries. This is the 'look inside my memory' view."""
+    from ..localize import display_of
     from ..util import fmt_date
     mem = mgr().get(user)
     facts = sorted(mem.fact_store.values(), key=lambda f: f.valid_at, reverse=True)
@@ -302,7 +303,8 @@ def memories(user: str = Depends(auth)):
                    "summaries": len(mem.summary_vec.values())},
         "facts": [{
             "id": f.id,
-            "text": f.text, "subject": f.subject, "predicate": f.predicate, "object": f.object,
+            "text": f.text, "display": display_of(f),
+            "subject": f.subject, "predicate": f.predicate, "object": f.object,
             "valid_at": fmt_date(f.valid_at),
             "invalid_at": fmt_date(f.invalid_at) if f.invalid_at else None,
             "status": "live" if f.is_live() else "superseded",

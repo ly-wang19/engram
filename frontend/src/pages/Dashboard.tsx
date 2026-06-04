@@ -91,7 +91,7 @@ export default function Dashboard() {
               {recent.map((f) => (
                 <li key={f.id} className="flex items-baseline gap-2 py-2 text-sm">
                   <time className="shrink-0 text-[11px] tabular-nums text-brand-cyan">{f.valid_at}</time>
-                  <span className="flex-1 text-slate-200">{f.text}</span>
+                  <span className="flex-1 text-slate-200">{f.display || f.text}</span>
                   {f.source === 'user' && <Badge tone="user">🔒</Badge>}
                 </li>
               ))}

@@ -21,8 +21,11 @@ EXTRACT_SYSTEM = (
     "For each preference or dislike stated, output a SEPARATE fact. "
     "Resolve first-person ('I','my','me') to the user's name when it is known in the conversation, "
     "otherwise to \"user\". Capture a stated name as "
-    "{\"subject\":\"user\",\"predicate\":\"name\",\"object\":\"<Name>\"}. Do NOT infer or invent facts "
-    "that are not stated. If there are no durable facts, output []."
+    "{\"subject\":\"user\",\"predicate\":\"name\",\"object\":\"<Name>\"}. "
+    "LANGUAGE: keep subject and object VALUES (names, places, brands, products, free text) in the SAME "
+    "language the user used — do NOT translate them (keep e.g. \"字节跳动\", not \"ByteDance\"). Only the "
+    "predicate stays English snake_case as specified above. "
+    "Do NOT infer or invent facts that are not stated. If there are no durable facts, output []."
 )
 
 EXTRACT_TEMPLATE = "Conversation:\n{content}\n\nJSON facts:"

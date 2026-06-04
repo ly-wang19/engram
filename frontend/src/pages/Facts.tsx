@@ -77,7 +77,7 @@ export default function Facts() {
                 <time className="w-[78px] shrink-0 text-[11px] tabular-nums text-brand-cyan">{f.valid_at}</time>
                 <div className="min-w-0 flex-1">
                   <div className={f.status === 'live' ? 'text-sm text-slate-100' : 'text-sm text-ghost line-through'}>
-                    {f.text}
+                    {f.display || f.text}
                   </div>
                   <div className="mt-0.5 flex flex-wrap items-center gap-2 text-[11px] text-ghost">
                     <span className="rounded bg-white/5 px-1.5 py-px font-mono">{f.predicate}</span>

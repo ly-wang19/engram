@@ -603,3 +603,19 @@ def test_ephemeral_remember_keeps_dated_episode_but_creates_no_durable_fact():
     m.consolidate()
     assert not any("throat" in f.text.lower() for f in m.fact_store.values()), \
         "transient state must not become a durable profile fact"
+
+
+def test_display_localization_keeps_canonical_predicate():
+    """Display localization (i18n): render Chinese-recorded facts naturally WITHOUT changing the canonical
+    English predicate (the slot key). English-recorded facts are left untouched."""
+    from engram.localize import render_display
+    # Chinese object -> localized Chinese display
+    assert render_display("user", "works_at", "字节跳动", "user works at 字节跳动") == "在 字节跳动 工作"
+    assert render_display("user", "favorite_music", "周杰伦", "x") == "最喜欢的音乐是 周杰伦"
+    assert render_display("user", "allergic_to", "花粉", "x") == "对 花粉 过敏"
+    # English data is NOT force-translated
+    assert render_display("user", "works_at", "Acme", "user works at Acme") == "user works at Acme"
+    # the canonical predicate/slot is unchanged by display (engine still dedups on it)
+    m = Memory()
+    f = m.add_fact("user", "works_at", "字节跳动", user_id="u")
+    assert f.predicate == "works_at" and f.slot[2] == "works_at"
