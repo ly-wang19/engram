@@ -95,6 +95,59 @@ print(mem.search("Where does Wei work?", user_id="u1").answer())
 # -> "Moonshot AI"  (the contradicted fact is invalidated, not deleted — history is preserved)
 ```
 
+## Connect it to your agent
+
+Engram ships a full **access layer** so any agent or app can use it — all backed by one multi-tenant
+service (`MemoryService`), where each API key is an isolated memory namespace.
+
+```bash
+pip install "engram-memory[serve]"
+export ENGRAM_OPEN=1                # dev: bearer text is the namespace (use ENGRAM_API_KEYS in prod)
+export ENGRAM_EMBEDDER=bge-small    # or `hashing` for an instant, no-download dev server
+export ENGRAM_LLM=deepseek          # optional: enables /v1/chat/completions generation
+uvicorn engram.server.app:app --port 8000        # HTTP API + management console at /ui
+```
+
+**1. MCP server** — give Claude Desktop / Claude Code / Cursor a persistent memory (`engram_recall`,
+`engram_remember`, `engram_search`, `engram_import`, …):
+
+```bash
+pip install "engram-memory[mcp]"
+python -m engram.mcp                 # local memory at ~/.engram/data (zero external service)
+# or proxy the server above:  python -m engram.mcp --api-url http://localhost:8000 --api-key sk-…
+```
+```jsonc
+// claude_desktop_config.json
+{ "mcpServers": { "engram": { "command": "python", "args": ["-m", "engram.mcp"] } } }
+```
+
+**2. JS/TS SDK + OpenAI-compatible API** — change one URL and your existing OpenAI code gets memory:
+recall + inject before the model answers, remember the turn after.
+
+```ts
+import { EngramClient } from 'engram-memory'                  // npm i engram-memory
+const engram = new EngramClient({ baseUrl: 'http://localhost:8000', apiKey: 'sk-alice-123' })
+await engram.remember('I live in Shenzhen and work at Tencent.')
+const { context } = await engram.recall('where do I live?')
+
+// drop-in OpenAI compatibility (works with the official `openai` SDK too — just set base_url):
+const out = await engram.chat.completions.create({ model: 'engram', messages: [
+  { role: 'user', content: 'Remind me where I work.' } ] })
+```
+
+**3. Batch import** — bring your whole history (ChatGPT export, OpenAI messages, JSONL, transcript;
+auto-detected):
+
+```bash
+python -m engram.connectors --file conversations.json --namespace me     # local, or --api-url …
+```
+```python
+mem.import_data(open("conversations.json").read(), user_id="me")          # in-process
+```
+
+See [`examples/batch_import.py`](examples/batch_import.py) (zero-setup) and
+[`clients/typescript/`](clients/typescript/) for the SDK.
+
 ## How it works
 
 Engram is a **dual-process** memory system, modeled on the human System-1 / System-2 split: a fast write

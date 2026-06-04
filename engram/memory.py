@@ -40,7 +40,7 @@ from .store import (
 )
 from .retrieve.lexical import bm25_scores, overlap_terms
 from .types import Conflict, Episode, Fact, WorkingMemory
-from .util import fmt_date, now
+from .util import DAY, fmt_date, now
 
 # words too generic to confirm an attribute on their own ("favorite food" must not match
 # "favorite programming language" just because both contain "favorite").
@@ -264,6 +264,84 @@ class Memory:
         stats["reflected"] = sum(self.reflect(uid) for uid in {
             ep.user_id for ep in (summary_episodes or self.episodes_doc.values())})
         return stats
+
+    # --- batch import (CLAUDE.md §6 adoption layer): bring your own history in bulk ---
+    def import_messages(
+        self,
+        sessions,
+        user_id: str = "default",
+        consolidate: bool = True,
+        summarize: bool = True,
+        roles: bool = True,
+        batch_size: int = 256,
+        base_time: Optional[float] = None,
+    ) -> dict[str, int]:
+        """Bulk-ingest pre-parsed sessions (from `engram.connectors.parse`) as ONE episode per session,
+        batch-embedding the bodies in a few encode calls and then running ONE System-2 pass over just
+        the new episodes (extract facts + build graph, optionally L2 summaries). This is the efficient
+        path for importing a whole chat history — far cheaper than `add()` per turn (one model.encode of
+        N sessions instead of N).
+
+        `sessions` is an iterable of `ImportSession` (or dicts shaped `{session_id, messages, ...}`).
+        `base_time` supplies a synthetic clock (base + i·day) for sessions the source didn't timestamp,
+        so chronological order is preserved even without dates. Returns ingest + consolidation stats.
+        """
+        from .connectors.base import ImportMessage, ImportSession
+
+        def _coerce(s) -> Optional[ImportSession]:
+            if isinstance(s, ImportSession):
+                return s
+            if isinstance(s, dict) and "messages" in s:
+                msgs = [ImportMessage(content=str(m.get("content", "")),
+                                      speaker=str(m.get("speaker") or m.get("role") or "user"),
+                                      event_time=m.get("event_time"))
+                        for m in s["messages"] if isinstance(m, dict)]
+                return ImportSession(session_id=str(s.get("session_id", "imported")), messages=msgs,
+                                     event_time=s.get("event_time"), title=str(s.get("title", "")))
+            return None
+
+        items = [c for c in (_coerce(s) for s in sessions) if c is not None]
+        base = base_time if base_time is not None else now()
+        texts: list[str] = []
+        metas: list[tuple] = []
+        for i, s in enumerate(items):
+            body = s.to_text(roles=roles)
+            if not body.strip():
+                continue
+            et = s.start_time()
+            et = et if et is not None else base + i * DAY  # synthetic but ordered
+            texts.append(body)
+            metas.append((s.session_id or f"imported_{i}", et, s.title))
+        if not texts:
+            return {"sessions": 0, "episodes": 0, "facts_added": 0, "summaries": 0}
+
+        vecs: list = []
+        for j in range(0, len(texts), batch_size):
+            vecs.extend(self.embedder.embed_batch(texts[j:j + batch_size]))
+
+        new_eps: list[Episode] = []
+        for (sid, et, title), text, vec in zip(metas, texts, vecs):
+            ep = self.add(text, user_id=user_id, session_id=sid, speaker="session",
+                          event_time=et, embedding=vec)
+            ep.metadata["date"] = fmt_date(et)
+            if title:
+                ep.metadata["title"] = title
+            new_eps.append(ep)
+
+        stats = {"sessions": len(new_eps), "episodes": len(new_eps), "facts_added": 0, "summaries": 0}
+        if consolidate:
+            stats["facts_added"] = self.consolidate(new_eps).get("facts_added", 0)
+        if summarize:
+            stats["summaries"] = self.summarize_episodes(new_eps)
+        return stats
+
+    def import_data(self, data, format: str = "auto", user_id: str = "default",
+                    session_id: str = "imported", **kwargs) -> dict[str, int]:
+        """Convenience: parse a raw export (ChatGPT/OpenAI/JSONL/transcript — auto-sniffed) and import it
+        in one call. See `engram.connectors.parse` for formats."""
+        from .connectors import parse
+        return self.import_messages(parse(data, format=format, session_id=session_id),
+                                    user_id=user_id, **kwargs)
 
     def link_identity(self, a: str, b: str) -> str:
         return self.resolver.link(a, b)

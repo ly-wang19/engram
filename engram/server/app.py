@@ -22,20 +22,15 @@ put it behind your auth/gateway to scale to a public service.
 from __future__ import annotations
 
 import os
-import threading
-from collections import OrderedDict
 from typing import Optional
 
 try:
-    from fastapi import Depends, FastAPI, Header, HTTPException
-    from pydantic import BaseModel
+    from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException
+    from pydantic import BaseModel, ConfigDict
 except Exception as exc:  # noqa: BLE001
     raise SystemExit("the server needs FastAPI — `pip install \"engram-memory[server]\"`") from exc
 
-from ..memory import Memory
-
-DATA_DIR = os.environ.get("ENGRAM_DATA_DIR", os.path.expanduser("~/.engram/data"))
-MAX_HOT_USERS = int(os.environ.get("ENGRAM_MAX_HOT_USERS", "64"))  # LRU cap of in-RAM user memories
+from ..service import MemoryService
 
 
 def _load_keys() -> dict[str, str]:
@@ -49,74 +44,23 @@ def _load_keys() -> dict[str, str]:
     return out
 
 
-class MemoryManager:
-    """Per-user persistent Memory with a shared embedder/LLM and an LRU of hot (in-RAM) users."""
-
-    def __init__(self) -> None:
-        from ..llm.providers import load_dotenv, make_embedder, make_llm
-
-        load_dotenv()  # pick up provider keys (ARK_API_KEY, DEEPSEEK_API_KEY, ...) from a local .env
-        os.makedirs(DATA_DIR, exist_ok=True)
-        self.embedder = make_embedder(os.environ.get("ENGRAM_EMBEDDER", "bge-small"))
-        llm_name = os.environ.get("ENGRAM_LLM", "")
-        self.llm = make_llm(llm_name) if llm_name else None  # no LLM -> deterministic rule extractor
-        # answerer for /v1/recall (the console's 问答) — a stronger model than the extractor when set;
-        # otherwise reuse the main LLM. Lets the Ask page show a real answer, not just the context.
-        answerer_name = os.environ.get("ENGRAM_ANSWERER", "")
-        self.answerer = make_llm(answerer_name) if answerer_name else self.llm
-        from ..config import Config
-        self.config = Config()
-        # opt-in System-2 LLM conflict detection -> the detect->confirm loop (needs an LLM)
-        if os.environ.get("ENGRAM_CONFLICT_DETECTION") == "1" and self.llm is not None:
-            self.config.conflict_detection = True
-        self._hot: "OrderedDict[str, Memory]" = OrderedDict()
-        self._locks: dict[str, threading.Lock] = {}
-        self._g = threading.Lock()
-
-    def _path(self, user: str) -> str:
-        safe = "".join(c for c in user if c.isalnum() or c in "-_.") or "default"
-        return os.path.join(DATA_DIR, f"{safe}.pkl")
-
-    def lock(self, user: str) -> threading.Lock:
-        with self._g:
-            return self._locks.setdefault(user, threading.Lock())
-
-    def get(self, user: str) -> Memory:
-        with self._g:
-            if user in self._hot:
-                self._hot.move_to_end(user)
-                return self._hot[user]
-        mem = Memory.open(self._path(user), embedder=self.embedder, llm=self.llm, config=self.config)
-        with self._g:
-            self._hot[user] = mem
-            self._hot.move_to_end(user)
-            while len(self._hot) > MAX_HOT_USERS:
-                self._hot.popitem(last=False)  # evict coldest user from RAM (its disk snapshot remains)
-        return mem
-
-    def forget(self, user: str) -> None:
-        with self._g:
-            self._hot.pop(user, None)
-        p = self._path(user)
-        if os.path.exists(p):
-            os.remove(p)
-
-
 app = FastAPI(title="Engram Memory Service", version="0.1.0",
               description="Multi-tenant long-term memory — connect with a Bearer key and manage your own memory.")
-_mgr: Optional[MemoryManager] = None
+_svc: Optional[MemoryService] = None
 
 
-def mgr() -> MemoryManager:
-    global _mgr
-    if _mgr is None:
-        _mgr = MemoryManager()
-    return _mgr
+def svc() -> MemoryService:
+    """The shared multi-tenant core (one per process). The MCP server and OpenAI-compatible proxy use
+    the same class, so all three surfaces share one implementation."""
+    global _svc
+    if _svc is None:
+        _svc = MemoryService()
+    return _svc
 
 
 @app.on_event("startup")
 def _warmup():
-    mgr()  # load the embedder (and LLM) once at boot, so the first request doesn't race on it
+    svc()  # load the embedder (and LLM) once at boot, so the first request doesn't race on it
 
 
 def auth(authorization: str = Header(default="")) -> str:
@@ -148,7 +92,7 @@ class RecallReq(BaseModel):
 
 @app.get("/health")
 def health():
-    return {"ok": True, "service": "engram", "users_hot": len(mgr()._hot)}
+    return {"ok": True, "service": "engram", "users_hot": svc().hot_count}
 
 
 # The production console (the React app in frontend/) is served at /ui once built; "/" redirects
@@ -245,121 +189,99 @@ async function delFact(id){ if(!confirm('永久删除这条记忆?'))return; awa
 
 @app.post("/v1/remember")
 def remember(req: RememberReq, user: str = Depends(auth)):
-    m = mgr()
-    with m.lock(user):
-        mem = m.get(user)
-        # Route by ephemerality. EITHER WAY the dated episode is stored (so "when did X happen" stays
-        # answerable from history); transient state additionally goes to working memory and is NOT promoted
-        # into a durable profile fact (so it never lingers as a current attribute). `scope` can force it.
-        routed = mem.remember(req.content, user_id=user, session_id=req.session_id, scope=req.scope)
-        if routed["scope"] == "working":
-            mem.save()
-            return {"ok": True, "scope": "working", "kind": routed["kind"], "id": routed["working_id"],
-                    "episode_id": routed["episode_id"],
-                    "note": "kept in dated history (askable later); not added to the durable profile"}
-        # Consolidation/summarization use the LLM; make them BEST-EFFORT so a transient model outage never
-        # loses the memory — the raw episode is already stored and recallable either way.
-        added = 0
-        try:
-            added = mem.consolidate().get("facts_added", 0)         # extract facts + resolve conflicts
-            mem.summarize_episodes(list(mem.episodes_doc.values()))  # L2 summaries for lean recall
-        except Exception as exc:  # noqa: BLE001
-            mem.save()
-            return {"ok": True, "extracted": 0, "degraded": f"{type(exc).__name__}", "stored_raw": True}
-        mem.save()
-        return {"ok": True, "extracted": added,
-                "total_facts": len([f for f in mem.fact_store.values() if f.is_live()])}
-
-
-_ANSWER_SYSTEM = (
-    "你是用户的记忆助手。只依据下面提供的【记忆】回答用户的问题,简洁、准确、口语化。"
-    "带日期的事实里最新的优先(这是知识更新);如果记忆里确实没有相关信息,就直接说「记忆里暂时没有这条」。"
-)
-
-
-def _answer_from_memory(answerer, query: str, ctx: str) -> str:
-    """Generate an answer from the assembled lean context — what an agent using this memory would say."""
-    if answerer is None or not ctx.strip():
-        return ""
-    try:
-        return answerer.complete(f"【记忆】\n{ctx}\n\n【问题】{query}", system=_ANSWER_SYSTEM).strip()
-    except Exception:  # noqa: BLE001 -- never let answering break recall
-        return ""
-
-
-def _est_tokens(text: str) -> int:
-    """A token estimate that's fair for Chinese: each CJK char ≈ 1 token + each non-CJK word ≈ 1 token.
-    (`len(text.split())` undercounts Chinese badly since it isn't whitespace-separated.)"""
-    import re
-    cjk = len(re.findall(r"[一-鿿]", text))
-    words = len(re.findall(r"[A-Za-z0-9]+", re.sub(r"[一-鿿]", " ", text)))
-    return cjk + words
+    # Route by ephemerality inside the service: either way the dated episode is stored (history stays
+    # answerable); transient state also goes to working memory and is NOT promoted into a durable fact.
+    return svc().remember(user, req.content, session_id=req.session_id, scope=req.scope)
 
 
 @app.post("/v1/recall")
 def recall(req: RecallReq, user: str = Depends(auth)):
-    mem = mgr().get(user)
-    if req.lean:
-        ctx = mem.lean_context(req.query, user_id=user, n_chunks=req.n_chunks, session_id=req.session_id)
-        # full-context baseline: what it would cost to stuff the ENTIRE history into the prompt
-        full = "\n".join(ep.content for ep in mem.episodes_doc.values())
-        return {"context": ctx, "tokens_est": _est_tokens(ctx), "full_tokens": _est_tokens(full),
-                "answer": _answer_from_memory(mgr().answerer, req.query, ctx)}
-    res = mem.search(req.query, user_id=user)
-    return {"answer": res.answer(), "facts": [f.text for f in res.facts[:10]]}
+    # answer=True: also generate a real answer over the lean context + report the full-context baseline
+    # token count, so the console's 问答 view can show the answer AND the token saving.
+    return svc().recall(user, req.query, lean=req.lean, n_chunks=req.n_chunks,
+                        session_id=req.session_id, answer=True)
 
 
 @app.get("/v1/profile")
 def profile(user: str = Depends(auth)):
-    mem = mgr().get(user)
-    return {"profile": mem.build_persona(user),
-            "facts": [f.text for f in mem.fact_store.values() if f.is_live()][:50]}
+    return svc().profile(user)
 
 
 @app.get("/v1/profile/structured")
 def structured_profile(user: str = Depends(auth)):
     """L2 structured profile: basic info + preferences (by category) + habits, split into confirmed vs
     待确认 (tentative). Display-only tiering — does NOT affect what recall/search can see."""
-    return mgr().get(user).structured_profile(user)
+    return svc().structured_profile(user)
 
 
 @app.get("/v1/memories")
 def memories(user: str = Depends(auth)):
     """See EVERYTHING stored for this user — the raw episodes, the extracted bi-temporal facts (live and
     superseded, with provenance), and the L2 session summaries. This is the 'look inside my memory' view."""
-    from ..localize import display_of
-    from ..util import fmt_date
-    mem = mgr().get(user)
-    facts = sorted(mem.fact_store.values(), key=lambda f: f.valid_at, reverse=True)
-    return {
-        "user": user,
-        "profile": mem.build_persona(user),
-        "counts": {"episodes": len(mem.episodes_doc.values()),
-                   "facts_live": sum(1 for f in mem.fact_store.values() if f.is_live()),
-                   "facts_superseded": sum(1 for f in mem.fact_store.values() if not f.is_live()),
-                   "summaries": len(mem.summary_vec.values())},
-        "facts": [{
-            "id": f.id,
-            "text": f.text, "display": display_of(f),
-            "subject": f.subject, "predicate": f.predicate, "object": f.object,
-            "valid_at": fmt_date(f.valid_at),
-            "invalid_at": fmt_date(f.invalid_at) if f.invalid_at else None,
-            "status": "live" if f.is_live() else "superseded",
-            "source": f.source,
-            "supersedes": f.supersedes,
-            "category": getattr(f, "category", ""), "sensitive": getattr(f, "sensitive", False),
-            "salience": round(f.salience, 2), "provenance": f.provenance,
-        } for f in facts],
-        "episodes": [{"date": ep.metadata.get("date") or fmt_date(ep.event_time),
-                      "session": ep.session_id, "content": ep.content[:500],
-                      "summary": ep.summary} for ep in mem.episodes_doc.values()],
-    }
+    return svc().memories(user)
 
 
 @app.post("/v1/forget")
 def forget(user: str = Depends(auth)):
-    mgr().forget(user)
-    return {"ok": True, "message": f"all memory for '{user}' erased"}
+    return svc().forget(user)
+
+
+# --- batch import: bring your own history (ChatGPT export / OpenAI messages / JSONL / transcript) ---
+class ImportReq(BaseModel):
+    # Either pass already-parsed `sessions` (from engram.connectors.parse / the import CLI), OR raw
+    # `data` + a `format` to parse server-side. `sessions` wins when both are given.
+    sessions: Optional[list] = None
+    data: Optional[object] = None
+    format: str = "auto"
+    consolidate: bool = True
+    summarize: bool = True
+
+
+@app.post("/v1/import")
+def import_history(req: ImportReq, user: str = Depends(auth)):
+    """Bulk-ingest an external history in one batched pass. See `python -m engram.connectors` for a CLI
+    that parses common exports and posts here."""
+    if req.sessions is None and req.data is None:
+        raise HTTPException(400, "provide either 'sessions' (pre-parsed) or 'data' (+ 'format') to import")
+    return svc().import_(user, sessions=req.sessions, data=req.data, format=req.format,
+                         consolidate=req.consolidate, summarize=req.summarize)
+
+
+# --- OpenAI-compatible chat with transparent memory (drop-in: point your OpenAI client's base_url here) --
+class ChatCompletionReq(BaseModel):
+    model_config = ConfigDict(extra="allow")  # accept (and ignore) temperature/top_p/etc.
+    model: str = "engram"
+    messages: list[dict] = []
+    stream: bool = False
+    memory: Optional[dict] = None  # Engram extension: {"recall": bool, "remember": bool, "n_chunks": int}
+
+
+@app.post("/v1/chat/completions")
+def chat_completions(req: ChatCompletionReq, background: BackgroundTasks, user: str = Depends(auth)):
+    """OpenAI-compatible chat completions, augmented with long-term memory: recall a relevant slice for
+    the latest user turn, inject it, generate with the configured LLM, then remember the turn off the
+    critical path. Set body.memory={"recall":false} or {"remember":false} to disable either half."""
+    from . import openai_compat as oc
+
+    if not req.messages:
+        raise HTTPException(400, "messages must be a non-empty list")
+    opts = req.memory or {}
+    body = req.model_dump()
+    try:
+        resp = oc.chat_completion(svc(), user, body, n_chunks=int(opts.get("n_chunks", 6)),
+                                  do_recall=opts.get("recall", True))
+    except oc.NoLLMConfigured as exc:
+        raise HTTPException(503, str(exc))
+
+    user_text = oc.latest_user_text(body.get("messages", []))
+    if opts.get("remember", True) and user_text:
+        background.add_task(svc().remember, user, user_text)  # write off the response path (System-2)
+        resp["engram"]["remembered"] = True
+
+    if req.stream:
+        from fastapi.responses import StreamingResponse
+        return StreamingResponse(oc.iter_sse(resp), media_type="text/event-stream")
+    return resp
 
 
 # --- user-authored memory management (the editable layer; user assertions are authoritative) ---
@@ -380,37 +302,23 @@ class FactEdit(BaseModel):
 @app.post("/v1/facts")
 def add_fact(req: FactReq, user: str = Depends(auth)):
     """Manually add a fact you assert — it's authoritative and won't be auto-overwritten."""
-    m = mgr()
-    with m.lock(user):
-        mem = m.get(user)
-        f = mem.add_fact(req.subject, req.predicate, req.object, user_id=user)
-        mem.save()
-        return {"ok": True, "id": f.id, "text": f.text}
+    return svc().add_fact(user, req.subject, req.predicate, req.object)
 
 
 @app.patch("/v1/facts/{fact_id}")
 def edit_fact(fact_id: str, req: FactEdit, user: str = Depends(auth)):
     """Edit a fact's fields; the edit becomes user-authored and sticks."""
-    m = mgr()
-    with m.lock(user):
-        mem = m.get(user)
-        f = mem.update_fact(fact_id, subject=req.subject, predicate=req.predicate, object=req.object,
-                            sensitive=req.sensitive, category=req.category)
-        if f is None:
-            raise HTTPException(404, "fact not found")
-        mem.save()
-        return {"ok": True, "id": f.id, "text": f.text}
+    result = svc().update_fact(user, fact_id, subject=req.subject, predicate=req.predicate,
+                               object=req.object, sensitive=req.sensitive, category=req.category)
+    if result is None:
+        raise HTTPException(404, "fact not found")
+    return result
 
 
 @app.delete("/v1/facts/{fact_id}")
 def remove_fact(fact_id: str, user: str = Depends(auth)):
     """Right-to-forget: permanently delete a single fact."""
-    m = mgr()
-    with m.lock(user):
-        mem = m.get(user)
-        ok = mem.delete_fact(fact_id)
-        mem.save()
-        return {"ok": ok}
+    return svc().delete_fact(user, fact_id)
 
 
 # --- ③ focus areas: customize what memory emphasizes (track) or suppresses (mute) ---
@@ -421,19 +329,14 @@ class FocusReq(BaseModel):
 
 @app.get("/v1/focus")
 def get_focus(user: str = Depends(auth)):
-    return mgr().get(user).get_focus()
+    return svc().get_focus(user)
 
 
 @app.put("/v1/focus")
 def put_focus(req: FocusReq, user: str = Depends(auth)):
     """Set the user's tracked / muted topics. Tracked topics gain salience (rank higher, stay hot);
     muted topics are hidden from recall + profile."""
-    m = mgr()
-    with m.lock(user):
-        mem = m.get(user)
-        focus = mem.set_focus(track=req.track, mute=req.mute)
-        mem.save()
-        return {"ok": True, "focus": focus}
+    return svc().set_focus(user, track=req.track, mute=req.mute)
 
 
 # --- memory policy: editable prompts + "what to record" directive (the 记忆策略 page) ---
@@ -447,20 +350,14 @@ class PolicyReq(BaseModel):
 @app.get("/v1/policy")
 def get_policy(user: str = Depends(auth)):
     """The user's prompt overrides AND the built-in defaults (so the console can show/edit either)."""
-    return mgr().get(user).get_policy()
+    return svc().get_policy(user)
 
 
 @app.put("/v1/policy")
 def put_policy(req: PolicyReq, user: str = Depends(auth)):
     """Set the editable extraction/summary/persona prompts and the 'what to record' directive. Takes
     effect on the next remember()/consolidation."""
-    m = mgr()
-    with m.lock(user):
-        mem = m.get(user)
-        fields = {k: v for k, v in req.dict().items() if v is not None}
-        result = mem.set_policy(**fields)
-        mem.save()
-        return {"ok": True, **result}
+    return svc().set_policy(user, **req.model_dump())
 
 
 # --- ① working memory: ephemeral, session/TTL-scoped state kept out of long-term ---
@@ -474,78 +371,45 @@ class WorkingReq(BaseModel):
 @app.post("/v1/working")
 def add_working(req: WorkingReq, user: str = Depends(auth)):
     """Store an ephemeral item (won't be consolidated into long-term or the profile)."""
-    m = mgr()
-    with m.lock(user):
-        mem = m.get(user)
-        wm = mem.remember_working(req.content, user_id=user, session_id=req.session_id,
-                                  kind=req.kind, ttl_seconds=req.ttl_seconds)
-        mem.save()
-        return {"ok": True, "id": wm.id, "kind": wm.kind, "expires_at": wm.expires_at}
+    return svc().add_working(user, req.content, session_id=req.session_id, kind=req.kind,
+                             ttl_seconds=req.ttl_seconds)
 
 
 @app.get("/v1/working")
 def list_working(session_id: Optional[str] = None, user: str = Depends(auth)):
     """Live working-memory items (optionally scoped to a session). Expired/consumed are excluded."""
-    from ..util import fmt_date
-    mem = mgr().get(user)
-    items = mem.working_memory(user, session_id=session_id)
-    return {"items": [{
-        "id": w.id, "content": w.content, "kind": w.kind, "session_id": w.session_id,
-        "created": fmt_date(w.created_at),
-        "expires_at": fmt_date(w.expires_at) if w.expires_at else None,
-    } for w in items]}
+    return svc().working_memory(user, session_id=session_id)
 
 
 @app.delete("/v1/working")
 def clear_working(session_id: str, user: str = Depends(auth)):
     """End-of-session / power-cycle clear: drop this session's working memory."""
-    m = mgr()
-    with m.lock(user):
-        mem = m.get(user)
-        n = mem.clear_session(user, session_id)
-        mem.save()
-        return {"ok": True, "cleared": n}
+    return svc().clear_working(user, session_id)
 
 
-# --- suspected conflicts (LLM-detected, user-confirmed) ---
+# --- suspected conflicts (LLM-detected in System-2, user-confirmed; never auto-resolved) ---
 class ResolveReq(BaseModel):
     keep: str = "newer"  # newer | older | both(=dismiss)
 
 
 @app.get("/v1/conflicts")
 def conflicts(user: str = Depends(auth)):
-    """Suspected conflicts awaiting the user's decision (never auto-resolved)."""
-    from ..localize import display_of
-    mem = mgr().get(user)
-
-    def disp(fid, fallback):
-        f = mem.fact_store.get(fid)
-        return display_of(f) if f is not None else fallback
-
-    return {"conflicts": [{
-        "id": c.id, "older": c.older, "newer": c.newer,
-        "older_text": disp(c.older, c.text_older), "newer_text": disp(c.newer, c.text_newer),
-        "reason": c.reason,
-    } for c in mem.pending_conflicts(user)]}
+    """Suspected conflicts awaiting the user's decision (never auto-resolved). Needs the System-2 LLM
+    detector enabled (ENGRAM_CONFLICT_DETECTION=1)."""
+    return svc().conflicts(user)
 
 
 @app.post("/v1/conflicts/{conflict_id}/resolve")
 def resolve_conflict(conflict_id: str, req: ResolveReq, user: str = Depends(auth)):
     """Apply the user's decision: keep newer/older (supersede the other) or both (dismiss)."""
-    m = mgr()
-    with m.lock(user):
-        mem = m.get(user)
-        ok = (mem.dismiss_conflict(conflict_id) if req.keep == "both"
-              else mem.resolve_conflict(conflict_id, keep=req.keep))
-        mem.save()
-        return {"ok": ok}
+    return svc().resolve_conflict(user, conflict_id, keep=req.keep)
 
 
 # --- ② semantic graph for the 关系图谱 visualization ---
 @app.get("/v1/graph")
 def graph(user: str = Depends(auth)):
     """Nodes (entities) + edges (bi-temporal relations) of this user's semantic graph."""
-    return mgr().get(user).graph_data(user)
+    return svc().graph(user)
 
 
 # --- ④ privacy: full data export (GDPR-style portability); erase is POST /v1/forget ---
@@ -556,31 +420,7 @@ def export(include_sensitive: bool = True, user: str = Depends(auth)):
     `include_sensitive=false` redacts facts tagged sensitive (feature ⑤) for safe sharing."""
     from fastapi.responses import JSONResponse
 
-    from ..util import fmt_date
-    mem = mgr().get(user)
-    _facts = [f for f in mem.fact_store.values() if include_sensitive or not getattr(f, "sensitive", False)]
-    data = {
-        "engram_export_version": 1,
-        "user": user,
-        "profile": mem.build_persona(user),
-        "focus": mem.get_focus(),
-        "facts": [{
-            "id": f.id, "subject": f.subject, "predicate": f.predicate, "object": f.object,
-            "text": f.text, "source": f.source, "status": "live" if f.is_live() else "superseded",
-            "category": getattr(f, "category", ""), "sensitive": getattr(f, "sensitive", False),
-            "salience": round(f.salience, 3), "confidence": f.confidence,
-            "valid_at": f.valid_at, "valid_at_h": fmt_date(f.valid_at),
-            "invalid_at": f.invalid_at, "invalid_at_h": fmt_date(f.invalid_at) if f.invalid_at else None,
-            "created_at": f.created_at, "expired_at": f.expired_at,
-            "supersedes": f.supersedes, "provenance": f.provenance,
-        } for f in sorted(_facts, key=lambda x: x.valid_at, reverse=True)],
-        "episodes": [{
-            "id": ep.id, "session_id": ep.session_id, "speaker": ep.speaker,
-            "event_time": ep.event_time, "date": ep.metadata.get("date") or fmt_date(ep.event_time),
-            "content": ep.content, "summary": ep.summary,
-        } for ep in mem.episodes_doc.values()],
-        "graph": mem.graph_data(user),
-    }
+    data = svc().export(user, include_sensitive=include_sensitive)
     fname = f"engram_{''.join(c for c in user if c.isalnum()) or 'me'}_export.json"
     return JSONResponse(data, headers={"Content-Disposition": f'attachment; filename="{fname}"'})
 
