@@ -71,6 +71,7 @@ class Rig:
     sc_k: int = 5
     persona: bool = False
     session_map: bool = False
+    cascade: bool = False  # engram_lean: coarse-to-fine drill (necessary at _M/10M scale)
     summ_k: int = 25      # engram_lean: how many sessions to summarize (high-recall coverage)
     n_summaries: int = 12  # engram_lean: how many session summaries to retrieve into the lean context
     agentic: bool = False
@@ -233,7 +234,7 @@ class EngramLeanSystem:
         )
         return mem.lean_context(
             q, user_id=qid, n_summaries=rig.n_summaries, n_facts=rig.topk,
-            n_chunks=rig.chunks, persona=rig.persona, agentic=rig.agentic,
+            n_chunks=rig.chunks, persona=rig.persona, agentic=rig.agentic, cascade=rig.cascade,
         )
 
 
@@ -326,6 +327,8 @@ def main():
                     help="engram_lean: number of sessions to summarize for the L2 index (default 25)")
     ap.add_argument("--n-summaries", type=int, default=12, dest="n_summaries",
                     help="engram_lean: number of session summaries to pull into the lean context (default 12)")
+    ap.add_argument("--cascade", action="store_true",
+                    help="engram_lean: coarse-to-fine drill (detail from top summaries) — needed at _M/10M scale")
     ap.add_argument("--agentic", action="store_true", help="engram: LLM-decomposed iterative retrieval (M2a)")
     ap.add_argument("--timeline", action="store_true", help="engram: prepend a chronological timeline (M2b)")
     ap.add_argument("--hyde", action="store_true", help="engram: HyDE query expansion for recall (M2c)")
@@ -390,7 +393,8 @@ def main():
         reranker=make_reranker(args.reranker),
         topk=args.topk, chunks=args.chunks, extract_k=args.extract_k,
         reasoning=args.reasoning, strategies=args.strategies, sc_on=args.sc_on, sc_k=args.sc_k,
-        persona=args.persona, session_map=args.session_map, summ_k=args.summ_k, n_summaries=args.n_summaries,
+        persona=args.persona, session_map=args.session_map, cascade=args.cascade,
+        summ_k=args.summ_k, n_summaries=args.n_summaries,
         agentic=args.agentic, timeline=args.timeline, hyde=args.hyde, graph=args.graph, wiki=args.wiki,
         summary=args.summary, verify=args.verify, intent=args.intent,
     )
