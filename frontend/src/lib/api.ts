@@ -1,4 +1,5 @@
 import { currentKey, useAuth } from '../store/auth'
+import { getT } from '../i18n'
 import type {
   Conflict,
   Focus,
@@ -40,10 +41,10 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   if (res.status === 401) {
     // Stale / wrong key — drop it so the app returns to the login gate.
     useAuth.getState().logout()
-    throw new ApiError(401, 'API key 无效或已失效，请重新登录。')
+    throw new ApiError(401, getT().errors.unauthorized)
   }
   if (!res.ok) {
-    let detail = `请求失败 (${res.status})`
+    let detail = getT().errors.requestFailed(res.status)
     try {
       const body = await res.json()
       if (body?.detail) detail = typeof body.detail === 'string' ? body.detail : JSON.stringify(body.detail)
@@ -124,7 +125,7 @@ export const api = {
     const res = await fetch(`${BASE}/v1/export${qs}`, {
       headers: key ? { Authorization: `Bearer ${key}` } : undefined,
     })
-    if (!res.ok) throw new ApiError(res.status, `导出失败 (${res.status})`)
+    if (!res.ok) throw new ApiError(res.status, getT().errors.exportFailed(res.status))
     const blob = await res.blob()
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')

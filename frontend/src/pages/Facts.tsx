@@ -12,6 +12,7 @@ import {
   useMemories,
   useResolveConflict,
 } from '../hooks/queries'
+import { useT } from '../i18n'
 import type { MemoryFact } from '../types'
 
 export default function Facts() {
@@ -19,6 +20,7 @@ export default function Facts() {
   const addFact = useAddFact()
   const editFact = useEditFact()
   const deleteFact = useDeleteFact()
+  const t = useT()
 
   const [q, setQ] = useState('')
   const [showOld, setShowOld] = useState(true)
@@ -38,17 +40,17 @@ export default function Facts() {
 
   const sensitiveCount = (data?.facts ?? []).filter((f) => f.sensitive).length
 
-  if (isLoading) return <Spinner label="加载事实…" />
+  if (isLoading) return <Spinner label={t.facts.loading} />
   if (isError) return <ErrorState message={(error as Error).message} />
 
   return (
     <div className="space-y-6">
       <PageHeader
-        title="事实管理"
-        subtitle="每条事实都有双时间轴与来源。你手动改/加的会被锁定 🔒，不会被自动抽取覆盖。"
+        title={t.facts.title}
+        subtitle={t.facts.subtitle}
         actions={
           <Button onClick={() => setAdding(true)}>
-            <Plus className="h-4 w-4" /> 手动加一条
+            <Plus className="h-4 w-4" /> {t.facts.addManual}
           </Button>
         }
       />
@@ -62,18 +64,19 @@ export default function Facts() {
             <Search className="h-4 w-4 text-ghost" />
             <input
               className="w-full bg-transparent py-2 text-sm outline-none placeholder:text-ghost/70"
-              placeholder="搜索事实…"
+              placeholder={t.facts.searchPlaceholder}
               value={q}
               onChange={(e) => setQ(e.target.value)}
             />
           </div>
           <label className="flex select-none items-center gap-2 px-1 text-sm text-ghost">
             <input type="checkbox" checked={showOld} onChange={(e) => setShowOld(e.target.checked)} className="accent-brand-cyan" />
-            显示历史
+            {t.facts.showOld}
           </label>
           <label className="flex select-none items-center gap-2 px-1 text-sm text-ghost">
             <input type="checkbox" checked={hideSensitive} onChange={(e) => setHideSensitive(e.target.checked)} className="accent-brand-rose" />
-            隐藏敏感{sensitiveCount > 0 && <span className="text-brand-rose">({sensitiveCount})</span>}
+            {t.facts.hideSensitive}
+            {sensitiveCount > 0 && <span className="text-brand-rose">({sensitiveCount})</span>}
           </label>
         </div>
       </Card>
@@ -83,7 +86,7 @@ export default function Facts() {
           <ul className="divide-y divide-line">
             {facts.map((f) => (
               <li key={f.id} className="group flex items-center gap-3 py-3">
-                <Badge tone={f.status === 'live' ? 'live' : 'old'}>{f.status === 'live' ? '当前' : '历史'}</Badge>
+                <Badge tone={f.status === 'live' ? 'live' : 'old'}>{f.status === 'live' ? t.facts.statusLive : t.facts.statusOld}</Badge>
                 <time className="w-[78px] shrink-0 text-[11px] tabular-nums text-brand-cyan">{f.valid_at}</time>
                 <div className="min-w-0 flex-1">
                   <div className={f.status === 'live' ? 'text-sm text-slate-100' : 'text-sm text-ghost line-through'}>
@@ -96,29 +99,29 @@ export default function Facts() {
                     )}
                     {f.sensitive && (
                       <span className="inline-flex items-center gap-1 rounded bg-brand-rose/15 px-1.5 py-px text-brand-rose">
-                        <ShieldAlert className="h-3 w-3" /> 敏感
+                        <ShieldAlert className="h-3 w-3" /> {t.facts.sensitive}
                       </span>
                     )}
                     {f.source === 'user' && (
                       <span className="inline-flex items-center gap-1 text-brand-amber">
-                        <Lock className="h-3 w-3" /> 我设定
+                        <Lock className="h-3 w-3" /> {t.common.mine}
                       </span>
                     )}
-                    {f.invalid_at && <span>失效于 {f.invalid_at}</span>}
+                    {f.invalid_at && <span>{t.facts.invalidAt(f.invalid_at)}</span>}
                   </div>
                 </div>
                 <div className="flex shrink-0 items-center gap-1 opacity-0 transition group-hover:opacity-100">
                   <button
                     onClick={() => setEditing(f)}
                     className="rounded-lg border border-line p-2 text-ghost transition hover:border-brand-cyan/50 hover:text-brand-cyan"
-                    title="编辑"
+                    title={t.common.edit}
                   >
                     <Pencil className="h-4 w-4" />
                   </button>
                   <button
                     onClick={() => setConfirmId(f.id)}
                     className="rounded-lg border border-line p-2 text-ghost transition hover:border-brand-rose/50 hover:text-brand-rose"
-                    title="删除"
+                    title={t.common.delete}
                   >
                     <Trash2 className="h-4 w-4" />
                   </button>
@@ -127,14 +130,14 @@ export default function Facts() {
             ))}
           </ul>
         ) : (
-          <EmptyState title="没有匹配的事实" hint="换个关键词，或手动加一条。" />
+          <EmptyState title={t.facts.emptyTitle} hint={t.facts.emptyHint} />
         )}
       </Card>
 
       {/* edit */}
       <FactModal
         open={!!editing}
-        title="编辑事实"
+        title={t.facts.editTitle}
         initial={editing ?? undefined}
         loading={editFact.isPending}
         onClose={() => setEditing(null)}
@@ -144,7 +147,7 @@ export default function Facts() {
             { id: editing.id, patch: vals },
             {
               onSuccess: () => {
-                toast.success('已更新并锁定 🔒')
+                toast.success(t.facts.updated)
                 setEditing(null)
               },
               onError: (e) => toast.error(String((e as Error).message)),
@@ -156,7 +159,7 @@ export default function Facts() {
       {/* add */}
       <FactModal
         open={adding}
-        title="手动添加事实"
+        title={t.facts.addTitle}
         loading={addFact.isPending}
         onClose={() => setAdding(false)}
         onSubmit={(vals) => {
@@ -164,7 +167,7 @@ export default function Facts() {
             { subject: vals.subject || 'user', predicate: vals.predicate!, object: vals.object! },
             {
               onSuccess: () => {
-                toast.success('已添加（来源：我设定）')
+                toast.success(t.facts.added)
                 setAdding(false)
               },
               onError: (e) => toast.error(String((e as Error).message)),
@@ -176,17 +179,17 @@ export default function Facts() {
       {/* delete */}
       <ConfirmDialog
         open={!!confirmId}
-        title="永久删除这条记忆？"
+        title={t.facts.deleteTitle}
         danger
-        confirmLabel="删除"
+        confirmLabel={t.common.delete}
         loading={deleteFact.isPending}
-        body="这是用户发起的彻底擦除（不同于自动失效会保留历史）。删除后无法恢复。"
+        body={t.facts.deleteBody}
         onClose={() => setConfirmId(null)}
         onConfirm={() => {
           if (!confirmId) return
           deleteFact.mutate(confirmId, {
             onSuccess: () => {
-              toast.success('已删除')
+              toast.success(t.facts.deleted)
               setConfirmId(null)
             },
             onError: (e) => toast.error(String((e as Error).message)),
@@ -200,6 +203,7 @@ export default function Facts() {
 function ConflictsCard() {
   const { data } = useConflicts()
   const resolve = useResolveConflict()
+  const t = useT()
   const items = data?.conflicts ?? []
   if (!items.length) return null
 
@@ -211,9 +215,9 @@ function ConflictsCard() {
 
   return (
     <Card className="!border-brand-amber/30 !bg-brand-amber/[0.06]">
-      <CardTitle hint="LLM 检测 · 你来定 · 绝不自动覆盖">
+      <CardTitle hint={t.facts.conflictsHint}>
         <span className="inline-flex items-center gap-2 text-brand-amber">
-          <GitMerge className="h-4 w-4" /> 记忆冲突待确认 · {items.length}
+          <GitMerge className="h-4 w-4" /> {t.facts.conflictsTitle(items.length)}
         </span>
       </CardTitle>
       <ul className="space-y-3">
@@ -221,21 +225,21 @@ function ConflictsCard() {
           <li key={c.id} className="rounded-xl border border-line bg-white/[0.02] p-3">
             <div className="grid gap-1.5 sm:grid-cols-2">
               <div className="rounded-lg bg-brand-mint/10 px-2.5 py-1.5 text-sm">
-                <span className="text-[10px] text-brand-mint">新</span>
+                <span className="text-[10px] text-brand-mint">{t.facts.conflictNew}</span>
                 <div className="text-slate-100">{c.newer_text}</div>
               </div>
               <div className="rounded-lg bg-white/5 px-2.5 py-1.5 text-sm">
-                <span className="text-[10px] text-ghost">旧</span>
+                <span className="text-[10px] text-ghost">{t.facts.conflictOld}</span>
                 <div className="text-ghost line-through">{c.older_text}</div>
               </div>
             </div>
             <div className="mt-2.5 flex flex-wrap gap-2">
-              <Button onClick={() => act(c.id, 'newer', '已保留新的，旧的失效')}>保留新的（覆盖旧）</Button>
-              <Button variant="ghost" onClick={() => act(c.id, 'older', '已保留旧的')}>
-                保留旧的
+              <Button onClick={() => act(c.id, 'newer', t.facts.keepNewerToast)}>{t.facts.keepNewer}</Button>
+              <Button variant="ghost" onClick={() => act(c.id, 'older', t.facts.keepOlderToast)}>
+                {t.facts.keepOlder}
               </Button>
-              <Button variant="ghost" onClick={() => act(c.id, 'both', '已忽略，两条都保留')}>
-                都保留
+              <Button variant="ghost" onClick={() => act(c.id, 'both', t.facts.keepBothToast)}>
+                {t.facts.keepBoth}
               </Button>
             </div>
           </li>
@@ -260,6 +264,7 @@ function FactModal({
   onClose: () => void
   onSubmit: (vals: { subject?: string; predicate?: string; object?: string; sensitive?: boolean }) => void
 }) {
+  const t = useT()
   const [subject, setSubject] = useState('user')
   const [predicate, setPredicate] = useState('')
   const [object, setObject] = useState('')
@@ -284,29 +289,29 @@ function FactModal({
       footer={
         <>
           <Button variant="ghost" onClick={onClose}>
-            取消
+            {t.common.cancel}
           </Button>
           <Button loading={loading} disabled={!predicate.trim() || !object.trim()} onClick={() => onSubmit({ subject, predicate, object, sensitive })}>
-            保存
+            {t.common.save}
           </Button>
         </>
       }
     >
       <div className="space-y-4">
-        <Field label="主语 Subject">
+        <Field label={t.facts.subjectLabel}>
           <input className="input" value={subject} onChange={(e) => setSubject(e.target.value)} placeholder="user" />
         </Field>
-        <Field label="谓语 Predicate">
+        <Field label={t.facts.predicateLabel}>
           <input className="input font-mono" value={predicate} onChange={(e) => setPredicate(e.target.value)} placeholder="works_at" />
         </Field>
-        <Field label="宾语 Object">
-          <input className="input" value={object} onChange={(e) => setObject(e.target.value)} placeholder="字节跳动" />
+        <Field label={t.facts.objectLabel}>
+          <input className="input" value={object} onChange={(e) => setObject(e.target.value)} placeholder={t.facts.objectPlaceholder} />
         </Field>
         <label className="flex select-none items-center gap-2 text-sm text-slate-200">
           <input type="checkbox" checked={sensitive} onChange={(e) => setSensitive(e.target.checked)} className="accent-brand-rose" />
-          <ShieldAlert className="h-4 w-4 text-brand-rose" /> 标记为敏感（导出/共享时可一键排除）
+          <ShieldAlert className="h-4 w-4 text-brand-rose" /> {t.facts.markSensitive}
         </label>
-        <p className="text-xs text-ghost">保存后这条会被标记为“我设定”，自动抽取不会再覆盖它。</p>
+        <p className="text-xs text-ghost">{t.facts.modalNote}</p>
       </div>
     </Modal>
   )

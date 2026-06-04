@@ -13,22 +13,25 @@ import {
   X,
 } from 'lucide-react'
 
+import { useT } from '../i18n'
+import type { Dict } from '../i18n/en'
 import { cx } from './ui'
 
-const NAV = [
-  { to: '/', label: '总览', icon: LayoutDashboard, end: true },
-  { to: '/profile', label: '用户画像', icon: UserRound },
-  { to: '/ask', label: '记忆问答', icon: Search },
-  { to: '/facts', label: '事实管理', icon: Database },
-  { to: '/timeline', label: '时间线', icon: Clock },
-  { to: '/graph', label: '关系图谱', icon: Share2 },
-  { to: '/focus', label: '关注点', icon: Target },
-  { to: '/conversations', label: '原始对话', icon: MessagesSquare },
-  { to: '/settings', label: '记忆策略', icon: SlidersHorizontal },
-  { to: '/privacy', label: '隐私与数据', icon: ShieldCheck },
+const NAV: Array<{ to: string; key: keyof Dict['nav']; icon: typeof LayoutDashboard; end?: boolean }> = [
+  { to: '/', key: 'dashboard', icon: LayoutDashboard, end: true },
+  { to: '/profile', key: 'profile', icon: UserRound },
+  { to: '/ask', key: 'ask', icon: Search },
+  { to: '/facts', key: 'facts', icon: Database },
+  { to: '/timeline', key: 'timeline', icon: Clock },
+  { to: '/graph', key: 'graph', icon: Share2 },
+  { to: '/focus', key: 'focus', icon: Target },
+  { to: '/conversations', key: 'conversations', icon: MessagesSquare },
+  { to: '/settings', key: 'settings', icon: SlidersHorizontal },
+  { to: '/privacy', key: 'privacy', icon: ShieldCheck },
 ]
 
 export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const t = useT()
   return (
     <>
       {open && <div className="fixed inset-0 z-30 bg-black/50 backdrop-blur-sm lg:hidden" onClick={onClose} />}
@@ -62,14 +65,14 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
               }
             >
               <item.icon className="h-[18px] w-[18px]" />
-              {item.label}
+              {t.nav[item.key]}
             </NavLink>
           ))}
         </nav>
 
         <div className="px-5 py-4 text-[11px] leading-relaxed text-ghost">
           <p className="font-semibold text-slate-300">Engram</p>
-          <p>开源长期记忆引擎 · 你的记忆只属于你</p>
+          <p>{t.nav.tagline}</p>
         </div>
       </aside>
     </>
@@ -77,12 +80,13 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
 }
 
 export function Brand() {
+  const t = useT()
   return (
     <div className="flex items-center gap-2.5">
       <span className="text-2xl">🧠</span>
       <div className="leading-tight">
         <div className="bg-brand-gradient bg-clip-text text-base font-extrabold text-transparent">Engram</div>
-        <div className="text-[10px] tracking-[0.18em] text-ghost">记忆控制台</div>
+        <div className="text-[10px] tracking-[0.18em] text-ghost">{t.nav.consoleSub}</div>
       </div>
     </div>
   )

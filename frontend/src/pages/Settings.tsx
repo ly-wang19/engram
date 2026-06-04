@@ -4,17 +4,20 @@ import { ChevronDown, RotateCcw, Save, Sparkles, Wand2 } from 'lucide-react'
 import { Badge, Button, Card, CardTitle, ErrorState, PageHeader, Spinner, cx } from '../components/ui'
 import { toast } from '../components/Toast'
 import { usePolicy, useSetPolicy } from '../hooks/queries'
+import { useT } from '../i18n'
 import type { Policy } from '../types'
-
-const PROMPT_FIELDS: Array<{ key: keyof Policy; label: string; hint: string }> = [
-  { key: 'extract_system', label: '抽取提示词', hint: '决定从对话里抽出哪些原子事实（主语·谓语·宾语）' },
-  { key: 'summary_system', label: '会话摘要提示词', hint: '决定每段会话如何被压缩成 L2 摘要' },
-  { key: 'persona_system', label: '用户画像提示词', hint: '决定如何把事实合成为 L3 用户画像' },
-]
 
 export default function Settings() {
   const { data, isLoading, isError, error } = usePolicy()
   const save = useSetPolicy()
+  const t = useT()
+
+  // Built inside the component so the labels follow the active language.
+  const PROMPT_FIELDS: Array<{ key: keyof Policy; label: string; hint: string }> = [
+    { key: 'extract_system', label: t.settings.promptExtractLabel, hint: t.settings.promptExtractHint },
+    { key: 'summary_system', label: t.settings.promptSummaryLabel, hint: t.settings.promptSummaryHint },
+    { key: 'persona_system', label: t.settings.promptPersonaLabel, hint: t.settings.promptPersonaHint },
+  ]
 
   const [instruction, setInstruction] = useState('')
   const [prompts, setPrompts] = useState<Record<string, string>>({})
@@ -32,7 +35,7 @@ export default function Settings() {
     }
   }, [data, dirty])
 
-  if (isLoading) return <Spinner label="加载记忆策略…" />
+  if (isLoading) return <Spinner label={t.settings.loading} />
   if (isError) return <ErrorState message={(error as Error).message} />
   if (!data) return null
 
@@ -49,7 +52,7 @@ export default function Settings() {
     save.mutate(patch, {
       onSuccess: () => {
         setDirty(false)
-        toast.success('已保存——下次记忆/整理时即按新策略执行')
+        toast.success(t.settings.saved)
       },
       onError: (e) => toast.error(String((e as Error).message)),
     })
@@ -63,29 +66,30 @@ export default function Settings() {
   return (
     <div className="space-y-6">
       <PageHeader
-        title="记忆策略"
-        subtitle="自定义“要记录什么记忆”，以及抽取/摘要/画像的提示词。改动只作用于你自己，下次整理即生效。"
+        title={t.settings.title}
+        subtitle={t.settings.subtitle}
         actions={
           <Button onClick={onSave} loading={save.isPending} disabled={!dirty}>
-            <Save className="h-4 w-4" /> 保存
+            <Save className="h-4 w-4" /> {t.common.save}
           </Button>
         }
       />
 
       {/* headline: what to record */}
       <Card>
-        <CardTitle hint="会追加到抽取提示词，作用于真实抽取">
+        <CardTitle hint={t.settings.recordHint}>
           <span className="inline-flex items-center gap-2">
-            <Wand2 className="h-4 w-4 text-brand-cyan" /> 要记录哪些记忆
+            <Wand2 className="h-4 w-4 text-brand-cyan" /> {t.settings.recordTitle}
           </span>
         </CardTitle>
         <p className="mb-3 text-sm leading-relaxed text-ghost">
-          用自然语言告诉记忆引擎：<span className="text-slate-200">重点记录什么、忽略什么</span>。例如
-          “重点记录我的工作项目、健康数据、家人信息；忽略寒暄和无关闲聊”。
+          {t.settings.recordDescPre}
+          <span className="text-slate-200">{t.settings.recordDescEmph}</span>
+          {t.settings.recordDescPost}
         </p>
         <textarea
           className="input min-h-[110px] resize-y leading-relaxed"
-          placeholder={'例如：\n· 重点记录我的健身计划、体检指标、读书笔记\n· 不要记录天气、问候这类闲聊\n· 涉及金额时务必带上日期'}
+          placeholder={t.settings.recordPlaceholder}
           value={instruction}
           onChange={(e) => {
             setDirty(true)
@@ -101,7 +105,7 @@ export default function Settings() {
           onClick={() => setAdvanced((v) => !v)}
         >
           <span className="inline-flex items-center gap-2 text-sm font-semibold text-brand-violet">
-            <Sparkles className="h-4 w-4" /> 高级：直接编辑提示词
+            <Sparkles className="h-4 w-4" /> {t.settings.advancedToggle}
           </span>
           <ChevronDown className={cx('h-4 w-4 text-ghost transition', advanced && 'rotate-180')} />
         </button>
@@ -114,7 +118,7 @@ export default function Settings() {
                   <div>
                     <span className="text-sm font-medium text-slate-100">{f.label}</span>
                     <span className="ml-2">
-                      {isDefault(f.key) ? <Badge>默认</Badge> : <Badge tone="violet">已自定义</Badge>}
+                      {isDefault(f.key) ? <Badge>{t.settings.defaultBadge}</Badge> : <Badge tone="violet">{t.settings.customBadge}</Badge>}
                     </span>
                   </div>
                   <button
@@ -122,7 +126,7 @@ export default function Settings() {
                     disabled={isDefault(f.key)}
                     className="inline-flex items-center gap-1 text-xs text-ghost transition hover:text-brand-cyan disabled:opacity-40"
                   >
-                    <RotateCcw className="h-3.5 w-3.5" /> 恢复默认
+                    <RotateCcw className="h-3.5 w-3.5" /> {t.settings.resetDefault}
                   </button>
                 </div>
                 <p className="mb-2 text-xs text-ghost">{f.hint}</p>
@@ -136,9 +140,7 @@ export default function Settings() {
                 />
               </div>
             ))}
-            <p className="text-xs text-ghost">
-              提示：留为默认即可享受内置的高质量提示词；只有当你想改变抽取行为时才需要编辑。改坏了点“恢复默认”。
-            </p>
+            <p className="text-xs text-ghost">{t.settings.advancedNote}</p>
           </div>
         )}
       </Card>

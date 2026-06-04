@@ -1,7 +1,9 @@
+import { useEffect } from 'react'
 import { Navigate, Route, Routes } from 'react-router-dom'
 
 import Layout from './components/Layout'
 import { useAuth } from './store/auth'
+import { getT, useLang } from './i18n'
 import Login from './pages/Login'
 import Dashboard from './pages/Dashboard'
 import Profile from './pages/Profile'
@@ -16,6 +18,13 @@ import Privacy from './pages/Privacy'
 
 export default function App() {
   const apiKey = useAuth((s) => s.apiKey)
+  const lang = useLang((s) => s.lang)
+
+  // Keep the document chrome (lang for a11y/SEO, tab title) in sync with the chosen language.
+  useEffect(() => {
+    document.documentElement.lang = lang === 'zh' ? 'zh-CN' : 'en'
+    document.title = getT().meta.title
+  }, [lang])
 
   if (!apiKey) {
     return (
