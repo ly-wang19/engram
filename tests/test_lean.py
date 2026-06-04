@@ -159,6 +159,35 @@ def test_date_terms_makes_dates_searchable():
     assert "11" in terms
 
 
+def test_cascade_coarse_to_fine_assembles():
+    """Coarse-to-fine cascade: detail is drilled from the top-ranked summaries; both modes assemble."""
+    mem = build()
+    casc = mem.lean_context("Which cities did I visit?", user_id="u1", cascade=True, n_chunks=2)
+    flat = mem.lean_context("Which cities did I visit?", user_id="u1", cascade=False, n_chunks=2)
+    assert casc.strip() and flat.strip()
+
+
+def test_heat_tiered_eviction_pages_cold_preserves_durable():
+    """MemoryOS heat tiering: over capacity, the coldest incidental facts page to the cold tier
+    (non-destructive); durable preference/identity facts are never evicted."""
+    from engram.types import Fact
+
+    mem = Memory()
+    u = mem.resolver.resolve("u1")
+    for i in range(5):  # incidental, increasing salience
+        f = Fact(subject="u1", predicate="parked_at", object=f"lot{i}", user_id=u,
+                 salience=float(i), last_access=BASE + i)
+        mem.fact_store.upsert(f.id, [0.0], f)
+    durable = Fact(subject="u1", predicate="likes", object="jazz", user_id=u, salience=0.0, last_access=BASE)
+    mem.fact_store.upsert(durable.id, [0.0], durable)
+
+    n = mem.evict_cold(max_hot=3)
+    assert n == 3
+    hot = mem.fact_store.values()
+    assert durable in hot, "durable preference must never be paged out, even at lowest salience"
+    assert len(mem.cold_store.values()) == 3, "evicted facts are preserved in the cold tier, not deleted"
+
+
 def test_agentic_multihop_decomposition():
     """Bet B: with an LLM, lean_context decomposes the question into sub-queries and unions their
     retrieval; without an LLM it degrades gracefully to the single query."""

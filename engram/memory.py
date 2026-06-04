@@ -72,7 +72,8 @@ class Memory:
 
         self.episodes_doc = InMemoryDocStore()
         self.episodes_vec = vector_store_factory()
-        self.fact_store = vector_store_factory()
+        self.fact_store = vector_store_factory()  # HOT tier: the fast, frequently-retrieved working set
+        self.cold_store = vector_store_factory()  # COLD tier: aged-out facts, preserved (never deleted)
         self.summary_vec = vector_store_factory()  # L2 session summaries, retrievable for a lean read slice
         self.graph = graph_store_factory()
         self.resolver = IdentityResolver()
@@ -217,6 +218,26 @@ class Memory:
         "never", "remind", "rule", "routine", "how_to", "procedure", "wants_me_to",
     })
 
+    def evict_cold(self, max_hot: int) -> int:
+        """Heat-tiered paging (MemoryOS, CLAUDE.md §3 / Bet E). When the HOT fact set exceeds capacity,
+        page the COLDEST facts (lowest salience, then oldest access) to the cold tier — EXCEPT durable
+        identity/preference facts, which stay hot. NON-DESTRUCTIVE: cold facts are moved, not deleted, so
+        history and as-of queries are intact and a future query can still page them back. This is what
+        keeps retrieval cost O(hot working set) instead of O(all history) at the 10M-token frontier.
+        Returns the number paged out."""
+        from .consolidate.decay import is_durable
+
+        hot = self.fact_store.values()
+        if len(hot) <= max_hot:
+            return 0
+        evictable = [f for f in hot if not is_durable(f.predicate)]
+        evictable.sort(key=lambda f: (f.salience, f.last_access))  # coldest (lowest salience/oldest) first
+        n_out = min(len(evictable), len(hot) - max_hot)
+        for f in evictable[:n_out]:
+            self.cold_store.upsert(f.id, f.embedding or [], f)  # preserve in cold tier
+            self.fact_store.delete(f.id)  # remove from hot index only
+        return n_out
+
     def procedural(self, user_id: str = "default") -> list[Fact]:
         """Standing instructions / how-to facts for this user (procedural memory)."""
         user = self.resolver.resolve(user_id)
@@ -247,6 +268,7 @@ class Memory:
         n_chunks: int = 2,
         persona: bool = True,
         agentic: bool = False,
+        cascade: bool = True,
         char_budget: int = 60_000,
     ) -> str:
         """The scalable read path (CLAUDE.md Bet A/E): assemble a SMALL, well-organized context from
@@ -272,10 +294,6 @@ class Memory:
             from .retrieve.agentic import AgenticRetriever
             queries += AgenticRetriever(self, self.llm)._subqueries(query)
 
-        # detail: the few most-relevant sessions in full — their ids are excluded from the summary block.
-        detail_eps = self.retrieve_episodes(query, user, n_chunks) if n_chunks else []
-        detail_ids = {e.id for e in detail_eps}
-
         if persona:
             p = self.build_persona(user)
             if p:
@@ -289,6 +307,13 @@ class Memory:
         for f in self._graph_related_facts(query, user, as_of, limit=n_facts):
             fact_map.setdefault(f.id, f)
         all_facts = list(fact_map.values())
+        # Optional cross-encoder rerank over the FACT pool. Unlike reranking whole sessions (which the
+        # cross-encoder truncates to 512 and mis-ranks — a known _S regression), facts are short, so the
+        # reranker sharpens fact selection without truncation loss.
+        if self.reranker is not None and len(all_facts) > (top_k or n_facts):
+            order = self.reranker.rerank(query, [(str(i), f.text) for i, f in enumerate(all_facts)],
+                                         top_k or n_facts)
+            all_facts = [all_facts[int(i)] for i, _ in order]
         self.working_set = all_facts  # working memory: the active set for this query
         if all_facts:
             for f in all_facts:  # reinforcement-on-access: surfaced facts stay salient (spacing effect)
@@ -297,11 +322,26 @@ class Memory:
             fl = "\n".join(f"- [{fmt_date(f.valid_at)}] {f.text}" for f in by_date)
             blocks.append(f"FACTS (current, dated):\n{fl}")
 
-        summ_map: dict[str, Episode] = {}
+        # L2 coarse: retrieve session summaries per (sub-)query, ranked. This is the coarse layer of a
+        # coarse-to-fine cascade (CLAUDE.md Bet E / OpenViking): summaries are tiny, so we can index and
+        # rank MANY sessions cheaply — the key to scaling past a model's window (the _M / 10M frontier).
+        summ_ranked: list[Episode] = []
+        seen_s: set[str] = set()
         for q in queries:
             for e in self.retrieve_summaries(q, user, n_summaries):
-                summ_map.setdefault(e.id, e)
-        summaries = [e for e in summ_map.values() if e.id not in detail_ids]
+                if e.id not in seen_s:
+                    seen_s.add(e.id)
+                    summ_ranked.append(e)
+
+        # FINE drill: in cascade mode the detail chunks are the TOP-ranked summaries' own sessions (score
+        # propagates coarse->fine), so we never embed-scan raw turns of irrelevant sessions. Without
+        # cascade, detail is a direct episode lookup (fine for small histories).
+        if cascade and summ_ranked:
+            detail_eps = summ_ranked[:n_chunks] if n_chunks else []
+        else:
+            detail_eps = self.retrieve_episodes(query, user, n_chunks) if n_chunks else []
+        detail_ids = {e.id for e in detail_eps}
+        summaries = [e for e in summ_ranked if e.id not in detail_ids]
         if summaries:
             chrono = sorted(summaries, key=lambda e: e.event_time)
             sm = "\n".join(
