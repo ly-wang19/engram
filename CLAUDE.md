@@ -183,8 +183,9 @@ Target benchmarks, in order: LongMemEval_S → LongMemEval_M → LOCOMO → Pers
 │   ├── llm/                   # LLM interface + rule-based offline fallback
 │   ├── store/                 # VectorStore / GraphStore / DocStore interfaces + in-memory impls
 │   ├── ingest/                # System-1 fast write path
-│   ├── consolidate/           # System-2: extractor, graph_builder, conflict, decay, summarizer
-│   ├── retrieve/              # hybrid, fusion, planner (multi-hop), temporal (as-of), abstention
+│   ├── consolidate/           # System-2: extractor (rule + LLM), graph_builder, conflict + detect, decay, summarizer, classify
+│   ├── retrieve/              # hybrid, fusion (RRF), lexical (BM25), planner (multi-hop) + agentic, temporal (as-of), rerank (OPTIONAL, off by default)
+│   │                          #   (the abstention gate is inline in memory.py's read path, not a separate module)
 │   ├── server/                # FastAPI HTTP API + management console + OpenAI-compatible proxy
 │   ├── mcp/                   # MCP server (give any agent a persistent memory)
 │   └── connectors/            # batch import (ChatGPT export / OpenAI messages / JSONL / transcript)

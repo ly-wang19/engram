@@ -191,7 +191,7 @@ flowchart TB
     subgraph R [READ PATH · hybrid retrieval · under 100ms]
         direction TB
         Ra[multi-hop query decomposition] --> Rb[parallel retrieve:<br/>dense vector + BM25 lexical + graph n-hop + recency/salience]
-        Rb --> Rc[Reciprocal Rank Fusion + rerank] --> Rd[bi-temporal as-of filter] --> Re[abstention gate] --> Rf[assemble dated, provenance-tagged context]
+        Rb --> Rc[Reciprocal Rank Fusion + optional rerank] --> Rd[bi-temporal as-of filter] --> Re[abstention gate] --> Rf[assemble dated, provenance-tagged context]
     end
     Rf --> OUT([answer-ready context])
 ```
