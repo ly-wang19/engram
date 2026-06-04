@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Engram · 给 AI 一个会记事的大脑</title>
+<style>
+  :root{
+    --bg:#0a0e1a; --bg2:#111a2e; --ink:#eaf0ff; --dim:#8a97b8;
+    --cyan:#22d3ee; --teal:#2dd4bf; --violet:#a78bfa; --amber:#fbbf24;
+    --green:#34d399; --red:#fb7185; --card:rgba(255,255,255,.05); --line:rgba(255,255,255,.10);
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{
+    font-family:"PingFang SC","Hiragino Sans GB","Microsoft Yahei",system-ui,-apple-system,sans-serif;
+    background:radial-gradient(1200px 700px at 70% -10%,#1b2a4a 0%,var(--bg) 55%),var(--bg);
+    color:var(--ink); overflow:hidden; -webkit-font-smoothing:antialiased;
+  }
+  .stage{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;padding:5vh 6vw}
+  .scene{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;
+    gap:26px;opacity:0;transform:translateY(18px) scale(.99);pointer-events:none;
+    transition:opacity .6s ease,transform .6s ease;text-align:center;padding:6vh 6vw}
+  .scene.active{opacity:1;transform:none;pointer-events:auto}
+  .kicker{letter-spacing:.34em;font-size:13px;color:var(--cyan);text-transform:uppercase;opacity:.9}
+  h1{font-size:clamp(30px,5.4vw,62px);line-height:1.12;font-weight:800;letter-spacing:-.5px}
+  h1 .hl{background:linear-gradient(90deg,var(--cyan),var(--teal),var(--violet));-webkit-background-clip:text;background-clip:text;color:transparent}
+  .sub{font-size:clamp(16px,2.1vw,21px);color:var(--dim);max-width:780px;line-height:1.65}
+  .big{font-size:clamp(40px,8vw,90px);font-weight:900;letter-spacing:-1px}
+  /* reveal helpers */
+  .r{opacity:0;transform:translateY(14px)}
+  .active .r{animation:rise .7s forwards cubic-bezier(.2,.7,.2,1)}
+  .active .r.d1{animation-delay:.15s}.active .r.d2{animation-delay:.35s}.active .r.d3{animation-delay:.6s}
+  .active .r.d4{animation-delay:.9s}.active .r.d5{animation-delay:1.2s}.active .r.d6{animation-delay:1.5s}
+  @keyframes rise{to{opacity:1;transform:none}}
+  /* chat + facts */
+  .row{display:flex;gap:34px;align-items:center;flex-wrap:wrap;justify-content:center}
+  .col{display:flex;flex-direction:column;gap:12px;min-width:280px}
+  .bubble{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:13px 17px;
+    font-size:15px;text-align:left;max-width:330px;backdrop-filter:blur(6px)}
+  .bubble .date{font-size:11px;color:var(--cyan);letter-spacing:.1em;margin-bottom:3px}
+  .fact{display:flex;align-items:center;gap:10px;background:linear-gradient(180deg,rgba(45,212,191,.14),rgba(45,212,191,.04));
+    border:1px solid rgba(45,212,191,.35);border-radius:12px;padding:10px 14px;font-size:15px;text-align:left}
+  .fact .tag{font-size:11px;color:var(--teal);background:rgba(45,212,191,.15);border-radius:6px;padding:2px 7px}
+  .fact.old{opacity:.4;border-color:var(--line);background:rgba(255,255,255,.03);text-decoration:line-through;text-decoration-color:rgba(251,113,133,.6)}
+  .fact.neo{border-color:rgba(52,211,153,.55);box-shadow:0 0 30px rgba(52,211,153,.25)}
+  .arrow{font-size:30px;color:var(--violet)}
+  .pill{display:inline-flex;align-items:center;gap:8px;border:1px solid var(--line);background:var(--card);
+    border-radius:999px;padding:8px 16px;font-size:14px;color:var(--dim)}
+  .lab{font-size:13px;color:var(--dim);letter-spacing:.12em;text-transform:uppercase}
+  /* compare cards */
+  .cmp{display:grid;grid-template-columns:1fr 1fr;gap:22px;width:min(900px,92vw)}
+  .panel{background:var(--card);border:1px solid var(--line);border-radius:20px;padding:22px;text-align:left}
+  .panel h3{font-size:18px;margin-bottom:12px;display:flex;align-items:center;gap:9px}
+  .grid50{display:flex;flex-wrap:wrap;gap:5px;margin:10px 0}
+  .sq{width:15px;height:15px;border-radius:3px;background:rgba(255,255,255,.10)}
+  .panel.bad .sq{background:rgba(251,113,133,.30)}
+  .panel.good .sq{background:rgba(255,255,255,.06)}
+  .panel.good .sq.on{background:var(--teal);box-shadow:0 0 9px rgba(45,212,191,.7)}
+  .tok{font-size:34px;font-weight:800;margin-top:6px}
+  .tok small{font-size:14px;color:var(--dim);font-weight:500}
+  .verdict{margin-top:12px;font-size:14px;display:flex;align-items:center;gap:8px}
+  .ok{color:var(--green)}.no{color:var(--red)}
+  /* bars */
+  .bars{display:flex;gap:34px;align-items:flex-end;height:300px;margin-top:8px}
+  .bar{display:flex;flex-direction:column;align-items:center;gap:12px;width:130px}
+  .bar .col2{width:84px;border-radius:12px 12px 0 0;height:0;transition:height 1.1s cubic-bezier(.2,.8,.2,1);
+    display:flex;align-items:flex-start;justify-content:center;padding-top:10px;font-weight:800;font-size:20px}
+  .active .bar .col2{height:var(--h)}
+  .bar .nm{font-size:14px;color:var(--dim);text-align:center;line-height:1.3}
+  /* progress + nav */
+  .hud{position:fixed;left:0;right:0;bottom:22px;display:flex;flex-direction:column;align-items:center;gap:14px;z-index:9}
+  .dots{display:flex;gap:9px}
+  .dot{width:9px;height:9px;border-radius:50%;background:rgba(255,255,255,.18);transition:.3s;cursor:pointer}
+  .dot.on{background:var(--cyan);width:26px;border-radius:5px}
+  .nav{display:flex;gap:10px}
+  .btn{border:1px solid var(--line);background:var(--card);color:var(--ink);border-radius:999px;
+    padding:9px 18px;font-size:14px;cursor:pointer;transition:.2s;font-family:inherit}
+  .btn:hover{border-color:var(--cyan);color:var(--cyan)}
+  .brand{position:fixed;top:24px;left:28px;font-weight:800;letter-spacing:.5px;font-size:17px;z-index:9;
+    display:flex;align-items:center;gap:9px}
+  .brand .o{width:13px;height:13px;border-radius:50%;background:linear-gradient(135deg,var(--cyan),var(--violet));box-shadow:0 0 14px var(--cyan)}
+  .foot{position:fixed;top:26px;right:28px;font-size:12.5px;color:var(--dim);z-index:9}
+  .pulse{animation:pulse 1.4s infinite}
+  @keyframes pulse{0%,100%{opacity:.5}50%{opacity:1}}
+  .spin{display:inline-block;width:15px;height:15px;border:2px solid rgba(255,255,255,.2);border-top-color:var(--red);border-radius:50%;animation:sp .8s linear infinite}
+  @keyframes sp{to{transform:rotate(360deg)}}
+  .float{animation:fl 3.5s ease-in-out infinite}
+  @keyframes fl{0%,100%{transform:translateY(0)}50%{transform:translateY(-8px)}}
+</style>
+</head>
+<body>
+<div class="brand"><span class="o"></span> Engram <span style="color:var(--dim);font-weight:500">记忆引擎</span></div>
+<div class="foot">真实数据 · LongMemEval_S · 500 题</div>
+
+<div class="stage">
+
+  <!-- 0 HOOK -->
+  <section class="scene active" data-t="7000">
+    <div class="kicker r">给 AI 一个会记事的大脑</div>
+    <h1 class="r d1">AI 有个大毛病:<br><span class="hl">它会忘事。</span></h1>
+    <p class="sub r d2">每开一段新对话,它就不记得你是谁、你说过什么。<br>我们要让它像人一样,把重要的事记住、需要时想起来。</p>
+    <div class="pill r d3 float">👇 往下看我们怎么做的</div>
+  </section>
+
+  <!-- 1 THE DUMB WAY -->
+  <section class="scene" data-t="8000">
+    <div class="kicker r">笨办法</div>
+    <h1 class="r d1">每次把<span class="hl">全部历史</span>重新塞回去?</h1>
+    <div class="row r d2" style="margin-top:6px">
+      <div class="col">
+        <div class="bubble"><div class="date">50 段对话</div>📚📚📚📚📚 …… 全部塞进去</div>
+        <div class="pill" style="border-color:var(--red);color:var(--red)">≈ 79,000 token / 12 万字</div>
+      </div>
+      <div class="arrow">→</div>
+      <div class="col">
+        <div class="bubble" style="border-color:rgba(251,113,133,.4)"><span class="spin"></span> &nbsp;又慢、又贵</div>
+        <div class="bubble" style="border-color:rgba(251,113,133,.4)">❌ 信息太多,“迷失在中间”,反而读串、答错</div>
+      </div>
+    </div>
+    <p class="sub r d4">塞得越多 ≠ 答得越准。这是整个行业的通病。</p>
+  </section>
+
+  <!-- 2 ENGRAM WRITES -->
+  <section class="scene" data-t="9000">
+    <div class="kicker r">Engram 怎么做 · 像人脑</div>
+    <h1 class="r d1">你聊天,它悄悄<span class="hl">提炼成「事实」</span>存起来</h1>
+    <div class="row r d2">
+      <div class="col">
+        <div class="bubble"><div class="date">2023-05</div>我在腾讯工作,最喜欢用 Python。</div>
+        <div class="bubble"><div class="date">2023-06</div>上周去京都玩,还养了只猫叫 Luna。</div>
+      </div>
+      <div class="arrow">→</div>
+      <div class="col">
+        <div class="fact r d3"><span class="tag">身份</span> 在腾讯工作</div>
+        <div class="fact r d4"><span class="tag">偏好</span> 最爱 Python</div>
+        <div class="fact r d5"><span class="tag">事件</span> 去过京都 · 养猫 Luna</div>
+      </div>
+    </div>
+    <p class="sub r d6">不挡你说话(写入 &lt;50 毫秒),离线慢慢整理 —— 就像睡觉时大脑在巩固记忆。</p>
+  </section>
+
+  <!-- 3 BI-TEMPORAL UPDATE -->
+  <section class="scene" data-t="9000">
+    <div class="kicker r">知识更新 · 双时间轴</div>
+    <h1 class="r d1">你换工作了?它<span class="hl">不会搞混</span></h1>
+    <div class="row r d2">
+      <div class="col">
+        <div class="bubble"><div class="date">现在</div>我跳槽了,现在在 Moonshot AI。</div>
+      </div>
+      <div class="arrow">→</div>
+      <div class="col">
+        <div class="fact old r d3"><span class="tag">历史</span> 在腾讯工作</div>
+        <div class="fact neo r d4"><span class="tag">当前</span> 在 Moonshot AI 工作 ✓</div>
+      </div>
+    </div>
+    <p class="sub r d5">旧事实标成「历史」、新事实生效 —— <b>什么都不丢</b>。<br>还能回答“我去年在哪上班?” (双时间轴)。</p>
+  </section>
+
+  <!-- 4 LEAN vs FULL -->
+  <section class="scene" data-t="11000">
+    <div class="kicker r">提问 · 核心绝活</div>
+    <h1 class="r d1">问:“我<span class="hl">现在</span>在哪上班?”</h1>
+    <div class="cmp r d2">
+      <div class="panel bad">
+        <h3>🐢 笨办法:塞全文</h3>
+        <div class="grid50" id="g-bad"></div>
+        <div class="tok">79k <small>token · 全读一遍</small></div>
+        <div class="verdict no">❌ 迷失在中间 · 74.8% 准</div>
+      </div>
+      <div class="panel good">
+        <h3>⚡ Engram:只取相关一小片</h3>
+        <div class="grid50" id="g-good"></div>
+        <div class="tok" style="color:var(--teal)">9.5k <small>token · 精准检索</small></div>
+        <div class="verdict ok">✓ 更聚焦 · 更准</div>
+      </div>
+    </div>
+    <p class="sub r d4">用 <b style="color:var(--teal)">1/8 的信息量</b>,答得<b>反而更准</b> —— 去掉噪声,只留精华。<br>而且历史再长也不怕(可扩展到百万字)。</p>
+  </section>
+
+  <!-- 5 SCOREBOARD -->
+  <section class="scene" data-t="12000">
+    <div class="kicker r">真实成绩单 · 同款严格判分器</div>
+    <h1 class="r d1">追平<span class="hl">闭源商业系统</span>,还省 8 倍</h1>
+    <div class="bars r d2">
+      <div class="bar"><div class="col2" style="--h:74%;background:linear-gradient(180deg,#fb7185,#9f1239)">74.8</div><div class="nm">裸塞全文<br><small>79k token</small></div></div>
+      <div class="bar"><div class="col2" style="--h:85.2%;background:linear-gradient(180deg,#94a3b8,#475569)">85.2</div><div class="nm">腾讯混元<br><small>闭源商用</small></div></div>
+      <div class="bar"><div class="col2" style="--h:85%;background:linear-gradient(180deg,var(--cyan),var(--violet))">85</div><div class="nm" style="color:var(--cyan)"><b>Engram</b><br><small>9.5k token · 8× 精简</small></div></div>
+    </div>
+    <p class="sub r d4">LongMemEval 基准 · 500 题 · 同款 DeepSeek 判分。<br><b>全部开源、可复现、可扩展。</b> 每个数字你都能自己跑一遍验证。</p>
+    <div class="pill r d5 float" style="border-color:var(--cyan);color:var(--cyan)">⭐ github.com/ly-wang19/engram-memory</div>
+  </section>
+
+</div>
+
+<div class="hud">
+  <div class="dots" id="dots"></div>
+  <div class="nav">
+    <button class="btn" id="prev">‹ 上一步</button>
+    <button class="btn" id="play">⏸ 暂停</button>
+    <button class="btn" id="next">下一步 ›</button>
+  </div>
+</div>
+
+<script>
+  const scenes=[...document.querySelectorAll('.scene')];
+  const dots=document.getElementById('dots');
+  let i=0, playing=true, timer=null;
+  scenes.forEach((_,k)=>{const d=document.createElement('div');d.className='dot'+(k===0?' on':'');d.onclick=()=>go(k);dots.appendChild(d);});
+  const allDots=[...dots.children];
+
+  function fillGrids(){
+    const bad=document.getElementById('g-bad'), good=document.getElementById('g-good');
+    if(bad && !bad.children.length){for(let n=0;n<50;n++){bad.appendChild(Object.assign(document.createElement('div'),{className:'sq'}));}}
+    if(good && !good.children.length){for(let n=0;n<50;n++){const s=document.createElement('div');s.className='sq'+([7,8,19,33].includes(n)?' on':'');good.appendChild(s);}}
+  }
+  function go(k){
+    scenes[i].classList.remove('active'); allDots[i].classList.remove('on');
+    i=(k+scenes.length)%scenes.length;
+    scenes[i].classList.add('active'); allDots[i].classList.add('on');
+    if(i===4) fillGrids();
+    schedule();
+  }
+  function schedule(){
+    clearTimeout(timer);
+    if(playing){ timer=setTimeout(()=>go(i+1), +scenes[i].dataset.t||8000); }
+  }
+  document.getElementById('next').onclick=()=>go(i+1);
+  document.getElementById('prev').onclick=()=>go(i-1);
+  document.getElementById('play').onclick=function(){playing=!playing;this.textContent=playing?'⏸ 暂停':'▶ 播放';schedule();};
+  document.addEventListener('keydown',e=>{if(e.key==='ArrowRight')go(i+1);if(e.key==='ArrowLeft')go(i-1);});
+  fillGrids(); schedule();
+</script>
+</body>
+</html>
