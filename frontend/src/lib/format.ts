@@ -1,7 +1,7 @@
 // Small presentation helpers. No date math on the client — the server already renders
 // human stamps (bi-temporal, UTC), we just split/format them and truncate text.
 
-/** Split a server stamp ("YYYY-MM-DD HH:MM", UTC) into its date and time parts.
+/** Split a server stamp ("YYYY-MM-DD HH:MM:SS", Beijing) into its date and time parts.
  *  `time` is '' for legacy/date-only stamps, so callers can render it optionally. */
 export function splitStamp(s: string | null | undefined): { date: string; time: string } {
   if (!s) return { date: '', time: '' }

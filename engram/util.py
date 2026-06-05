@@ -5,10 +5,13 @@ import math
 import re
 import time
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 # Epoch seconds; one day in seconds (used by recency decay).
 DAY = 86400.0
+
+# Console display timezone for fmt_datetime (UTC+8). The eval/LLM-context formatters stay UTC (fmt_date).
+BEIJING = timezone(timedelta(hours=8))
 
 
 def fmt_date(epoch: float) -> str:
@@ -20,12 +23,13 @@ def fmt_date(epoch: float) -> str:
 
 
 def fmt_datetime(epoch: float) -> str:
-    """Epoch seconds -> 'YYYY-MM-DD HH:MM' (UTC). Console display only: surfaces the time-of-day that
-    fmt_date() drops. Source session stamps (e.g. LongMemEval) carry minute precision, and facts inherit
-    their episode's event_time — so this is real, not fabricated. The LLM-context builders deliberately
-    keep fmt_date (they don't need the clock, and the eval depends on stable date-only stamps)."""
+    """Epoch seconds -> 'YYYY-MM-DD HH:MM:SS' in Beijing time (UTC+8). Console display only: surfaces the
+    time-of-day that fmt_date() drops. Facts inherit their episode's event_time, so the clock is real —
+    but note LongMemEval session stamps carry only minute precision, so their seconds read ':00'; live
+    user-entered facts have true seconds. The LLM-context builders + eval deliberately keep fmt_date: they
+    don't need the clock and depend on stable UTC date-only stamps."""
     try:
-        return datetime.fromtimestamp(epoch, tz=timezone.utc).strftime("%Y-%m-%d %H:%M")
+        return datetime.fromtimestamp(epoch, tz=BEIJING).strftime("%Y-%m-%d %H:%M:%S")
     except (OverflowError, OSError, ValueError):
         return "?"
 

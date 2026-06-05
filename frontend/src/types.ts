@@ -10,7 +10,7 @@ export interface MemoryFact {
   subject: string
   predicate: string
   object: string
-  valid_at: string // human stamp from the server: "YYYY-MM-DD HH:MM" (UTC)
+  valid_at: string // human stamp from the server: "YYYY-MM-DD HH:MM:SS" (Beijing, UTC+8)
   invalid_at: string | null
   status: FactStatus
   source: FactSource
