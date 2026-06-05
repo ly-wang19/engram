@@ -15,6 +15,7 @@ import {
 import { Badge } from '../components/ui'
 import { toast } from '../components/Toast'
 import { useMemories, useRemember } from '../hooks/queries'
+import { splitStamp } from '../lib/format'
 import { useT } from '../i18n'
 
 export default function Dashboard() {
@@ -90,13 +91,18 @@ export default function Dashboard() {
           </CardTitle>
           {recent.length ? (
             <ul className="divide-y divide-line">
-              {recent.map((f) => (
+              {recent.map((f) => {
+                const { date, time } = splitStamp(f.valid_at)
+                return (
                 <li key={f.id} className="flex items-baseline gap-2 py-2 text-sm">
-                  <time className="shrink-0 text-[11px] tabular-nums text-brand-cyan">{f.valid_at}</time>
+                  <time className="shrink-0 text-[11px] tabular-nums text-brand-cyan">
+                    {date}{time && <span className="ml-1 text-brand-cyan/55">{time}</span>}
+                  </time>
                   <span className="flex-1 text-slate-200">{f.display || f.text}</span>
                   {f.source === 'user' && <Badge tone="user">🔒</Badge>}
                 </li>
-              ))}
+                )
+              })}
             </ul>
           ) : (
             <EmptyState title={t.dashboard.recentEmptyTitle} hint={t.dashboard.recentEmptyHint} />

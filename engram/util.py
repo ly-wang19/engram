@@ -19,6 +19,17 @@ def fmt_date(epoch: float) -> str:
         return "?"
 
 
+def fmt_datetime(epoch: float) -> str:
+    """Epoch seconds -> 'YYYY-MM-DD HH:MM' (UTC). Console display only: surfaces the time-of-day that
+    fmt_date() drops. Source session stamps (e.g. LongMemEval) carry minute precision, and facts inherit
+    their episode's event_time — so this is real, not fabricated. The LLM-context builders deliberately
+    keep fmt_date (they don't need the clock, and the eval depends on stable date-only stamps)."""
+    try:
+        return datetime.fromtimestamp(epoch, tz=timezone.utc).strftime("%Y-%m-%d %H:%M")
+    except (OverflowError, OSError, ValueError):
+        return "?"
+
+
 def now() -> float:
     """Current wall-clock time in epoch seconds."""
     return time.time()

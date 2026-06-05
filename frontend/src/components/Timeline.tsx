@@ -2,6 +2,7 @@ import { ArrowUp, Lock } from 'lucide-react'
 
 import type { MemoryFact } from '../types'
 import { useT } from '../i18n'
+import { splitStamp } from '../lib/format'
 import { cx } from './ui'
 
 // Facts arrive newest-first (the server sorts by valid_at desc). The vertical rail +
@@ -15,10 +16,12 @@ export function Timeline({ facts }: { facts: MemoryFact[] }) {
       <ul className="space-y-1">
         {facts.map((f) => {
           const live = f.status === 'live'
+          const { date, time } = splitStamp(f.valid_at)
           return (
             <li key={f.id} className="relative flex items-start gap-4 py-2">
-              <time className="w-[88px] shrink-0 pt-0.5 text-right text-[11.5px] tabular-nums text-brand-cyan">
-                {f.valid_at}
+              <time className="w-[88px] shrink-0 pt-0.5 text-right tabular-nums leading-tight text-brand-cyan">
+                <span className="block text-[11.5px]">{date}</span>
+                {time && <span className="block text-[10px] text-brand-cyan/55">{time}</span>}
               </time>
               <span
                 className={cx(
