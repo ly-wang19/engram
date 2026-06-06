@@ -10,7 +10,9 @@ class Config:
     # --- retrieval fusion weights (CLAUDE.md §3.3) ---
     w_sem: float = 1.0  # dense semantic
     w_lex: float = 0.6  # lexical / BM25
-    w_graph: float = 0.8  # n-hop graph proximity
+    w_graph: float = 0.8  # n-hop graph proximity  (do NOT cut: load-bearing for multi-session cross-session
+    #                       links — tuning it down to 0.4 raised dev recall@15 +4.1 but cratered multi-session
+    #                       QA -23 on the full set. recall@15 is a misleading proxy; keep graph weight high.)
     w_rec: float = 0.3  # recency decay
     w_sal: float = 0.25  # salience / importance
 

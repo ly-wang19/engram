@@ -202,8 +202,15 @@ class ConflictResolver:
                 done = {id(f) for f in invalidated}
                 new_prov = set(new.provenance)
                 for old in live:
-                    if id(old) in done or old.slot == new.slot or _protected(old, new):
-                        continue  # already handled by exact-slot, identical slot, or user-protected
+                    if (id(old) in done or old.slot == new.slot or _protected(old, new)
+                            or new.source == "user"):
+                        # 🔒 PIN GUARD (whack-a-mole fix): a manually-asserted (source="user") fact must
+                        # NEVER fuzzy-supersede an unrelated fact across slots — it can only update the SAME
+                        # slot (the exact-slot path above). Otherwise adding pinned fact A about a subject
+                        # retires an unrelated single-valued fact B about the same subject just because they
+                        # embed near (subject-dominated similarity, esp. short Chinese facts). LongMemEval
+                        # ingests only extracted facts (no source="user"), so this is zero benchmark risk.
+                        continue  # handled by exact-slot / identical slot / user-protected / pin guard
                     if _norm(old.subject) != _norm(new.subject) or _norm(old.object) == _norm(new.object):
                         continue
                     if not is_single_valued(old.predicate) or not old.embedding:

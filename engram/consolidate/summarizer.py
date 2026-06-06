@@ -72,13 +72,18 @@ class ProfileBuilder:
     _KEYS = {"works_at", "lives_in", "name", "born_in", "married_to"}
 
     def build(self, subject: str, live_facts: list[Fact]) -> dict[str, str]:
-        profile: dict[str, str] = {}
+        # #7 profile authority: when two live facts share a slot, the authoritative (source="user") one wins,
+        # and the most-recent wins within a source tier — so a manually-pinned precise value is never
+        # shadowed by a vague auto-extracted one (or by iteration order).
+        best: dict[str, Fact] = {}
         for f in live_facts:
-            if f.subject.lower() == subject.lower() and (
-                f.predicate in self._KEYS or f.predicate.startswith("favorite_")
-            ):
-                profile[f.predicate] = f.object
-        return profile
+            if f.subject.lower() != subject.lower() or not (
+                    f.predicate in self._KEYS or f.predicate.startswith("favorite_")):
+                continue
+            cur = best.get(f.predicate)
+            if cur is None or (f.source == "user", f.valid_at) > (cur.source == "user", cur.valid_at):
+                best[f.predicate] = f
+        return {p: f.object for p, f in best.items()}
 
     def narrative(self, subject: str, live_facts: list[Fact], llm: Optional[LLM] = None,
                   system: Optional[str] = None) -> str:
@@ -88,14 +93,15 @@ class ProfileBuilder:
         user_facts = [f for f in live_facts if f.subject.lower() == subject.lower()]
         if not user_facts:
             user_facts = live_facts
+        # #7: authoritative (pinned) facts lead, then by salience — so they survive the [:12]/[:120] truncation.
+        ordered = sorted(user_facts, key=lambda x: (x.source != "user", -x.salience))
         if llm is None:
             prof = self.build(subject, live_facts)
             lines = [f"{k.replace('_', ' ')}: {v}" for k, v in prof.items()]
-            # add a few highest-salience facts for color
-            for f in sorted(user_facts, key=lambda x: -x.salience)[:12]:
+            for f in ordered[:12]:  # add a few top facts for color
                 lines.append(f.text)
             return "\n".join(dict.fromkeys(lines))  # dedupe, preserve order
-        facts_block = "\n".join(f"- {f.text}" for f in user_facts[:120])
+        facts_block = "\n".join(f"- {f.text}" for f in ordered[:120])
         try:
             return self.llm_complete(llm, facts_block, system)
         except Exception:  # noqa: BLE001

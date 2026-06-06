@@ -6,6 +6,7 @@ zero setup. Pass a real `embedder` / `llm` / store factories to run on benchmark
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 
@@ -45,6 +46,42 @@ from .util import DAY, fmt_date, now
 # words too generic to confirm an attribute on their own ("favorite food" must not match
 # "favorite programming language" just because both contain "favorite").
 _GENERIC_ATTR_TERMS = {"favorite", "favourite", "name", "is", "are", "of", "the"}
+
+# Answer-TYPE alignment (#2/#3): when a question demands a STRUCTURED value (an id, a date, a number, an
+# email, a phone, a url), the answer's object must actually look like that type — otherwise a high semantic
+# match is spurious (e.g. "what's the project ID?" retrieving the project OWNER's name). We then surface a
+# type-matching fact, or abstain, instead of confidently returning a type-mismatched top fact. Cues are
+# deliberately strong (id/编号, not bare "when") to avoid false abstains on free-text answers.
+_ANSWER_TYPE_CUES = {
+    "email": ("email", "e-mail", "邮箱", "邮件地址"),
+    "url": ("url", "链接", "网址", "link to"),
+    "phone": ("phone number", "telephone", "电话", "手机号", "联系电话", "phone"),
+    "id": ("id", "编号", "工单号", "订单号", "identifier", "order number", "ticket number", "serial"),
+    "date": ("what date", "which day", "date of", "日期", "什么时候", "哪天", "哪一天", "几号", "哪一年"),
+    "number": ("how many", "how much", "number of", "多少", "几个", "数量", "几次", "几年", "几岁"),
+}
+_ANSWER_TYPE_MATCH = {
+    "email": lambda o: bool(re.search(r"[^@\s]+@[^@\s]+\.[^@\s]+", o)),
+    "url": lambda o: bool(re.search(r"https?://|www\.", o)),
+    "phone": lambda o: bool(re.search(r"\+?\d[\d\s().\-]{6,}\d", o)),
+    # an id is an alnum code containing a digit, no spaces (PROJ-1024, A12B); a plain name has none of that
+    "id": lambda o: bool(re.search(r"\d", o)) and len(o.strip()) <= 40 and " " not in o.strip(),
+    "date": lambda o: bool(re.search(r"\b\d{4}\b|\d{1,2}[-/]\d{1,2}|年|月|jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec", o.lower())),
+    "number": lambda o: bool(re.search(r"\d", o)),  # lenient: any digit (counts/durations/ages)
+}
+
+
+def _expected_answer_type(query: str):
+    q = query.lower()
+    for t, cues in _ANSWER_TYPE_CUES.items():
+        for c in cues:
+            # word-boundary match for ASCII cues so "id" doesn't fire on "did"/"said"; substring for CJK
+            if c.isascii():
+                if re.search(r"\b" + re.escape(c) + r"\b", q):
+                    return t
+            elif c in q:
+                return t
+    return None
 
 
 @dataclass
@@ -918,7 +955,24 @@ class Memory:
 
         facts = [f for f, _ in ranked]
         scores = [s for _, s in ranked]
-        if self._should_abstain(query, facts, diag):
+
+        # #2/#3 answer-TYPE alignment: if the question demands a structured value, surface a fact whose
+        # object actually looks like that type; if none does, the semantic hit is spurious -> not-in-memory.
+        etype = _expected_answer_type(query)
+        type_ok = True
+        if etype is not None:
+            matched = [f for f in facts if _ANSWER_TYPE_MATCH[etype](f.object or f.text)]
+            if matched:
+                facts = matched + [f for f in facts if f not in matched]
+            else:
+                type_ok = False
+
+        if not type_ok or self._should_abstain(query, facts, diag):
+            # #3b: the answer may live only in a session SUMMARY (a how-to, a rule, an install command) the
+            # extractor never atomized into a fact. Fall back to the most relevant summary before abstaining.
+            summ = self._summary_fallback(query, user_id)
+            if summ is not None:
+                return summ
             return SearchResult(query=query, facts=facts, scores=scores, via="abstain", abstained=True)
 
         reinforce(facts[0], self.config.access_boost)
@@ -1137,3 +1191,15 @@ class Memory:
                 return False  # a non-generic attribute term matched -> the answer is in memory
         best_sem = max(diag.get("sem", {}).values(), default=0.0)
         return best_sem < self.config.abstain_threshold
+
+    def _summary_fallback(self, query: str, user_id: str) -> Optional[SearchResult]:
+        """#3b: when atomized facts can't answer, surface the most relevant session SUMMARY if it genuinely
+        overlaps the query (the info may live only in a summary — a how-to, a rule, an install command — that
+        the extractor never distilled into a fact). Conservative: requires a non-generic lexical overlap, so
+        it never returns a vaguely-similar summary as if it were the answer."""
+        for ep in self.retrieve_summaries(query, user_id, k=2):
+            text = (ep.summary or ep.content or "").strip()
+            if text and (overlap_terms(query, text) - _GENERIC_ATTR_TERMS):
+                dated = f"[{ep.metadata.get('date') or fmt_date(ep.event_time)}] {text}"
+                return SearchResult(query=query, via="summary", _answer=dated)
+        return None
