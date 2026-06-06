@@ -511,6 +511,16 @@ the 83.6\% overall). The two categories where bi-temporal modelling is decisive-
 \label{fig:percat}
 \end{figure}
 
+\paragraph{Error analysis: full-context is ``lost in the middle.''}
+The two systems fail differently. Of the full-context baseline's 134 errors, \textbf{52\% (70) are
+abstentions}---it answers ``I don't know'' even though, by construction, the evidence lies somewhere in its
+$\sim$79k-token window; it simply fails to locate it. On the 81 questions where \lean{} is correct and
+full-context is wrong, full-context abstains on 53\% (43) and returns a \emph{wrong} value on the other 38.
+\lean{}, answering from a $\sim$9.6k-token slice, abstains on only 60/500---and 30 of those are the
+genuinely unanswerable items. This is the ``lost in the middle'' effect~\citep{liu2024lost} made
+quantitative: past a point, more context is \emph{not} more accuracy if the model cannot find the relevant
+span (counts recomputed from the committed logs by \texttt{paper/compute\_stats.py}).
+
 \paragraph{The read path must be hybrid.}
 A load-bearing finding from development: a \emph{facts-only} read path---answering purely from extracted
 $(s,p,o)$ facts---\emph{loses recall} relative to the hybrid path, because extraction drops detail that some

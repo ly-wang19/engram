@@ -23,7 +23,7 @@ def load(path, system):
         info = d["sys"].get(system)
         if info is None:
             continue
-        out[d["qid"]] = (1 if info["ok"] else 0, info.get("tok"), info.get("err"), d["cat"])
+        out[d["qid"]] = (1 if info["ok"] else 0, info.get("tok"), info.get("err"), d["cat"], info.get("pred", ""))
     return out
 
 
@@ -137,3 +137,19 @@ for c in sorted(cats, key=lambda x: -cats[x][1]):
 import glob
 ds = glob.glob(os.path.join(ROOT, "**/longmemeval_s*.json"), recursive=True)
 print("\nlocal dataset files (for question text):", ds if ds else "none found")
+
+# ---- error analysis: full_context's "lost in the middle" abstentions (same committed logs) ----
+_MARK = ("don't know", "do not know", "not mentioned", "no information", "cannot find", "not sure",
+         "unknown", "not stated", "doesn't mention", "isn't mentioned", "no answer", "does not mention")
+def _abstains(pred):
+    p = str(pred).lower()
+    return any(m in p for m in _MARK)
+fc_wrong = [q for q in common if not full[q][0]]
+fc_wrong_abstain = [q for q in fc_wrong if _abstains(full[q][4])]
+lrfw = [q for q in common if lean[q][0] and not full[q][0]]
+lrfw_abstain = [q for q in lrfw if _abstains(full[q][4])]
+print("\nerror analysis (full_context, lost-in-the-middle):")
+print(f"  errors: {len(fc_wrong)}/{len(common)}; abstentions despite answer in-window: "
+      f"{len(fc_wrong_abstain)} ({len(fc_wrong_abstain) / max(1,len(fc_wrong)) * 100:.0f}% of errors)")
+print(f"  where engram_lean right & full_context wrong ({len(lrfw)}): full_context abstained "
+      f"{len(lrfw_abstain)} ({len(lrfw_abstain) / max(1,len(lrfw)) * 100:.0f}%), gave wrong value {len(lrfw) - len(lrfw_abstain)}")
