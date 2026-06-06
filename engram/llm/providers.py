@@ -63,6 +63,16 @@ def make_llm(name: str, **overrides):
             api_key=os.environ.get("ARK_API_KEY"),
             **overrides,
         )
+    # Moonshot AI / Kimi — OpenAI-compatible. This is the SAME answerer class third-party memory benchmarks
+    # report on (Kimi-K2.x), so running our retrieval through it is the apples-to-apples, no-asterisk backbone.
+    if n.startswith(("moonshot:", "kimi:")):
+        overrides.setdefault("temperature", 1.0)  # Kimi-K2.x rejects any temperature != 1
+        return LiteLLMClient(
+            f"openai/{n.split(':', 1)[1]}",
+            api_base=os.environ.get("MOONSHOT_BASE_URL", "https://api.moonshot.cn/v1"),
+            api_key=os.environ.get("MOONSHOT_API_KEY"),
+            **overrides,
+        )
     return LiteLLMClient(n, **overrides)
 
 
