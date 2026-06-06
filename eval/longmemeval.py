@@ -328,6 +328,11 @@ def load_data(path: str | None) -> list[dict]:
 
         filename = path if path.startswith("longmemeval_") else f"longmemeval_{path}"
         path = hf_hub_download(repo_id="xiaowu0162/longmemeval", filename=filename, repo_type="dataset")
+    elif path in ("locomo", "locomo10"):
+        # Second benchmark on the SAME harness: convert LOCOMO into LongMemEval items (see eval/locomo.py).
+        from eval.locomo import load_locomo
+
+        return load_locomo()
     with open(path, encoding="utf-8") as fh:
         return json.load(fh)
 

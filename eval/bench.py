@@ -172,6 +172,90 @@ class Mem0System:
         return "FACTS:\n" + "\n".join(f"- {r.get('memory', r)}" for r in results)
 
 
+class ZepSystem:
+    """Competitor: Zep / Graphiti — a temporally-aware (bi-temporal) knowledge-graph memory, the closest
+    design to Engram. Lazy import; requires `pip install graphiti-core`, a running Neo4j/FalkorDB
+    (NEO4J_URI / NEO4J_USER / NEO4J_PASSWORD), and an OpenAI-compatible key for Graphiti's own extraction
+    LLM (OPENAI_API_KEY [+ OPENAI_BASE_URL]). Per-question `group_id` isolates each LongMemEval question.
+
+    NOTE: written against the public graphiti_core API (async; signatures vary across versions). It is
+    scaffolding validated on the FIRST keyed run with a live graph DB, not in the offline CI env."""
+
+    name = "zep"
+
+    def __init__(self, rig: Rig):
+        self.rig = rig
+        import graphiti_core  # noqa: F401  (validated when --systems includes zep)
+
+        self._Graphiti = graphiti_core.Graphiti
+
+    def context(self, item: dict) -> str:
+        import asyncio
+        from datetime import datetime, timedelta, timezone
+
+        qid, q = item["question_id"], item["question"]
+
+        async def run() -> str:
+            g = self._Graphiti(
+                os.environ.get("NEO4J_URI", "bolt://localhost:7687"),
+                os.environ.get("NEO4J_USER", "neo4j"),
+                os.environ.get("NEO4J_PASSWORD", "password"),
+            )
+            try:
+                await g.build_indices_and_constraints()
+                base = datetime.now(timezone.utc)
+                for i, (sid, turns) in enumerate(sessions_of(item)):
+                    body = "\n".join(
+                        f"{t.get('role', 'user')}: {t.get('content', '')}" for t in turns if t.get("content")
+                    )
+                    if not body:
+                        continue
+                    await g.add_episode(
+                        name=f"{qid}-{sid}",
+                        episode_body=body,
+                        source_description="longmemeval session",
+                        reference_time=base + timedelta(seconds=i),
+                        group_id=qid,
+                    )
+                results = await g.search(q, group_id=qid, num_results=self.rig.topk)
+                return "FACTS:\n" + "\n".join(f"- {getattr(r, 'fact', r)}" for r in results)
+            finally:
+                await g.close()
+
+        return asyncio.run(run())
+
+
+class HippoRAGSystem:
+    """Competitor: HippoRAG (knowledge graph + Personalized PageRank multi-hop retrieval). Lazy import;
+    requires `pip install hipporag` and an OpenAI-compatible key for its OpenIE + embeddings
+    (set HIPPORAG_LLM for the LLM name). Per-question `save_dir` isolates each question's index.
+
+    NOTE: written against the public hipporag 2.x API (index/retrieve signatures vary across versions);
+    scaffolding validated on the FIRST keyed run, not in the offline CI env."""
+
+    name = "hipporag"
+
+    def __init__(self, rig: Rig):
+        self.rig = rig
+        from hipporag import HippoRAG  # noqa: F401  (validated when --systems includes hipporag)
+
+        self._HippoRAG = HippoRAG
+
+    def context(self, item: dict) -> str:
+        qid, q = item["question_id"], item["question"]
+        safe = qid.replace("/", "_")
+        hr = self._HippoRAG(
+            save_dir=f"data/hipporag/{safe}",
+            llm_model_name=os.environ.get("HIPPORAG_LLM", "gpt-4o-mini"),
+            embedding_model_name="BAAI/bge-small-en-v1.5",
+        )
+        docs = [t.get("content", "") for _, turns in sessions_of(item) for t in turns if t.get("content")]
+        hr.index(docs=docs)
+        res = hr.retrieve(queries=[q], num_to_retrieve=self.rig.topk)[0]
+        passages = getattr(res, "docs", res)
+        return "PASSAGES:\n" + "\n".join(f"- {p}" for p in passages)
+
+
 class EngramFullSystem:
     """Engram's extracted/conflict-resolved facts as a 'memory index', prepended to the full conversation
     history. Combines 100% session recall (full-context) with Engram's bi-temporal structure (facts first,
@@ -255,7 +339,8 @@ class EngramLeanSystem:
 
 
 SYSTEMS = {"engram": EngramSystem, "full_context": FullContextSystem, "rag": RAGSystem,
-           "mem0": Mem0System, "engram_full": EngramFullSystem, "engram_lean": EngramLeanSystem}
+           "mem0": Mem0System, "zep": ZepSystem, "hipporag": HippoRAGSystem,
+           "engram_full": EngramFullSystem, "engram_lean": EngramLeanSystem}
 
 
 def eval_item(item, systems, rig):
