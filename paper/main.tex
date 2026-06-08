@@ -35,17 +35,24 @@
 \newcommand{\lean}{\texttt{engram\_lean}}
 \newcommand{\full}{\texttt{full\_context}}
 
+% Default build = named (arXiv). Double-blind build (TMLR/AAAI/ACL/ICLR):
+%   pdflatex -jobname=main_anon "\def\ANON{}\input{main}"   (then bibtex main_anon; pdflatex x2)
+\newif\ifanon\anonfalse \ifdefined\ANON\anontrue\fi
+
 \title{\bfseries Less Context, More Accuracy:\\
 A Bi-Temporal Memory Engine for LLM Agents\\
 Where a Lean Retrieved Context Beats the Full History}
 
-% NOTE: arXiv preprints are NOT anonymized. Replace the placeholder below with the
-% real author list + affiliation + contact email before uploading.
+% Named for the arXiv preprint; \anontrue (above) swaps in an anonymous block for double-blind review.
+\ifanon
+\author{Anonymous Author(s)\\ Paper under double-blind review}
+\else
 \author{%
   Liuyin Wang\thanks{Correspondence: \texttt{liuyinwangthu@gmail.com}. Code, raw logs, and the
   reproducible harness: \url{https://github.com/ly-wang19/engram}.}\\
   Independent Researcher%
 }
+\fi
 \date{June 2026}
 
 \begin{document}
