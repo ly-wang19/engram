@@ -16,7 +16,7 @@ from collections import OrderedDict
 from typing import Any, Optional
 
 from .memory import Memory
-from .util import fmt_date
+from .util import fmt_date, fmt_datetime
 
 DEFAULT_DATA_DIR = os.path.expanduser("~/.engram/data")
 
@@ -316,8 +316,8 @@ class MemoryService:
             "facts": [{
                 "id": f.id, "text": f.text, "display": display_of(f),
                 "subject": f.subject, "predicate": f.predicate,
-                "object": f.object, "valid_at": fmt_date(f.valid_at),
-                "invalid_at": fmt_date(f.invalid_at) if f.invalid_at else None,
+                "object": f.object, "valid_at": fmt_datetime(f.valid_at),
+                "invalid_at": fmt_datetime(f.invalid_at) if f.invalid_at else None,
                 "status": "live" if f.is_live() else "superseded",
                 "source": f.source, "supersedes": f.supersedes,
                 "category": getattr(f, "category", ""), "sensitive": getattr(f, "sensitive", False),

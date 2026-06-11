@@ -13,6 +13,7 @@ import {
   useResolveConflict,
 } from '../hooks/queries'
 import { useT } from '../i18n'
+import { splitStamp } from '../lib/format'
 import type { MemoryFact } from '../types'
 
 export default function Facts() {
@@ -84,10 +85,15 @@ export default function Facts() {
       <Card>
         {facts.length ? (
           <ul className="divide-y divide-line">
-            {facts.map((f) => (
+            {facts.map((f) => {
+              const { date, time } = splitStamp(f.valid_at)
+              return (
               <li key={f.id} className="group flex items-center gap-3 py-3">
                 <Badge tone={f.status === 'live' ? 'live' : 'old'}>{f.status === 'live' ? t.facts.statusLive : t.facts.statusOld}</Badge>
-                <time className="w-[78px] shrink-0 text-[11px] tabular-nums text-brand-cyan">{f.valid_at}</time>
+                <time className="w-[78px] shrink-0 tabular-nums leading-tight text-brand-cyan">
+                  <span className="block text-[11px]">{date}</span>
+                  {time && <span className="block text-[10px] text-brand-cyan/55">{time}</span>}
+                </time>
                 <div className="min-w-0 flex-1">
                   <div className={f.status === 'live' ? 'text-sm text-slate-100' : 'text-sm text-ghost line-through'}>
                     {f.display || f.text}
@@ -127,7 +133,8 @@ export default function Facts() {
                   </button>
                 </div>
               </li>
-            ))}
+              )
+            })}
           </ul>
         ) : (
           <EmptyState title={t.facts.emptyTitle} hint={t.facts.emptyHint} />
