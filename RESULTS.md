@@ -4,6 +4,8 @@ This file is the full, reproducible record behind the headline number in the REA
 discipline (CLAUDE.md, Bet D): **a number we cannot reproduce does not exist.** Everything needed to
 re-run and verify is here.
 
+**Paper:** [arXiv:2606.09900](https://arxiv.org/abs/2606.09900) — the peer-reviewable write-up of the headline result below.
+
 ---
 
 ## Headline: LongMemEval_S, 500 questions
