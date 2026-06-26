@@ -26,12 +26,15 @@
 1. No `manifest.json` → **empty store**, no error (US1 acceptance scenario 3).
 2. Parse the manifest; `schema_version` greater than supported → `IncompatibleStoreError` (FR-004).
 3. `embedding_dim` ≠ the configured embedder's dim → `DimensionMismatchError` (US2 acceptance scenario 3).
-4. Stream each `*.jsonl`; **stop at the first malformed trailing line** (torn tail, FR-005) and ignore any
-   lines beyond the manifest count.
+4. Stream exactly the manifest-declared committed prefix for each `*.jsonl`. Missing records or malformed
+   JSON **inside** that prefix raise `StoreFormatError`; malformed bytes/records **after** the manifest
+   count are treated as an uncommitted torn tail and ignored (FR-005).
 5. Reconstruct dataclasses by explicit field mapping — **no `eval`, no `pickle`** (FR-003).
 
 ## Guarantees
 - **Safe** — opening any file never executes embedded code (SC-002).
 - **Durable** — the committed prefix survives a crash mid-write (SC-003).
+- **No silent loss** — corruption inside the manifest-committed prefix fails loudly instead of loading a
+  partial memory.
 - **Versioned** — incompatible stores fail loudly, never silently (FR-004).
 - **Lossless** — every dataclass field round-trips (Constitution IV; INV-1..4 in data-model.md).

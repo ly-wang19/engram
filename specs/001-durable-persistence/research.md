@@ -17,9 +17,10 @@ preserve every field (IV), and assert **no** performance numbers (V — those ar
 
 ## D2. Crash safety → append + fsync, manifest written last (atomic), torn-tail recovery
 - **Decision**: append a record as one line, `flush()` + `os.fsync()`; write `manifest.json` **last** via
-  `manifest.json.tmp` + `os.replace()` (atomic). On load, parse each `.jsonl` line-by-line, stop at the
-  first truncated/garbled trailing line, and ignore records beyond the manifest's committed count → a crash
-  leaves a recoverable **last-committed prefix** (FR-005, SC-003).
+  `manifest.json.tmp` + `os.replace()` (atomic). On load, parse the manifest-declared committed prefix for
+  each `.jsonl`; missing/malformed records inside that prefix fail loudly, while truncated/garbled records
+  after the manifest count are ignored as an uncommitted torn tail → a crash leaves a recoverable
+  **last-committed prefix** without silently dropping committed memory (FR-005, SC-003).
 - **Rationale**: atomic rename + fsync is the standard durable-without-a-DB recipe; `os.replace` is atomic
   on POSIX and Windows.
 - **Alternatives**: *whole-file-then-rename per save* — loses O(1) append, rewrites everything (what pickle
