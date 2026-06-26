@@ -3,10 +3,15 @@ on the eval harness these are tuned per benchmark (never hand-waved -- see CLAUD
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Optional
 
 
 @dataclass
 class Config:
+    # --- storage backend selection ---
+    storage: str = "memory"  # memory | durable | lancedb
+    data_path: Optional[str] = None
+
     # --- retrieval fusion weights (CLAUDE.md §3.3) ---
     w_sem: float = 1.0  # dense semantic
     w_lex: float = 0.6  # lexical / BM25
@@ -31,6 +36,7 @@ class Config:
     rrf_k: int = 60  # Reciprocal Rank Fusion constant
     max_hops: int = 2  # multi-hop planner depth
     abstain_threshold: float = 0.45  # abstain if no attribute match AND best semantic sim below this
+    evidence_planner: bool = True  # benchmark-neutral query -> evidence-shape routing for lean_context
 
     # --- consolidation ---
     salience_decay_per_day: float = 0.02

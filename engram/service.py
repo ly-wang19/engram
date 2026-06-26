@@ -11,6 +11,7 @@ select), so the MCP server and the import CLI can use it without the web stack i
 from __future__ import annotations
 
 import os
+import shutil
 import threading
 from collections import OrderedDict
 from typing import Any, Optional
@@ -90,7 +91,9 @@ class MemoryService:
     # --- namespace lifecycle ------------------------------------------------
     def _path(self, user: str) -> str:
         safe = "".join(c for c in user if c.isalnum() or c in "-_.") or "default"
-        return os.path.join(self.data_dir, f"{safe}.pkl")
+        path = os.path.join(self.data_dir, safe)
+        legacy = os.path.join(self.data_dir, f"{safe}.pkl")
+        return legacy if os.path.exists(legacy) and not os.path.exists(path) else path
 
     def lock(self, user: str) -> threading.Lock:
         with self._g:
@@ -115,8 +118,13 @@ class MemoryService:
         with self._g:
             self._hot.pop(user, None)
         p = self._path(user)
-        if os.path.exists(p):
-            os.remove(p)
+        safe = "".join(c for c in user if c.isalnum() or c in "-_.") or "default"
+        for p in {p, os.path.join(self.data_dir, safe), os.path.join(self.data_dir, f"{safe}.pkl")}:
+            if os.path.exists(p):
+                if os.path.isdir(p):
+                    shutil.rmtree(p)
+                else:
+                    os.remove(p)
         return {"ok": True, "message": f"all memory for '{user}' erased"}
 
     @property

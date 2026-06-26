@@ -1,0 +1,37 @@
+# Contract — On-Disk Format (v1, `schema_version = 1`)
+
+## Directory layout (one per namespace)
+```
+<data_path>/<namespace>/
+├── manifest.json      # written LAST, atomically (tmp + os.replace) — the commit point
+├── episodes.jsonl
+├── facts.jsonl
+├── entities.jsonl
+├── relations.jsonl
+├── working.jsonl
+├── conflicts.jsonl
+├── .lock              # advisory single-writer lock (fcntl.flock)
+└── lancedb/           # present only when backend = "lancedb"
+```
+
+## Write protocol (crash-safe — D2)
+1. Acquire `.lock`; fail fast if held (single writer — D5).
+2. Append/rewrite each `*.jsonl` (append for incremental save; a full rewrite is acceptable for v1
+   compaction).
+3. `flush()` + `os.fsync()` each file.
+4. Write `manifest.json.tmp`, fsync it, then `os.replace()` → `manifest.json` (**atomic commit point**).
+5. Release the lock.
+
+## Read protocol (safe + recovering — D2/D3)
+1. No `manifest.json` → **empty store**, no error (US1 acceptance scenario 3).
+2. Parse the manifest; `schema_version` greater than supported → `IncompatibleStoreError` (FR-004).
+3. `embedding_dim` ≠ the configured embedder's dim → `DimensionMismatchError` (US2 acceptance scenario 3).
+4. Stream each `*.jsonl`; **stop at the first malformed trailing line** (torn tail, FR-005) and ignore any
+   lines beyond the manifest count.
+5. Reconstruct dataclasses by explicit field mapping — **no `eval`, no `pickle`** (FR-003).
+
+## Guarantees
+- **Safe** — opening any file never executes embedded code (SC-002).
+- **Durable** — the committed prefix survives a crash mid-write (SC-003).
+- **Versioned** — incompatible stores fail loudly, never silently (FR-004).
+- **Lossless** — every dataclass field round-trips (Constitution IV; INV-1..4 in data-model.md).

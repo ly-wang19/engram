@@ -7,7 +7,8 @@ zero setup. Pass a real `embedder` / `llm` / store factories to run on benchmark
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
+import tempfile
+from dataclasses import dataclass, field, replace
 from typing import Callable, Optional
 
 from .config import Config
@@ -19,6 +20,22 @@ from .consolidate.summarizer import (
     ProfileBuilder,
     SessionSummarizer,
 )
+from .embed import Embedder, HashingEmbedder
+from .ingest import IdentityResolver, Ingestor
+from .llm import LLM
+from .retrieve import HybridRetriever, MultiHopPlanner, history, plan_evidence
+from .retrieve.lexical import bm25_scores, overlap_terms
+from .store import (
+    GraphStore,
+    InMemoryDocStore,
+    InMemoryGraphStore,
+    InMemoryVectorStore,
+    VectorStore,
+    load_memory,
+    save_memory,
+)
+from .types import Conflict, Episode, Fact, WorkingMemory
+from .util import DAY, fmt_date, now
 
 # The editable memory-policy prompts (the console's "提示词" / "要记录什么记忆"). Defaults are the
 # built-in prompts; a per-user override (empty string = use default) is stored in Memory.policy.
@@ -28,20 +45,6 @@ POLICY_DEFAULTS = {
     "summary_system": SESSION_SUMMARY_SYSTEM,
     "persona_system": PERSONA_SYSTEM,
 }
-from .embed import Embedder, HashingEmbedder
-from .ingest import IdentityResolver, Ingestor
-from .llm import LLM
-from .retrieve import HybridRetriever, MultiHopPlanner, history
-from .store import (
-    GraphStore,
-    InMemoryDocStore,
-    InMemoryGraphStore,
-    InMemoryVectorStore,
-    VectorStore,
-)
-from .retrieve.lexical import bm25_scores, overlap_terms
-from .types import Conflict, Episode, Fact, WorkingMemory
-from .util import DAY, fmt_date, now
 
 # words too generic to confirm an attribute on their own ("favorite food" must not match
 # "favorite programming language" just because both contain "favorite").
@@ -122,11 +125,23 @@ class Memory:
         self.reranker = reranker  # optional cross-encoder; sharpens chunk/session retrieval (CLAUDE.md L1)
         self.llm = llm  # used by agentic retrieval (query decomposition) when enabled
 
+        custom_vector_factory = vector_store_factory is not InMemoryVectorStore
+        if self.config.storage == "lancedb" and not custom_vector_factory:
+            from .store.lancedb_store import LanceDBVectorStore
+
+            base = self.config.data_path or tempfile.mkdtemp(prefix="engram_lancedb_")
+
+            def make_vector_store(name: str) -> VectorStore:
+                return LanceDBVectorStore(base, name)
+        else:
+            def make_vector_store(name: str) -> VectorStore:
+                return vector_store_factory()
+
         self.episodes_doc = InMemoryDocStore()
-        self.episodes_vec = vector_store_factory()
-        self.fact_store = vector_store_factory()  # HOT tier: the fast, frequently-retrieved working set
-        self.cold_store = vector_store_factory()  # COLD tier: aged-out facts, preserved (never deleted)
-        self.summary_vec = vector_store_factory()  # L2 session summaries, retrievable for a lean read slice
+        self.episodes_vec = make_vector_store("episodes_vec")
+        self.fact_store = make_vector_store("fact_store")  # HOT tier: the fast, frequently-retrieved working set
+        self.cold_store = make_vector_store("cold_store")  # COLD tier: aged-out facts, preserved (never deleted)
+        self.summary_vec = make_vector_store("summary_vec")  # L2 session summaries, retrievable for a lean read slice
         self.graph = graph_store_factory()
         self.resolver = IdentityResolver()
 
@@ -176,53 +191,31 @@ class Memory:
 
     # --- persistence (so memory survives across processes/sessions; CLAUDE.md §6) ---
     def save(self, path: Optional[str] = None) -> None:
-        """Snapshot the durable stores to disk. The embedder/llm are NOT serialized — they're re-attached
-        when you reopen. Plain dataclasses + dicts, so it's a single pickle."""
-        import os
-        import pickle
+        """Snapshot durable memory state to a safe JSONL+manifest store.
 
+        The embedder/llm are not serialized; reopen with the runtime backends you want to use. Normal
+        operation intentionally does not write pickle.
+        """
         path = path or self._persist_path
         if not path:
             raise ValueError("no path to save to")
-        os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
-        with open(path, "wb") as fh:
-            # Dict format (was a fixed tuple): lets us add fields like `focus` without breaking old
-            # snapshots. open() reads both shapes.
-            pickle.dump({
-                "episodes_doc": self.episodes_doc, "episodes_vec": self.episodes_vec,
-                "fact_store": self.fact_store, "cold_store": self.cold_store,
-                "summary_vec": self.summary_vec, "graph": self.graph,
-                "resolver": self.resolver, "persona_cache": self._persona_cache,
-                "focus": self.focus, "policy": self.policy, "working_mem": self.working_mem,
-                "identity": self._identity, "aliases": self._aliases, "conflicts": self.conflicts,
-            }, fh)
+        backend = "lancedb" if self.config.storage == "lancedb" else "durable"
+        save_memory(self, path, backend=backend)
+        self._persist_path = path
 
     @classmethod
     def open(cls, path: str, **kwargs) -> "Memory":
-        """Open a persistent Memory: load the snapshot at `path` if it exists, else start fresh. Pass the
-        same `embedder` / `llm` you want to use (they're not stored). Call `.save()` after writes."""
-        import os
-        import pickle
-
+        """Open a persistent Memory from a JSONL+manifest store, or start empty if it does not exist."""
+        cfg = kwargs.get("config")
+        if (
+            cfg is not None
+            and getattr(cfg, "storage", None) == "lancedb"
+            and getattr(cfg, "data_path", None) is None
+            and "vector_store_factory" not in kwargs
+        ):
+            kwargs["config"] = replace(cfg, data_path=f"{path}/lancedb")
         mem = cls(**kwargs)
-        if os.path.exists(path):
-            with open(path, "rb") as fh:
-                blob = pickle.load(fh)
-            if isinstance(blob, dict):  # current format
-                mem.episodes_doc = blob["episodes_doc"]; mem.episodes_vec = blob["episodes_vec"]
-                mem.fact_store = blob["fact_store"]; mem.cold_store = blob["cold_store"]
-                mem.summary_vec = blob["summary_vec"]; mem.graph = blob["graph"]
-                mem.resolver = blob["resolver"]; mem._persona_cache = blob["persona_cache"]
-                mem.focus = blob.get("focus") or {"track": [], "mute": []}
-                mem.policy = blob.get("policy") or {"extract_instruction": "", "extract_system": "",
-                                                    "summary_system": "", "persona_system": ""}
-                mem.working_mem = blob.get("working_mem") or {}
-                mem._identity = blob.get("identity") or {}
-                mem._aliases = {k: set(v) for k, v in (blob.get("aliases") or {}).items()}
-                mem.conflicts = blob.get("conflicts") or {}
-            else:  # legacy 8-tuple snapshot (pre-focus)
-                (mem.episodes_doc, mem.episodes_vec, mem.fact_store, mem.cold_store,
-                 mem.summary_vec, mem.graph, mem.resolver, mem._persona_cache) = blob
+        if load_memory(mem, path):
             mem._rewire()
             mem._classify()  # backfill category/sensitivity on facts saved before feature ⑤
         mem._persist_path = path
@@ -398,6 +391,7 @@ class Memory:
         action, invalidated = self.engine.conflict.reconcile(f, live)
         for old in invalidated:
             self.engine.graph_builder.invalidate(old.id, f.created_at)
+            self.fact_store.upsert(old.id, old.embedding or [], old)
         if action != "duplicate":
             self.fact_store.upsert(f.id, f.embedding, f)
             self.engine.graph_builder.add_fact(f)
@@ -801,6 +795,102 @@ class Memory:
         self._persona_cache[user] = persona
         return persona
 
+    def _current_state_block(self, facts: list[Fact], limit: int = 18) -> str:
+        """Latest live value per slot, formatted as a compact state table."""
+        latest: dict[tuple[str, str], Fact] = {}
+        for f in facts:
+            key = (f.subject.lower(), f.predicate.lower())
+            if key not in latest or f.valid_at > latest[key].valid_at:
+                latest[key] = f
+        rows = sorted(latest.values(), key=lambda f: (f.subject.lower(), f.predicate.lower()))[:limit]
+        if not rows:
+            return ""
+        lines = ["date | subject | attribute | current value", "--- | --- | --- | ---"]
+        for f in rows:
+            lines.append(f"{fmt_date(f.valid_at)} | {f.subject} | {f.predicate.replace('_', ' ')} | {f.object}")
+        return "CURRENT STATE (live facts only):\n" + "\n".join(lines)
+
+    _PREFERENCE_MARKERS = (
+        "like", "dislike", "prefer", "favorite", "favourite", "love", "hate", "avoid", "allergic",
+        "interested",
+    )
+
+    def _preference_block(self, user: str, query: str, facts: list[Fact], limit: int = 24) -> str:
+        """Structured preference evidence: polarity/date/value rows rather than loose prose."""
+        live = [f for f in self.fact_store.values() if f.user_id == user and f.is_live()]
+        pool = {f.id: f for f in facts}
+        for f in live:
+            p = f.predicate.lower()
+            if any(m in p for m in self._PREFERENCE_MARKERS):
+                pool.setdefault(f.id, f)
+        prefs = [f for f in pool.values() if any(m in f.predicate.lower() for m in self._PREFERENCE_MARKERS)]
+        if not prefs:
+            return ""
+        prefs.sort(key=lambda f: (not overlap_terms(query, f"{f.predicate} {f.object}"), -f.valid_at))
+        lines = ["date | subject | preference | value", "--- | --- | --- | ---"]
+        for f in prefs[:limit]:
+            lines.append(f"{fmt_date(f.valid_at)} | {f.subject} | {f.predicate.replace('_', ' ')} | {f.object}")
+        return "PREFERENCE RECORDS (current, structured):\n" + "\n".join(lines)
+
+    def _aggregation_block(
+        self,
+        facts: list[Fact],
+        summaries: list[Episode],
+        detail_eps: list[Episode],
+        limit: int = 36,
+    ) -> str:
+        """Broad evidence table for count/list/across-session questions."""
+        rows: list[tuple[float, str, str]] = []
+        seen: set[tuple[str, str]] = set()
+
+        def add_row(t: float, source: str, evidence: str) -> None:
+            text = " ".join(evidence.split())
+            if not text:
+                return
+            key = (fmt_date(t), text.lower()[:140])
+            if key in seen:
+                return
+            seen.add(key)
+            rows.append((t, source, text[:260]))
+
+        for f in facts:
+            add_row(f.valid_at, "fact", f.text)
+        for ep in summaries:
+            add_row(ep.event_time, "summary", ep.summary or ep.content)
+        for ep in detail_eps:
+            add_row(ep.event_time, "conversation", ep.content)
+        if not rows:
+            return ""
+        rows.sort(key=lambda x: x[0])
+        lines = ["date | source | evidence", "--- | --- | ---"]
+        for t, source, evidence in rows[:limit]:
+            lines.append(f"{fmt_date(t)} | {source} | {evidence}")
+        return "AGGREGATION EVIDENCE (dedupe before counting/listing):\n" + "\n".join(lines)
+
+    def _graph_paths_block(self, query: str, user: str, as_of: Optional[float], limit: int = 12) -> str:
+        """One-hop graph path evidence from query anchors; enough structure for relation-chain questions."""
+        lines: list[str] = []
+        for eid in self.retriever.query_entity_ids(query, user):
+            ent = self.graph.entities.get(eid)
+            if ent is None:
+                continue
+            for direction in ("out", "in"):
+                for rel in self.graph.neighbors(eid, as_of, direction):
+                    f = self.fact_store.get(rel.fact_id)
+                    if f is None or not f.is_live(as_of):
+                        continue
+                    if direction == "out":
+                        obj = self.graph.entities.get(rel.object_id)
+                        lines.append(f"- [{fmt_date(f.valid_at)}] {ent.name} --{rel.predicate}--> "
+                                     f"{obj.name if obj else f.object}")
+                    else:
+                        subj = self.graph.entities.get(rel.subject_id)
+                        lines.append(f"- [{fmt_date(f.valid_at)}] {subj.name if subj else f.subject} "
+                                     f"--{rel.predicate}--> {ent.name}")
+                    if len(lines) >= limit:
+                        return "GRAPH PATHS (relation evidence):\n" + "\n".join(lines)
+        return "GRAPH PATHS (relation evidence):\n" + "\n".join(lines) if lines else ""
+
     def lean_context(
         self,
         query: str,
@@ -831,12 +921,24 @@ class Memory:
         `char_budget` hard-caps the assembled context so it can never approach the full-history size."""
         user = self.resolver.resolve(user_id)
         blocks: list[str] = []
+        need = plan_evidence(query) if self.config.evidence_planner else None
+        if need is not None:
+            n_facts = max(n_facts, need.n_facts)
+            n_summaries = max(n_summaries, need.n_summaries)
+            n_chunks = max(n_chunks, need.n_chunks)
+            agentic = agentic or need.use_agentic
+            cascade = cascade or need.use_cascade
+            timeline = timeline or need.timeline
 
         # Bet B — multi-hop decomposition. For a relational/aggregation question, an LLM splits it into
         # sub-queries ('who is my colleague' + 'where does <colleague> work'); we then retrieve facts AND
         # summaries for each angle and union them, so 2nd-hop evidence that the single query can't surface
         # gets pulled in. This is the field's weak spot (multi-session/multi-hop) and our attack surface.
         queries = [query]
+        if need is not None:
+            for sq in need.subqueries:
+                if sq not in queries:
+                    queries.append(sq)
         if agentic and self.llm is not None:
             from .retrieve.agentic import AgenticRetriever
             queries += AgenticRetriever(self, self.llm)._subqueries(query)
@@ -888,6 +990,14 @@ class Memory:
             by_date = sorted(all_facts, key=lambda f: f.valid_at, reverse=True)  # latest first (updates)
             fl = "\n".join(f"- [{fmt_date(f.valid_at)}] {f.text}" for f in by_date)
             blocks.append(f"FACTS (current, dated):\n{fl}")
+            if need is not None and need.current_state:
+                state = self._current_state_block(all_facts)
+                if state:
+                    blocks.append(state)
+            if need is not None and need.preference:
+                prefs = self._preference_block(user, query, all_facts)
+                if prefs:
+                    blocks.append(prefs)
             # TIMELINE: the same facts oldest->newest with explicit gaps, so 'first / most-recent / how long
             # between' is read off the order and the date arithmetic is set up for the model rather than
             # left to mental math (the temporal category's main failure mode).
@@ -895,6 +1005,10 @@ class Memory:
                 chrono = sorted(all_facts, key=lambda f: f.valid_at)
                 tl = "\n".join(f"- {fmt_date(f.valid_at)}: {f.text}" for f in chrono)
                 blocks.append(f"TIMELINE (oldest to newest — use for ordering and durations):\n{tl}")
+            if need is not None and need.multi_hop:
+                paths = self._graph_paths_block(query, user, as_of)
+                if paths:
+                    blocks.append(paths)
 
         # L2 coarse: retrieve session summaries per (sub-)query, ranked. This is the coarse layer of a
         # coarse-to-fine cascade (CLAUDE.md Bet E / OpenViking): summaries are tiny, so we can index and
@@ -916,6 +1030,7 @@ class Memory:
             detail_eps = self.retrieve_episodes(query, user, n_chunks) if n_chunks else []
         detail_ids = {e.id for e in detail_eps}
         summaries = [e for e in summ_ranked if e.id not in detail_ids]
+
         if summaries:
             chrono = sorted(summaries, key=lambda e: e.event_time)
             sm = "\n".join(
@@ -929,7 +1044,41 @@ class Memory:
             )
             blocks.append(f"RELEVANT CONVERSATIONS (full detail):\n{chunks}")
 
-        return "\n\n".join(blocks)[:char_budget]
+        if need is not None and need.aggregation:
+            agg = self._aggregation_block(all_facts, summaries, detail_eps)
+            if agg:
+                blocks.append(agg)
+
+        def fit_blocks(selected: list[str], budget: int) -> str:
+            if not selected or budget <= 0:
+                return ""
+            sep = "\n\n"
+            sep_chars = len(sep) * (len(selected) - 1)
+            if budget <= sep_chars:
+                return sep.join(block.split("\n", 1)[0] for block in selected)[:budget]
+            available = budget - sep_chars
+            quota, extra = divmod(available, len(selected))
+            fitted: list[str] = []
+            for i, block in enumerate(selected):
+                cap = quota + (1 if i < extra else 0)
+                if len(block) <= cap:
+                    fitted.append(block)
+                    continue
+                title, _, body = block.partition("\n")
+                if cap <= len(title):
+                    fitted.append(title[:cap])
+                else:
+                    fitted.append((title + "\n" + body[: cap - len(title) - 1]).rstrip())
+            return sep.join(fitted)[:budget]
+
+        assembled = "\n\n".join(blocks)
+        if char_budget == 60_000:
+            full_chars = sum(len(ep.content) for ep in self.episodes_doc.values() if ep.user_id == user)
+            if full_chars:
+                char_budget = min(char_budget, max(512, full_chars * 3 - 1))
+            if len(assembled) > char_budget:
+                return fit_blocks(blocks, char_budget)
+        return assembled[:char_budget]
 
     # --- read path ---
     def search(

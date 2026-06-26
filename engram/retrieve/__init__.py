@@ -5,13 +5,16 @@ from .lexical import bm25_scores, overlap_terms, stem, stems, token_overlap
 from .planner import MultiHopPlanner, PlanResult
 from .rerank import CrossEncoderReranker
 from .temporal import history, live_at
+from .evidence import EvidenceNeed, plan_evidence
 
 __all__ = [
     "HybridRetriever",
     "MultiHopPlanner",
     "PlanResult",
+    "EvidenceNeed",
     "AgenticRetriever",
     "CrossEncoderReranker",
+    "plan_evidence",
     "bm25_scores",
     "token_overlap",
     "overlap_terms",

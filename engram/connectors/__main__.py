@@ -63,7 +63,11 @@ def _import_local(args, sessions) -> dict:
 
     os.makedirs(os.path.expanduser(args.data_dir), exist_ok=True)
     safe = "".join(c for c in args.namespace if c.isalnum() or c in "-_.") or "me"
-    path = os.path.join(os.path.expanduser(args.data_dir), f"{safe}.pkl")
+    base = os.path.expanduser(args.data_dir)
+    path = os.path.join(base, safe)
+    legacy = os.path.join(base, f"{safe}.pkl")
+    if os.path.exists(legacy) and not os.path.exists(path):
+        path = legacy
     mem = Memory.open(path, embedder=embedder, llm=llm)
     stats = mem.import_messages(sessions, user_id=args.namespace,
                                 consolidate=not args.no_consolidate, summarize=not args.no_summarize)

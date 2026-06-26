@@ -530,6 +530,14 @@ def _acc(hits):
     return 100.0 * sum(flat) / len(flat) if flat else 0.0
 
 
+def _percentile(values: list[float], p: float) -> float:
+    if not values:
+        return 0.0
+    s = sorted(values)
+    idx = min(len(s) - 1, int(round((p / 100.0) * (len(s) - 1))))
+    return s[idx]
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--data", default=None, help="path to longmemeval json (default: bundled sample)")
@@ -587,7 +595,8 @@ def main():
         print(f"     accuracy        engram {_acc(eng_hits):5.1f}%   full-context {_acc(fc_hits):5.1f}%")
         print(f"     context tokens  engram {avg(eng_tok):6.1f}   full-context {avg(fc_tok):7.1f}   "
               f"({avg(fc_tok)/max(1,avg(eng_tok)):.1f}x leaner)")
-        print(f"     latency ms      {avg(lat):.0f} (retrieve+answer)")
+        print(f"     p50 latency ms  {_percentile(lat, 50):.0f} (retrieve+answer)")
+        print(f"     p95 latency ms  {_percentile(lat, 95):.0f} (retrieve+answer)")
 
 
 if __name__ == "__main__":

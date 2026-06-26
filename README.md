@@ -48,8 +48,8 @@ a fraction of the tokens):
 | full-context baseline (same answerer+judge) | 73.2% | 79k | stuffs the whole haystack in the prompt |
 
 **Engram beats the full-context baseline by +10.4 points while using ~8× fewer tokens** (9.6k vs 79k) — the
-filtered slice is *more* accurate than the noisy full window, and the cost stays flat as history grows
-(full-context can't). Per-category (`engram_lean`, full 500):
+filtered slice is *more* accurate than the noisy full window on this run. Per-category (`engram_lean`,
+full 500):
 
 | Category | Score | n |
 |---|---|---|
@@ -62,10 +62,10 @@ filtered slice is *more* accurate than the noisy full window, and the cost stays
 | single-session-preference | 73.3% | 30 |
 
 **Where it stands:** at **83.6%** Engram beats the full-context baseline decisively (**+10.4**) at a fraction
-of the tokens, and the cost stays flat as history grows. We report it openly — same answerer, same strict
-judge, every question logged, no cherry-picked slice. Engram leads on **token efficiency, scalability, and
-reproducibility**; the hardest categories (multi-session reasoning, temporal aggregation) are the active
-roadmap, where there's still headroom.
+of the tokens. We report it openly — same answerer, same strict judge, every question logged, no
+cherry-picked slice. Engram leads on **token efficiency and reproducibility** in this run; scaling the
+same discipline to larger corpora is the active roadmap, alongside the hardest categories
+(multi-session reasoning, temporal aggregation).
 
 ## Quickstart (zero setup, no API keys)
 
@@ -76,6 +76,22 @@ python examples/quickstart.py
 Runs the full pipeline — ingest → consolidate → retrieve — using offline deterministic fallbacks (hashing
 embedder, rule-based extractor, in-memory stores). Real backends (LanceDB, Kuzu, LiteLLM, BGE) plug in
 behind the same interfaces via `pip install "engram-memory[all]"`.
+
+To use the embedded LanceDB vector backend explicitly:
+
+```python
+from engram import Config, Memory
+
+cfg = Config(storage="lancedb", data_path="./engram-vectors")
+mem = Memory.open("./engram-store", config=cfg)
+```
+
+Existing trusted legacy pickle snapshots can be migrated explicitly:
+
+```bash
+engram-migrate-pickle --from old-memory.pkl --to ./engram-store --dry-run
+engram-migrate-pickle --from old-memory.pkl --to ./engram-store
+```
 
 ```python
 from engram import Memory
@@ -171,7 +187,7 @@ path that never blocks on an LLM, and a slow consolidation path that does the he
 ```mermaid
 flowchart TB
     ADD([add messages]) --> S1
-    subgraph S1 [SYSTEM-1 · hot write path · no LLM · under 50ms]
+    subgraph S1 [SYSTEM-1 · hot write path · no LLM on critical path]
         direction LR
         S1a[append lossless Episode] --> S1b[identity resolution<br/>across sessions/devices] --> S1c[light embed + enqueue]
     end
@@ -190,7 +206,7 @@ flowchart TB
     end
     TM --> R
     Q([search query]) --> R
-    subgraph R [READ PATH · hybrid retrieval · under 100ms]
+    subgraph R [READ PATH · hybrid retrieval]
         direction TB
         Ra[multi-hop query decomposition] --> Rb[parallel retrieve:<br/>dense vector + BM25 lexical + graph n-hop + recency/salience]
         Rb --> Rc[Reciprocal Rank Fusion + optional rerank] --> Rd[bi-temporal as-of filter] --> Re[abstention gate] --> Rf[assemble dated, provenance-tagged context]
@@ -199,7 +215,7 @@ flowchart TB
 ```
 
 **The write path (System-1)** appends a lossless episode, resolves identity across sessions/devices, embeds
-and enqueues — no LLM on the critical path, so it stays under ~50ms. **The consolidation path (System-2)**
+and enqueues — no LLM on the critical path. **The consolidation path (System-2)**
 runs asynchronously: it extracts atomic `(subject, predicate, object)` facts, builds a knowledge graph, and
 resolves contradictions. **The read path** decomposes the question, retrieves through four complementary
 channels in parallel, fuses them with RRF (optional cross-encoder rerank), applies a point-in-time temporal filter, and assembles a
@@ -213,7 +229,7 @@ dated, provenance-tagged context.
 | 2 | **Non-destructive conflict resolution** — a contradicted fact is *invalidated* (`invalid_at` + `supersedes` chain), never deleted | No silent memory corruption. Every fact answers "where did this come from?" and "what did it replace?" — full provenance + audit trail. |
 | 3 | **Cheap conflict detection** — slot-match + embedding/NLI heuristics, escalate to an LLM **only** when ambiguous | Production-grade temporal correctness **without** an LLM call per fact — the cost win at scale. |
 | 4 | **Hybrid retrieval** — dense semantic + BM25 lexical + graph proximity + recency/salience, fused with RRF | No single retriever wins everywhere. The *validated* finding: **facts + raw chunks beats either alone** — facts add conflict-resolved/temporal signal, chunks restore lost detail. |
-| 5 | **Dual-process split** — fast write, async consolidation | Read path stays sub-100ms while graph-building, dedup, and conflict resolution happen off the critical path. |
+| 5 | **Dual-process split** — fast write, async consolidation | Keeps graph-building, dedup, and conflict resolution off the critical path; read-path latency is measured in the harness before we publish claims. |
 | 6 | **Pluggable everything** — LLM / embedder / vector store / graph store all sit behind interfaces with **zero-dep offline fallbacks** | `quickstart.py` and `pytest` run with **no API keys, no services**. Swap in BGE / LanceDB / Kuzu / any LLM via one config line. |
 | 7 | **The reproducible harness** — one neutral eval, official judge baked in, full-context baseline in every table, raw logs published | In a field where every vendor's number is contested, *being the scoreboard anyone can verify* is the real moat. |
 

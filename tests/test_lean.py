@@ -225,6 +225,51 @@ def test_timeline_block_is_chronological():
     assert dates == sorted(dates), "timeline must be chronological (oldest to newest)"
 
 
+def test_evidence_planner_is_query_based_not_benchmark_based():
+    """The planner routes by evidence shape only; there is no benchmark category input."""
+    from engram.retrieve.evidence import plan_evidence
+
+    agg = plan_evidence("How many trips did I take, and list every city?")
+    assert agg.aggregation and agg.use_cascade and agg.n_summaries > 0
+    assert agg.subqueries
+
+    pref = plan_evidence("What food do I prefer or dislike?")
+    assert pref.preference and pref.n_chunks > 0
+
+    temporal = plan_evidence("When was the first time I traveled after Lisbon?")
+    assert temporal.timeline
+
+    kits = plan_evidence("How many model kits have I worked on or bought?")
+    assert any("model kit" in q for q in kits.subqueries)
+
+
+def test_lean_context_auto_adds_timeline_for_temporal_queries():
+    mem = build()
+    ctx = mem.lean_context("When was the first time I traveled?", user_id="u1", n_chunks=0)
+    assert "TIMELINE (oldest to newest" in ctx
+
+
+def test_lean_context_auto_adds_preference_records():
+    mem = build()
+    ctx = mem.lean_context("What is my favorite language?", user_id="u1", n_chunks=0)
+    assert "PREFERENCE RECORDS (current, structured):" in ctx
+    assert "favorite language" in ctx.lower()
+
+
+def test_lean_context_auto_adds_aggregation_evidence():
+    mem = build()
+    ctx = mem.lean_context("How many trips did I take?", user_id="u1", n_chunks=0)
+    assert "AGGREGATION EVIDENCE (dedupe before counting/listing):" in ctx
+    assert "date | source | evidence" in ctx
+
+
+def test_lean_context_auto_adds_current_state_for_now_queries():
+    mem = build()
+    ctx = mem.lean_context("Where do I currently work?", user_id="u1", n_chunks=0)
+    assert "CURRENT STATE (live facts only):" in ctx
+    assert "current value" in ctx
+
+
 def test_cascade_coarse_to_fine_assembles():
     """Coarse-to-fine cascade: detail is drilled from the top-ranked summaries; both modes assemble."""
     mem = build()

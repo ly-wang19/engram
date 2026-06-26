@@ -85,6 +85,7 @@ class ConsolidationEngine:
                 action, invalidated = self.conflict.reconcile(fact, live)
                 for old in invalidated:
                     self.graph_builder.invalidate(old.id, fact.created_at)
+                    self.fact_store.upsert(old.id, old.embedding or [], old)
                     stats["invalidated"] += 1
                 if action == "duplicate":
                     stats["duplicates"] += 1

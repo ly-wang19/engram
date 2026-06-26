@@ -57,6 +57,14 @@ from eval.longmemeval import (  # noqa: E402
 )
 
 
+def percentile(values: list[float], p: float) -> float:
+    if not values:
+        return 0.0
+    s = sorted(values)
+    idx = min(len(s) - 1, int(round((p / 100.0) * (len(s) - 1))))
+    return s[idx]
+
+
 @dataclass
 class Rig:
     embedder: object
@@ -146,17 +154,20 @@ class Mem0System:
         from mem0 import Memory as Mem0Memory  # noqa: F401  (validated when --systems includes mem0)
 
         self._Mem0 = Mem0Memory
-        os.environ.setdefault("OPENAI_API_KEY", os.environ.get("DEEPSEEK_API_KEY", ""))
-        self._dk = os.environ.get("DEEPSEEK_API_KEY")
+        # Mem0's internal extraction LLM -> the working ARK (Volcano) account (doubao-flash): the SAME
+        # internal model Engram uses (so the comparison is fair) and the account that still has balance.
+        self._llm_key = os.environ.get("ARK_API_KEY")
+        self._llm_base = os.environ.get("ARK_BASE_URL", "https://ark.cn-beijing.volces.com/api/v3")
+        os.environ.setdefault("OPENAI_API_KEY", self._llm_key or "")
 
     def context(self, item: dict) -> str:
-        # Fair config: SAME internal LLM (deepseek) + embedder (bge-small) as Engram. Per-question chroma
+        # Fair config: SAME internal LLM (doubao-flash) + embedder (bge-small) as Engram. Per-question chroma
         # path = isolation + thread-safety (each question's memory is independent, as LongMemEval requires).
         qid, q = item["question_id"], item["question"]
         safe = qid.replace("/", "_")
         cfg = {
-            "llm": {"provider": "openai", "config": {"model": "deepseek-chat",
-                    "openai_base_url": "https://api.deepseek.com/v1", "api_key": self._dk, "temperature": 0.0}},
+            "llm": {"provider": "openai", "config": {"model": "doubao-seed-1-6-flash-250615",
+                    "openai_base_url": self._llm_base, "api_key": self._llm_key, "temperature": 0.0}},
             "embedder": {"provider": "huggingface", "config": {"model": "BAAI/bge-small-en-v1.5"}},
             "vector_store": {"provider": "chroma", "config": {"collection_name": "mem0_lme", "path": f"data/mem0c/{safe}"}},
             # per-question SQLite history too — else the shared default db locks under parallel workers.
@@ -343,6 +354,26 @@ SYSTEMS = {"engram": EngramSystem, "full_context": FullContextSystem, "rag": RAG
            "engram_full": EngramFullSystem, "engram_lean": EngramLeanSystem}
 
 
+def failed_qids(path: str, system: str, limit: int = 0) -> set[str]:
+    """QIDs that a prior run got wrong for `system`.
+
+    This is for regression replay: rerun the exact old misses with current code, without hand-picking
+    items or peeking at benchmark categories during retrieval.
+    """
+    qids: list[str] = []
+    with open(path, encoding="utf-8") as fh:
+        for line in fh:
+            if not line.strip():
+                continue
+            row = json.loads(line)
+            res = row.get("sys", {}).get(system)
+            if res and res.get("ok") is False:
+                qids.append(row["qid"])
+                if limit and len(qids) >= limit:
+                    break
+    return set(qids)
+
+
 def eval_item(item, systems, rig):
     qid, cat, q = item["question_id"], item.get("question_type", "?"), item["question"]
     qdate = item.get("question_date", "")
@@ -411,6 +442,12 @@ def main():
     ap.add_argument("--category", default=None,
                     help="filter to one question_type (e.g. knowledge-update) BEFORE --limit, to A/B a "
                          "category-specific change without paying for the whole set")
+    ap.add_argument("--failures-from", default=None,
+                    help="filter to QIDs that --failure-system got wrong in a previous bench JSONL")
+    ap.add_argument("--failure-system", default="engram_lean",
+                    help="system name to read from --failures-from (default: engram_lean)")
+    ap.add_argument("--failure-limit", type=int, default=0,
+                    help="max number of prior failures to replay (0 = all)")
     ap.add_argument("--limit", type=int, default=40)
     ap.add_argument("--systems", default="engram,full_context,rag")
     ap.add_argument("--answerer", default="univibe:gemini-2.5-flash")
@@ -477,6 +514,12 @@ def main():
     if args.category:
         items = [it for it in items if it.get("question_type") == args.category]
         print(f"  CATEGORY filter: {len(items)} '{args.category}' items")
+    if args.failures_from:
+        qids = failed_qids(args.failures_from, args.failure_system, args.failure_limit)
+        n_before = len(items)
+        items = [it for it in items if it["question_id"] in qids]
+        print(f"  FAILURE replay: {len(items)} of {n_before} items from {args.failures_from} "
+              f"where {args.failure_system} was wrong")
     if args.limit and args.limit < len(items):
         stride = max(1, len(items) // args.limit)
         items = items[::stride][: args.limit]
@@ -611,9 +654,13 @@ def main():
     for n in sys_names:
         row += (f"{sum(toks[n])/len(toks[n]):.0f}" if toks[n] else "-").ljust(16)
     print(row)
-    row = "  " + "avg latency ms".ljust(26)
+    row = "  " + "p50 latency ms".ljust(26)
     for n in sys_names:
-        row += (f"{sum(lats[n])/len(lats[n]):.0f}" if lats[n] else "-").ljust(16)
+        row += (f"{percentile(lats[n], 50):.0f}" if lats[n] else "-").ljust(16)
+    print(row)
+    row = "  " + "p95 latency ms".ljust(26)
+    for n in sys_names:
+        row += (f"{percentile(lats[n], 95):.0f}" if lats[n] else "-").ljust(16)
     print(row)
     if any(errs.values()):
         print("  errors:", {n: errs[n] for n in sys_names if errs[n]})

@@ -168,7 +168,7 @@ Target benchmarks, in order: LongMemEval_S → LongMemEval_M → LOCOMO → Pers
 
 ```
 .
-├── CLAUDE.md                  # this charter (source of truth)
+├── AGENTS.md                  # this charter (source of truth)
 ├── README.md                  # short public-facing intro
 ├── LICENSE                    # GNU AGPL-3.0 (the open-source arm of the dual license)
 ├── COMMERCIAL-LICENSE.md      # commercial license for proprietary/closed-source/SaaS use

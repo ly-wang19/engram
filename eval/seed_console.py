@@ -2,7 +2,7 @@
 browse and test — ONE user namespace per question (key = its number).
 
 Why local-build-then-upload: the server uses bge-small, so we build the per-user stores HERE with the
-same embedder (vectors are compatible) and just copy the .pkl files into the server's ENGRAM_DATA_DIR.
+same embedder (vectors are compatible) and copy the generated store directories into ENGRAM_DATA_DIR.
 The server isn't hammered, and there's no model mismatch.
 
 Hybrid extraction (cost vs. quality): the bulk uses the FREE offline rule extractor; a representative
@@ -13,7 +13,7 @@ either way.
 Run from the repo root (so .env with the provider key is picked up):
   python eval/seed_console.py \
       --data ~/.cache/huggingface/hub/datasets--xiaowu0162--longmemeval/snapshots/*/longmemeval_s \
-      --out /tmp/console_pkls --featured-per-cat 3 --llm volcano:doubao-seed-1-6-flash-250615
+      --out /tmp/console_stores --featured-per-cat 3 --llm volcano:doubao-seed-1-6-flash-250615
 """
 from __future__ import annotations
 
@@ -135,7 +135,7 @@ def main() -> None:
         except Exception as exc:  # noqa: BLE001 -- never let one bad item abort the whole seed
             print(f"  [{key}] consolidate degraded: {type(exc).__name__}: {exc}")
         n_live = sum(1 for f in mem.fact_store.values() if f.is_live())
-        mem.save(os.path.join(args.out, f"{key}.pkl"))
+        mem.save(os.path.join(args.out, key))
         manifest.append({
             "key": key,
             "category": item.get("question_type", "?"),
