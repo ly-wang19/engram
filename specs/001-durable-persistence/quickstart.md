@@ -45,7 +45,8 @@ pytest -q tests/test_persist_safety.py
 ```bash
 pytest -q tests/test_persist_crash.py
 ```
-**Expected**: a JSONL file truncated mid-line loads the committed prefix and drops only the torn record.
+**Expected**: a JSONL file with torn bytes after the manifest count drops only that uncommitted tail; a
+missing or malformed record inside the manifest-committed prefix raises `StoreFormatError`.
 
 ## Scenario E — LanceDB backend persists + parity (US2 · SC-005 · FR-009)
 ```bash
