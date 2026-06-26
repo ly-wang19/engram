@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Optional
 
 from ..config import Config
+from ..consolidate.conflict import is_single_valued
 from ..embed import Embedder
 from ..store import GraphStore, VectorStore
 from ..types import Fact
@@ -98,11 +99,47 @@ class HybridRetriever:
                 scores[f.id] = 0.0
         return scores, qids
 
+    def _current_identity_heads(self, facts: list[Fact]) -> list[Fact]:
+        """For current-state identity slots, retrieve only the slot head.
+
+        Conflict resolution should normally invalidate stale slot values before retrieval. This is a
+        defensive read-path guard for duplicate live payloads from partial backends or manual imports:
+        "works_at Tencent" and "works_at Moonshot AI" must not compete in fusion as two current facts.
+        """
+        heads: dict[tuple[str, str, str], Fact] = {}
+        for fact in facts:
+            if fact.predicate.lower() not in _IDENTITY_PREDS or not is_single_valued(fact.predicate):
+                continue
+            cur = heads.get(fact.slot)
+            # Manual facts are authoritative; otherwise the latest valid/current observation is the head.
+            if cur is None or (
+                fact.source == "user",
+                fact.valid_at,
+                fact.created_at,
+                fact.id,
+            ) > (
+                cur.source == "user",
+                cur.valid_at,
+                cur.created_at,
+                cur.id,
+            ):
+                heads[fact.slot] = fact
+        return [
+            fact
+            for fact in facts
+            if (
+                fact.predicate.lower() not in _IDENTITY_PREDS
+                or not is_single_valued(fact.predicate)
+                or heads.get(fact.slot) is fact
+            )
+        ]
+
     def retrieve(
         self, query: str, user_id: str, as_of: Optional[float] = None, top_k: Optional[int] = None
     ) -> tuple[list[tuple[Fact, float]], dict]:
         top_k = top_k or self.config.top_k
         live = [f for f in self.fact_store.values() if f.user_id == user_id and f.is_live(as_of)]
+        live = self._current_identity_heads(live)
         if not live:
             return [], {"sem": {}, "lex": {}, "qids": set()}
 

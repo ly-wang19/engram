@@ -279,3 +279,15 @@ extras that slot in behind the same interfaces. We never break the zero-setup de
 - **Multi-hop** — a question whose answer requires chaining ≥2 facts (the field's weak spot, our target).
 - **Full-context baseline** — stuff the entire history into the prompt. The accuracy ceiling we must beat.
 - **The harness** — our in-repo, reproducible evaluation pipeline; the basis for every number we publish.
+
+<!-- SPECKIT START -->
+**Spec-driven development (Spec-Kit).** Project principles are codified in
+[`.specify/memory/constitution.md`](.specify/memory/constitution.md) (distilled from this charter); every
+feature flows `/speckit-specify` → `/speckit-plan` → `/speckit-tasks` → `/speckit-implement` under
+`specs/`.
+
+**Active feature:** `001-durable-persistence` — durable persistence backend (LanceDB vector store + a safe
+JSONL+manifest snapshot replacing pickle); in-memory stays the zero-setup default.
+- Plan: [specs/001-durable-persistence/plan.md](specs/001-durable-persistence/plan.md)
+- Spec: [specs/001-durable-persistence/spec.md](specs/001-durable-persistence/spec.md)
+<!-- SPECKIT END -->

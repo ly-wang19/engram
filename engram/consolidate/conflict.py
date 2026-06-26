@@ -51,6 +51,9 @@ MULTI_VALUED = {
     "knows", "met", "friends_with", "read", "watched", "played", "listened_to", "tried", "ate",
     "speaks", "allergic_to", "has_pet", "has_child", "plans", "plans_to", "recommends", "mentioned",
     "uses", "needs", "considering",
+    # relationships / kinship (a person can have multiple siblings, friends, colleagues, children, etc.)
+    "colleague", "coworker", "co_worker", "friend", "sister", "brother", "mother", "father",
+    "parent", "child", "spouse", "wife", "husband", "partner",
     # goals / aspirations (one can hold several at once)
     "goal", "goals", "hopes", "wishes", "aspires", "working_on", "works_on", "work_on",
     # discrete events / activity log (each is its own occurrence, not a replaceable state)

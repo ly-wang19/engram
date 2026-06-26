@@ -19,6 +19,7 @@ class SentenceTransformerEmbedder(Embedder):
     ) -> None:
         from sentence_transformers import SentenceTransformer  # heavy import, kept lazy
 
+        self.model_name = model_name
         self.model = SentenceTransformer(model_name, device=device)
         self.normalize = normalize
         self.batch_size = batch_size

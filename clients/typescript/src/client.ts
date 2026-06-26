@@ -22,6 +22,7 @@ import type {
   ImportParams,
   ImportResult,
   MemoryDump,
+  MemoryStats,
   OkMessage,
   Policy,
   PolicyResponse,
@@ -139,18 +140,37 @@ export class EngramClient {
   }
 
   /** Retrieve a small, relevant, dated context to answer from (the lean read path). */
-  recall(query: string, options: { nChunks?: number } = {}): Promise<RecallResult> {
-    return this.post<RecallResult>('/v1/recall', { query, lean: true, n_chunks: options.nChunks ?? 6 })
+  recall(
+    query: string,
+    options: { nChunks?: number; asOf?: number; redactSensitive?: boolean } = {},
+  ): Promise<RecallResult> {
+    return this.post<RecallResult>('/v1/recall', {
+      query,
+      lean: true,
+      n_chunks: options.nChunks ?? 6,
+      as_of: options.asOf ?? null,
+      redact_sensitive: options.redactSensitive ?? false,
+    })
   }
 
   /** Answer a single factual question directly (abstains when not in memory). */
-  search(query: string): Promise<SearchResult> {
-    return this.post<SearchResult>('/v1/recall', { query, lean: false })
+  search(query: string, options: { asOf?: number; redactSensitive?: boolean } = {}): Promise<SearchResult> {
+    return this.post<SearchResult>('/v1/recall', {
+      query,
+      lean: false,
+      as_of: options.asOf ?? null,
+      redact_sensitive: options.redactSensitive ?? false,
+    })
   }
 
   /** Everything stored for this namespace: profile, counts, facts, episodes. */
   memories(): Promise<MemoryDump> {
     return this.request<MemoryDump>('/v1/memories')
+  }
+
+  /** Content-free namespace stats for dashboards/readiness probes. */
+  stats(): Promise<MemoryStats> {
+    return this.request<MemoryStats>('/v1/stats')
   }
 
   /** The synthesized user profile + key facts. */
@@ -192,8 +212,14 @@ export class EngramClient {
     return this.request('/v1/policy', { method: 'PUT', body: JSON.stringify(patch) })
   }
 
-  graph(): Promise<GraphData> {
-    return this.request<GraphData>('/v1/graph')
+  graph(options: { asOf?: number; includeSensitive?: boolean } = {}): Promise<GraphData> {
+    const params = new URLSearchParams()
+    if (options.asOf !== undefined) params.set('as_of', String(options.asOf))
+    if (options.includeSensitive !== undefined) {
+      params.set('include_sensitive', options.includeSensitive ? 'true' : 'false')
+    }
+    const qs = params.toString()
+    return this.request<GraphData>(`/v1/graph${qs ? `?${qs}` : ''}`)
   }
 
   // --- bulk import / export / forget ---------------------------------------
@@ -202,9 +228,12 @@ export class EngramClient {
     return this.post<ImportResult>('/v1/import', params)
   }
 
-  /** Full-fidelity data export (every bi-temporal stamp + provenance, episodes, summaries, graph). */
-  export<T = Record<string, unknown>>(): Promise<T> {
-    return this.request<T>('/v1/export')
+  /** Data export. Pass includeSensitive=false for a share-safe structured export. */
+  export<T = Record<string, unknown>>(options: { includeSensitive?: boolean } = {}): Promise<T> {
+    const qs = options.includeSensitive === undefined
+      ? ''
+      : `?include_sensitive=${options.includeSensitive ? 'true' : 'false'}`
+    return this.request<T>(`/v1/export${qs}`)
   }
 
   /** Erase ALL memory in this namespace (irreversible). */

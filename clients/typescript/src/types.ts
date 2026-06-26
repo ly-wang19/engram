@@ -5,8 +5,17 @@
 
 export interface Health {
   ok: boolean
+  ready: boolean
   service: string
+  auth_mode: 'api_keys' | 'open' | 'disabled'
+  anonymous_allowed: boolean
+  embedder: string
+  llm_configured: boolean
+  answerer_configured: boolean
+  storage: string
   users_hot: number
+  max_hot_users: number
+  max_hot_facts: number
 }
 
 export interface RememberResult {
@@ -24,12 +33,18 @@ export interface RememberResult {
 export interface RecallResult {
   context: string
   tokens_est: number
+  as_of: number | null
+  redacted_sensitive: boolean
+  full_tokens?: number
+  answer?: string
 }
 
 /** Direct factual answer with supporting facts (search). */
 export interface SearchResult {
   answer: string
   facts: string[]
+  as_of: number | null
+  redacted_sensitive: boolean
 }
 
 export type FactStatus = 'live' | 'superseded'
@@ -75,6 +90,46 @@ export interface MemoryDump {
   episodes: EpisodeView[]
 }
 
+export interface MemoryStats {
+  user: string
+  counts: {
+    episodes: number
+    episodes_consolidated: number
+    episodes_pending: number
+    episodes_ephemeral: number
+    facts_hot: number
+    facts_cold: number
+    cold_pages_out: number
+    cold_pages_in: number
+    facts_live: number
+    facts_superseded: number
+    facts_sensitive: number
+    working_live: number
+    summaries: number
+    entities: number
+    relations: number
+    graph_orphan_entities: number
+    graph_stale_relations: number
+    pending_conflicts: number
+  }
+  time_range: {
+    first_event_at: number | null
+    first_event_at_h: string | null
+    last_event_at: number | null
+    last_event_at_h: string | null
+    oldest_fact_valid_at: number | null
+    oldest_fact_valid_at_h: string | null
+    newest_fact_valid_at: number | null
+    newest_fact_valid_at_h: string | null
+  }
+  storage: string
+  max_hot_facts: number
+  embedder: string
+  llm_configured: boolean
+  answerer_configured: boolean
+  consolidation_backlog: boolean
+}
+
 export interface ProfileResult {
   profile: string
   facts: string[]
@@ -108,6 +163,13 @@ export interface GraphEdge {
   target: string
   predicate: string
   live: boolean
+  fact_id: string
+  fact_text: string
+  valid_at: number
+  valid_at_h: string
+  invalid_at: number | null
+  invalid_at_h: string | null
+  provenance: string[]
 }
 
 export interface GraphData {
@@ -177,6 +239,10 @@ export interface MemoryControls {
   remember?: boolean
   /** number of full past conversations to include for detail (default 6) */
   n_chunks?: number
+  /** epoch seconds for a point-in-time memory view */
+  as_of?: number
+  /** omit facts tagged sensitive from injected memory */
+  redact_sensitive?: boolean
 }
 
 export interface ChatCompletionCreateParams {
@@ -204,6 +270,8 @@ export interface ChatUsage {
 export interface EngramChatMeta {
   recalled: boolean
   memory_tokens_est: number
+  as_of: number | null
+  redacted_sensitive: boolean
   remembered: boolean
 }
 

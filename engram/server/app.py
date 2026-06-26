@@ -4,8 +4,8 @@ to disk between requests and restarts.
 
 Run it:
     pip install "engram-memory[server]"
-    export ENGRAM_API_KEYS="alice:sk-alice-123,bob:sk-bob-456"   # user:key pairs (or ENGRAM_OPEN=1 for open)
-    export ENGRAM_EMBEDDER=bge-small        # local, no key
+    export ENGRAM_API_KEYS="alice:sk-alice-123,bob:sk-bob-456"   # user:key pairs (or ENGRAM_OPEN=1 for dev)
+    export ENGRAM_EMBEDDER=hashing          # zero-download default; use bge-small for better local embeddings
     export ENGRAM_LLM=deepseek              # optional: better fact extraction (needs the provider's key)
     uvicorn engram.server.app:app --host 0.0.0.0 --port 8000
 
@@ -22,6 +22,7 @@ put it behind your auth/gateway to scale to a public service.
 from __future__ import annotations
 
 import os
+from contextlib import asynccontextmanager
 from typing import Optional
 
 try:
@@ -44,8 +45,22 @@ def _load_keys() -> dict[str, str]:
     return out
 
 
-app = FastAPI(title="Engram Memory Service", version="0.1.0",
-              description="Multi-tenant long-term memory — connect with a Bearer key and manage your own memory.")
+def _env_flag(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _bearer_token(authorization: str) -> str:
+    """Parse a strict Bearer header. Missing auth is distinct from malformed auth so local anonymous
+    mode stays possible without accepting accidental or spoofed schemes as namespaces."""
+    value = authorization.strip()
+    if not value:
+        return ""
+    scheme, sep, token = value.partition(" ")
+    if scheme.lower() != "bearer" or not sep or not token.strip():
+        raise HTTPException(401, "expected Authorization: Bearer <token>")
+    return token.strip()
+
+
 _svc: Optional[MemoryService] = None
 
 
@@ -58,22 +73,40 @@ def svc() -> MemoryService:
     return _svc
 
 
-@app.on_event("startup")
-def _warmup():
+@asynccontextmanager
+async def _lifespan(_app: FastAPI):
     svc()  # load the embedder (and LLM) once at boot, so the first request doesn't race on it
+    yield
+
+
+app = FastAPI(
+    title="Engram Memory Service",
+    version="0.1.0",
+    description="Multi-tenant long-term memory — connect with a Bearer key and manage your own memory.",
+    lifespan=_lifespan,
+)
 
 
 def auth(authorization: str = Header(default="")) -> str:
-    """Resolve the caller's user_id from the Bearer key. Open mode (no keys configured) uses the key text
-    itself as the namespace, so anyone can try it without setup."""
+    """Resolve the caller's user_id from the Bearer key. Dev open mode uses the key text itself as the
+    namespace, so anyone can try it without pre-provisioned keys while still avoiding shared anonymous
+    memory unless it is explicitly enabled."""
     keys = _load_keys()
-    token = authorization.replace("Bearer ", "").strip()
+    token = _bearer_token(authorization)
     if keys:
         if token not in keys:
             raise HTTPException(401, "invalid or missing API key")
         return keys[token]
-    if os.environ.get("ENGRAM_OPEN") == "1":
-        return token or "anonymous"
+    if _env_flag("ENGRAM_OPEN"):
+        if token:
+            return token
+        if _env_flag("ENGRAM_ALLOW_ANONYMOUS"):
+            return "anonymous"
+        raise HTTPException(
+            401,
+            "missing bearer namespace: in ENGRAM_OPEN mode send Authorization: Bearer <namespace>, "
+            "or set ENGRAM_ALLOW_ANONYMOUS=1 to allow shared anonymous memory",
+        )
     raise HTTPException(401, "set ENGRAM_API_KEYS (user:key,...) or ENGRAM_OPEN=1")
 
 
@@ -88,11 +121,29 @@ class RecallReq(BaseModel):
     lean: bool = True
     n_chunks: int = 6
     session_id: Optional[str] = None  # when set, recall also surfaces this session's working memory
+    as_of: Optional[float] = None  # epoch seconds: point-in-time memory view
+    redact_sensitive: bool = False  # hide facts tagged sensitive from the returned context/fact list
 
 
 @app.get("/health")
 def health():
-    return {"ok": True, "service": "engram", "users_hot": svc().hot_count}
+    service = svc()
+    keys = _load_keys()
+    auth_mode = "api_keys" if keys else ("open" if _env_flag("ENGRAM_OPEN") else "disabled")
+    return {
+        "ok": True,
+        "ready": True,
+        "service": "engram",
+        "auth_mode": auth_mode,
+        "anonymous_allowed": auth_mode == "open" and _env_flag("ENGRAM_ALLOW_ANONYMOUS"),
+        "embedder": service.embedder.__class__.__name__,
+        "llm_configured": service.llm is not None,
+        "answerer_configured": service.answerer is not None,
+        "storage": service.config.storage,
+        "users_hot": service.hot_count,
+        "max_hot_users": service.max_hot_users,
+        "max_hot_facts": service.config.max_hot_facts,
+    }
 
 
 # The production console (the React app in frontend/) is served at /ui once built; "/" redirects
@@ -199,7 +250,8 @@ def recall(req: RecallReq, user: str = Depends(auth)):
     # answer=True: also generate a real answer over the lean context + report the full-context baseline
     # token count, so the console's 问答 view can show the answer AND the token saving.
     return svc().recall(user, req.query, lean=req.lean, n_chunks=req.n_chunks,
-                        session_id=req.session_id, answer=True)
+                        session_id=req.session_id, as_of=req.as_of,
+                        redact_sensitive=req.redact_sensitive, answer=True)
 
 
 @app.get("/v1/profile")
@@ -219,6 +271,13 @@ def memories(user: str = Depends(auth)):
     """See EVERYTHING stored for this user — the raw episodes, the extracted bi-temporal facts (live and
     superseded, with provenance), and the L2 session summaries. This is the 'look inside my memory' view."""
     return svc().memories(user)
+
+
+@app.get("/v1/stats")
+def stats(user: str = Depends(auth)):
+    """Content-free namespace stats for dashboards and readiness checks. Unlike /v1/memories, this does
+    not return profile text, fact text, episode snippets, or storage paths."""
+    return svc().stats(user)
 
 
 @app.post("/v1/forget")
@@ -253,14 +312,15 @@ class ChatCompletionReq(BaseModel):
     model: str = "engram"
     messages: list[dict] = []
     stream: bool = False
-    memory: Optional[dict] = None  # Engram extension: {"recall": bool, "remember": bool, "n_chunks": int}
+    memory: Optional[dict] = None  # Engram extension: {"recall": bool, "remember": bool, "n_chunks": int, "as_of": float, "redact_sensitive": bool}
 
 
 @app.post("/v1/chat/completions")
 def chat_completions(req: ChatCompletionReq, background: BackgroundTasks, user: str = Depends(auth)):
     """OpenAI-compatible chat completions, augmented with long-term memory: recall a relevant slice for
     the latest user turn, inject it, generate with the configured LLM, then remember the turn off the
-    critical path. Set body.memory={"recall":false} or {"remember":false} to disable either half."""
+    critical path. Set body.memory={"recall":false}, {"remember":false}, {"as_of":...}, or
+    {"redact_sensitive":true} to control the memory layer."""
     from . import openai_compat as oc
 
     if not req.messages:
@@ -268,8 +328,15 @@ def chat_completions(req: ChatCompletionReq, background: BackgroundTasks, user: 
     opts = req.memory or {}
     body = req.model_dump()
     try:
-        resp = oc.chat_completion(svc(), user, body, n_chunks=int(opts.get("n_chunks", 6)),
-                                  do_recall=opts.get("recall", True))
+        resp = oc.chat_completion(
+            svc(),
+            user,
+            body,
+            n_chunks=int(opts.get("n_chunks", 6)),
+            do_recall=opts.get("recall", True),
+            as_of=opts.get("as_of"),
+            redact_sensitive=bool(opts.get("redact_sensitive", False)),
+        )
     except oc.NoLLMConfigured as exc:
         raise HTTPException(503, str(exc))
 
@@ -407,9 +474,10 @@ def resolve_conflict(conflict_id: str, req: ResolveReq, user: str = Depends(auth
 
 # --- ② semantic graph for the 关系图谱 visualization ---
 @app.get("/v1/graph")
-def graph(user: str = Depends(auth)):
-    """Nodes (entities) + edges (bi-temporal relations) of this user's semantic graph."""
-    return svc().graph(user)
+def graph(as_of: float | None = None, include_sensitive: bool = True, user: str = Depends(auth)):
+    """Nodes (entities) + edges (bi-temporal relations) of this user's semantic graph.
+    `include_sensitive=false` omits edges backed by facts tagged sensitive."""
+    return svc().graph(user, as_of=as_of, include_sensitive=include_sensitive)
 
 
 # --- ④ privacy: full data export (GDPR-style portability); erase is POST /v1/forget ---
@@ -417,7 +485,8 @@ def graph(user: str = Depends(auth)):
 def export(include_sensitive: bool = True, user: str = Depends(auth)):
     """Download EVERYTHING stored for this user as a single JSON (data portability). Full fidelity:
     every fact's bi-temporal stamps + provenance, raw episodes, summaries, profile, and focus.
-    `include_sensitive=false` redacts facts tagged sensitive (feature ⑤) for safe sharing."""
+    `include_sensitive=false` returns a share-safe structured export: non-sensitive facts + their graph,
+    with free-text profile/episodes/summaries omitted."""
     from fastapi.responses import JSONResponse
 
     data = svc().export(user, include_sensitive=include_sensitive)

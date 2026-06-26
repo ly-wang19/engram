@@ -11,6 +11,7 @@ select), so the MCP server and the import CLI can use it without the web stack i
 from __future__ import annotations
 
 import os
+import shutil
 import threading
 from collections import OrderedDict
 from typing import Any, Optional
@@ -48,6 +49,10 @@ def _est_tokens(text: str) -> int:
     return cjk + words
 
 
+def _all_facts(mem: Memory) -> list:
+    return mem.fact_store.values() + mem.cold_store.values()
+
+
 class MemoryService:
     """Per-namespace persistent memory with a shared embedder/LLM and an LRU of hot users.
 
@@ -69,7 +74,7 @@ class MemoryService:
         self.data_dir = data_dir or os.environ.get("ENGRAM_DATA_DIR", DEFAULT_DATA_DIR)
         os.makedirs(self.data_dir, exist_ok=True)
         self.max_hot_users = max_hot_users or int(os.environ.get("ENGRAM_MAX_HOT_USERS", "64"))
-        self.embedder = make_embedder(embedder_name or os.environ.get("ENGRAM_EMBEDDER", "bge-small"))
+        self.embedder = make_embedder(embedder_name or os.environ.get("ENGRAM_EMBEDDER", "hashing"))
         name = llm_name if llm_name is not None else os.environ.get("ENGRAM_LLM", "")
         self.llm = make_llm(name) if name else None  # no LLM -> deterministic rule extractor
         # answerer for /v1/recall (the console's 问答) — a stronger model than the extractor when set;
@@ -79,6 +84,8 @@ class MemoryService:
         from .config import Config
 
         self.config = Config()
+        if os.environ.get("ENGRAM_MAX_HOT_FACTS"):
+            self.config.max_hot_facts = int(os.environ["ENGRAM_MAX_HOT_FACTS"])
         # opt-in System-2 LLM conflict detection -> the detect->confirm loop (needs an LLM). Off by
         # default so the offline/zero-setup path stays deterministic (pure-rules conflict handling).
         if os.environ.get("ENGRAM_CONFLICT_DETECTION") == "1" and self.llm is not None:
@@ -90,7 +97,9 @@ class MemoryService:
     # --- namespace lifecycle ------------------------------------------------
     def _path(self, user: str) -> str:
         safe = "".join(c for c in user if c.isalnum() or c in "-_.") or "default"
-        return os.path.join(self.data_dir, f"{safe}.pkl")
+        path = os.path.join(self.data_dir, safe)
+        legacy = os.path.join(self.data_dir, f"{safe}.pkl")
+        return legacy if os.path.exists(legacy) and not os.path.exists(path) else path
 
     def lock(self, user: str) -> threading.Lock:
         with self._g:
@@ -115,8 +124,13 @@ class MemoryService:
         with self._g:
             self._hot.pop(user, None)
         p = self._path(user)
-        if os.path.exists(p):
-            os.remove(p)
+        safe = "".join(c for c in user if c.isalnum() or c in "-_.") or "default"
+        for p in {p, os.path.join(self.data_dir, safe), os.path.join(self.data_dir, f"{safe}.pkl")}:
+            if os.path.exists(p):
+                if os.path.isdir(p):
+                    shutil.rmtree(p)
+                else:
+                    os.remove(p)
         return {"ok": True, "message": f"all memory for '{user}' erased"}
 
     @property
@@ -146,7 +160,7 @@ class MemoryService:
                 return {"ok": True, "extracted": 0, "degraded": type(exc).__name__, "stored_raw": True}
             mem.save()
             return {"ok": True, "scope": "long", "extracted": added,
-                    "total_facts": len([f for f in mem.fact_store.values() if f.is_live()])}
+                    "total_facts": len([f for f in _all_facts(mem) if f.is_live()])}
 
     def import_(self, user: str, sessions: Optional[list] = None, format: str = "auto",
                 data: Any = None, consolidate: bool = True, summarize: bool = True,
@@ -207,7 +221,9 @@ class MemoryService:
 
     # --- read path ----------------------------------------------------------
     def recall(self, user: str, query: str, lean: bool = True, n_chunks: int = 6,
-               session_id: Optional[str] = None, answer: bool = False) -> dict:
+               session_id: Optional[str] = None, as_of: Optional[float] = None,
+               redact_sensitive: bool = False,
+               answer: bool = False) -> dict:
         """A small retrieved context (lean) or a direct factual answer (lean=False). When `session_id` is
         set, the lean context also surfaces that session's ephemeral working memory.
 
@@ -217,16 +233,40 @@ class MemoryService:
         only need the context to inject — leave it off (the default)."""
         mem = self.get(user)
         if lean:
-            ctx = mem.lean_context(query, user_id=user, n_chunks=n_chunks, session_id=session_id)
-            out = {"context": ctx, "tokens_est": _est_tokens(ctx)}
+            ctx = mem.lean_context(query, user_id=user, n_chunks=n_chunks, session_id=session_id,
+                                   as_of=as_of, redact_sensitive=redact_sensitive)
+            out = {
+                "context": ctx,
+                "tokens_est": _est_tokens(ctx),
+                "as_of": as_of,
+                "redacted_sensitive": redact_sensitive,
+            }
             if answer:
-                # full-context baseline: what it would cost to stuff the ENTIRE history into the prompt
-                full = "\n".join(ep.content for ep in mem.episodes_doc.values())
+                # full-context baseline for the same time view: what it would cost to stuff every eligible
+                # episode into the prompt. For as-of reads, future episodes are not part of the baseline.
+                full = "\n".join(
+                    ep.content for ep in mem.episodes_doc.values()
+                    if as_of is None or ep.event_time <= as_of
+                )
                 out["full_tokens"] = _est_tokens(full)
                 out["answer"] = _answer_from_memory(self.answerer, query, ctx)
             return out
-        res = mem.search(query, user_id=user)
-        return {"answer": res.answer(), "facts": [f.text for f in res.facts[:10]]}
+        res = mem.search(query, user_id=user, as_of=as_of)
+        visible_facts = [
+            f for f in res.facts[:10]
+            if not redact_sensitive or not getattr(f, "sensitive", False)
+        ]
+        answer = (
+            res.answer()
+            if not redact_sensitive
+            else (visible_facts[0].object or visible_facts[0].text) if visible_facts else "I don't have that in memory."
+        )
+        return {
+            "answer": answer,
+            "facts": [f.text for f in visible_facts],
+            "as_of": as_of,
+            "redacted_sensitive": redact_sensitive,
+        }
 
     def structured_profile(self, user: str) -> dict:
         """L2 structured profile (basic info / preferences / habits, confirmed vs tentative). Display-only."""
@@ -240,7 +280,7 @@ class MemoryService:
         mem = self.get(user)
 
         def disp(fid: str, fallback: str) -> str:
-            f = mem.fact_store.get(fid)
+            f = mem.fact_store.get(fid) or mem.cold_store.get(fid)
             return display_of(f) if f is not None else fallback
 
         return {"conflicts": [{
@@ -288,7 +328,7 @@ class MemoryService:
     def profile(self, user: str) -> dict:
         mem = self.get(user)
         return {"profile": mem.build_persona(user),
-                "facts": [f.text for f in mem.fact_store.values() if f.is_live()][:50]}
+                "facts": [f.text for f in _all_facts(mem) if f.is_live()][:50]}
 
     def get_focus(self, user: str) -> dict:
         return self.get(user).get_focus()
@@ -296,8 +336,8 @@ class MemoryService:
     def get_policy(self, user: str) -> dict:
         return self.get(user).get_policy()
 
-    def graph(self, user: str) -> dict:
-        return self.get(user).graph_data(user)
+    def graph(self, user: str, as_of: float | None = None, include_sensitive: bool = True) -> dict:
+        return self.get(user).graph_data(user, as_of=as_of, include_sensitive=include_sensitive)
 
     def memories(self, user: str) -> dict:
         """Everything stored for this user: profile, counts, bi-temporal facts (live + superseded with
@@ -305,13 +345,13 @@ class MemoryService:
         from .localize import display_of  # localized rendering for Chinese-recorded facts
 
         mem = self.get(user)
-        facts = sorted(mem.fact_store.values(), key=lambda f: f.valid_at, reverse=True)
+        facts = sorted(_all_facts(mem), key=lambda f: f.valid_at, reverse=True)
         return {
             "user": user,
             "profile": mem.build_persona(user),
             "counts": {"episodes": len(mem.episodes_doc.values()),
-                       "facts_live": sum(1 for f in mem.fact_store.values() if f.is_live()),
-                       "facts_superseded": sum(1 for f in mem.fact_store.values() if not f.is_live()),
+                       "facts_live": sum(1 for f in facts if f.is_live()),
+                       "facts_superseded": sum(1 for f in facts if not f.is_live()),
                        "summaries": len(mem.summary_vec.values())},
             "facts": [{
                 "id": f.id, "text": f.text, "display": display_of(f),
@@ -328,17 +368,96 @@ class MemoryService:
                           "summary": ep.summary} for ep in mem.episodes_doc.values()],
         }
 
-    def export(self, user: str, include_sensitive: bool = True) -> dict:
-        """Full-fidelity data export (GDPR-style portability): every fact's bi-temporal stamps +
-        provenance, raw episodes, summaries, profile, focus, and graph. `include_sensitive=False` redacts
-        facts tagged sensitive (feature ⑤) for safe sharing."""
+    def stats(self, user: str) -> dict:
+        """Content-free namespace stats for dashboards/readiness probes. This intentionally avoids
+        profile text, fact text, episode snippets, and data paths so it is safe to poll in production."""
         mem = self.get(user)
-        _facts = [f for f in mem.fact_store.values()
-                  if include_sensitive or not getattr(f, "sensitive", False)]
+        episodes = [ep for ep in mem.episodes_doc.values() if ep.user_id == user]
+        hot_facts = [f for f in mem.fact_store.values() if f.user_id == user]
+        cold_facts = [f for f in mem.cold_store.values() if f.user_id == user]
+        facts = hot_facts + cold_facts
+        facts_by_id = {f.id: f for f in facts}
+        working = [w for w in mem.working_mem.values() if w.user_id == user]
+        live_facts = [f for f in facts if f.is_live()]
+        superseded = [f for f in facts if not f.is_live()]
+        sensitive = [f for f in facts if getattr(f, "sensitive", False)]
+        pending_conflicts = [
+            c for c in mem.conflicts.values()
+            if c.user_id == user and c.status == "pending"
+        ]
+        consolidated_episodes = [ep for ep in episodes if ep.consolidated]
+        pending_episodes = [ep for ep in episodes if not ep.consolidated]
+        ephemeral_episodes = [ep for ep in episodes if ep.metadata.get("ephemeral")]
+        event_times = [ep.event_time for ep in episodes]
+        fact_times = [f.valid_at for f in facts]
+        user_entities = [e for e in mem.graph.entities.values() if e.user_id == user]
+        all_relations = mem.graph.relations()
+        user_entity_ids = {e.id for e in user_entities}
+        user_relations = [
+            r for r in all_relations
+            if r.subject_id in user_entity_ids or r.object_id in user_entity_ids
+        ]
+        referenced_entity_ids = {
+            eid for r in user_relations for eid in (r.subject_id, r.object_id)
+        }
+        stale_relations = [r for r in user_relations if r.fact_id not in facts_by_id]
         return {
+            "user": user,
+            "counts": {
+                "episodes": len(episodes),
+                "episodes_consolidated": len(consolidated_episodes),
+                "episodes_pending": len(pending_episodes),
+                "episodes_ephemeral": len(ephemeral_episodes),
+                "facts_hot": len(hot_facts),
+                "facts_cold": len(cold_facts),
+                "cold_pages_out": int(mem.cold_pages_out.get(user, 0)),
+                "cold_pages_in": int(mem.cold_pages_in.get(user, 0)),
+                "facts_live": len(live_facts),
+                "facts_superseded": len(superseded),
+                "facts_sensitive": len(sensitive),
+                "working_live": sum(1 for w in working if w.is_live()),
+                "summaries": len([s for s in mem.summary_vec.values() if s.user_id == user]),
+                "entities": len(user_entities),
+                "relations": sum(1 for r in user_relations if r.fact_id in facts_by_id),
+                "graph_orphan_entities": sum(1 for e in user_entities if e.id not in referenced_entity_ids),
+                "graph_stale_relations": len(stale_relations),
+                "pending_conflicts": len(pending_conflicts),
+            },
+            "time_range": {
+                "first_event_at": min(event_times) if event_times else None,
+                "first_event_at_h": fmt_datetime(min(event_times)) if event_times else None,
+                "last_event_at": max(event_times) if event_times else None,
+                "last_event_at_h": fmt_datetime(max(event_times)) if event_times else None,
+                "oldest_fact_valid_at": min(fact_times) if fact_times else None,
+                "oldest_fact_valid_at_h": fmt_datetime(min(fact_times)) if fact_times else None,
+                "newest_fact_valid_at": max(fact_times) if fact_times else None,
+                "newest_fact_valid_at_h": fmt_datetime(max(fact_times)) if fact_times else None,
+            },
+            "storage": self.config.storage,
+            "max_hot_facts": self.config.max_hot_facts,
+            "embedder": self.embedder.__class__.__name__,
+            "llm_configured": self.llm is not None,
+            "answerer_configured": self.answerer is not None,
+            "consolidation_backlog": bool(pending_episodes),
+        }
+
+    def export(self, user: str, include_sensitive: bool = True) -> dict:
+        """Data export. With `include_sensitive=True`, this is full-fidelity portability: every fact's
+        bi-temporal stamps + provenance, raw episodes, summaries, profile, focus, and graph.
+
+        With `include_sensitive=False`, the payload is a share-safe structured export: only non-sensitive
+        facts plus a graph derived from those facts. Free-text layers (profile, raw episodes, summaries)
+        are omitted because they can fold sensitive content into prose."""
+        mem = self.get(user)
+        _facts = [f for f in _all_facts(mem)
+                  if include_sensitive or not getattr(f, "sensitive", False)]
+        graph = mem.graph_data(user, include_sensitive=include_sensitive)
+        out = {
             "engram_export_version": 1,
             "user": user,
-            "profile": mem.build_persona(user),
+            "include_sensitive": include_sensitive,
+            "redacted_sensitive": not include_sensitive,
+            "profile": mem.build_persona(user) if include_sensitive else "",
             "focus": mem.get_focus(),
             "facts": [{
                 "id": f.id, "subject": f.subject, "predicate": f.predicate, "object": f.object,
@@ -350,10 +469,15 @@ class MemoryService:
                 "created_at": f.created_at, "expired_at": f.expired_at,
                 "supersedes": f.supersedes, "provenance": f.provenance,
             } for f in sorted(_facts, key=lambda x: x.valid_at, reverse=True)],
-            "episodes": [{
+            "episodes": [] if not include_sensitive else [{
                 "id": ep.id, "session_id": ep.session_id, "speaker": ep.speaker,
                 "event_time": ep.event_time, "date": ep.metadata.get("date") or fmt_date(ep.event_time),
                 "content": ep.content, "summary": ep.summary,
             } for ep in mem.episodes_doc.values()],
-            "graph": mem.graph_data(user),
+            "graph": graph,
         }
+        if not include_sensitive:
+            out["redaction_note"] = (
+                "Sensitive facts and all free-text layers (profile, raw episodes, summaries) were omitted."
+            )
+        return out

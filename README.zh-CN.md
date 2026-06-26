@@ -43,8 +43,8 @@ Engram 让 LLM 智能体拥有跨会话的、可查询的持久记忆：它记�
 | **Engram**（`engram_lean`） | **83.6%** | **9.6k** | 检索精简片;0 报错 / 500 |
 | 裸塞全文基线(同作答器+判分器) | 73.2% | 79k | 把整个干扰集塞进 prompt |
 
-**Engram 比裸全文高 +10.4 分,却用约 8 倍更少的 token**(9.6k vs 79k)—— 过滤后的精华片比嘈杂的全窗口
-*更*准,而且历史再长成本也不涨(全文做不到)。分项(`engram_lean`,全 500 题):
+**Engram 比裸全文高 +10.4 分,却用约 8 倍更少的 token**(9.6k vs 79k)—— 在这次运行中,过滤后的精华片比
+嘈杂的全窗口*更*准。分项(`engram_lean`,全 500 题):
 
 | 类别 | 得分 | 题数 |
 |---|---:|---:|
@@ -56,9 +56,9 @@ Engram 让 LLM 智能体拥有跨会话的、可查询的持久记忆：它记�
 | 多会话 | 79.3% | 121 |
 | 单会话-偏好 | 73.3% | 30 |
 
-**它的定位:** **83.6%** —— Engram 大幅超过裸全文(**+10.4**)且省约 8 倍 token,而且历史再长成本也不涨。我们
-如实公布 —— 同一作答器、同一严格判分器、每题留痕、不挑切片。Engram 领先在 **token 效率、可扩展性、可复现性**;
-最难的几类(多会话推理、时间聚合)仍有提升空间,是公开路线图。
+**它的定位:** **83.6%** —— Engram 大幅超过裸全文(**+10.4**)且省约 8 倍 token。我们如实公布 —— 同一
+作答器、同一严格判分器、每题留痕、不挑切片。Engram 在这次运行中领先的是 **token 效率与可复现性**;
+把同样的评测纪律扩展到更大语料,以及继续提升最难的几类(多会话推理、时间聚合),是公开路线图。
 
 ## 工作原理
 
@@ -68,7 +68,7 @@ Engram 是一个**双过程（dual-process）**记忆系统，仿照人脑的 Sy
 ```mermaid
 flowchart TB
     ADD([add 写入消息]) --> S1
-    subgraph S1 [System-1 · 热写入路径 · 不调 LLM · 低于 50ms]
+    subgraph S1 [System-1 · 热写入路径 · 不调 LLM]
         direction LR
         S1a[追加无损 Episode] --> S1b[身份解析<br/>跨会话/设备] --> S1c[轻量嵌入 + 入队]
     end
@@ -87,7 +87,7 @@ flowchart TB
     end
     TM --> R
     Q([search 查询]) --> R
-    subgraph R [读取路径 · 混合检索 · 低于 100ms]
+    subgraph R [读取路径 · 混合检索]
         direction TB
         Ra[多跳问题分解] --> Rb[并行检索:<br/>稠密向量 + BM25 词法 + 图 n 跳 + 时近/显著度]
         Rb --> Rc[RRF 倒数排名融合 + 可选重排] --> Rd[双时间轴 as-of 时点过滤] --> Re[拒答闸门] --> Rf[组装带日期、带溯源的上下文]
@@ -95,8 +95,8 @@ flowchart TB
     Rf --> OUT([可直接作答的上下文])
 ```
 
-**写入路径（System-1）**：追加一条无损情节、跨会话/设备解析身份、嵌入并入队 —— 关键路径上不调 LLM，所以
-能稳定低于约 50ms。**固化路径（System-2）**：异步运行，抽取原子的 `(主语, 谓语, 宾语)` 事实、构建知识图谱、
+**写入路径（System-1）**：追加一条无损情节、跨会话/设备解析身份、嵌入并入队 —— 关键路径上不调 LLM。
+**固化路径（System-2）**：异步运行，抽取原子的 `(主语, 谓语, 宾语)` 事实、构建知识图谱、
 解决矛盾。**读取路径**：分解问题、并行走四条互补通道检索、RRF 融合（可选重排）、做时点过滤、组装出带日期与溯源的上下文。
 
 ### 它的独特之处
@@ -107,7 +107,7 @@ flowchart TB
 | 2 | **非破坏式冲突解决** —— 被推翻的事实是*失效*（`invalid_at` + `supersedes` 链），而非删除 | 没有静默的记忆损坏。每个事实都能回答"它从哪来？""它替换了谁？"—— 完整溯源 + 审计轨迹。 |
 | 3 | **低成本冲突检测** —— 槽位匹配 + 嵌入/NLI 启发式，**仅在**模糊时才升级到 LLM | 拿到生产级的时间正确性，**却不必每个事实都调一次 LLM** —— 规模化下的成本优势。 |
 | 4 | **混合检索** —— 稠密语义 + BM25 词法 + 图邻近 + 时近/显著度，用 RRF 融合 | 没有单一检索器能赢遍所有场景。**已验证结论：事实 + 原始片段，强于任何单独一种** —— 事实补充冲突已解/时间信号，片段找回丢失的细节。 |
-| 5 | **双过程分工** —— 快写入、异步固化 | 读取路径保持亚 100ms，而建图、去重、冲突解决都在关键路径之外进行。 |
+| 5 | **双过程分工** —— 快写入、异步固化 | 建图、去重、冲突解决都在关键路径之外进行；读取延迟要进 harness 测量后才公开宣称。 |
 | 6 | **一切可插拔** —— LLM / 嵌入器 / 向量库 / 图库都在接口背后，**带零依赖离线兜底** | `quickstart.py` 和 `pytest` **不需要任何 API key、任何服务**即可跑。一行配置即可换上 BGE / LanceDB / Kuzu / 任意 LLM。 |
 | 7 | **可复现的 harness** —— 一套中立评测、内置官方判分、每张表都带 full-context 基线、公开原始日志 | 在一个人人数字都被质疑的领域里，**成为那个谁都能验证的记分牌**才是真正的护城河。 |
 
@@ -169,6 +169,10 @@ python -m engram.mcp                 # 本地记忆，零外部服务
 { "mcpServers": { "engram": { "command": "python", "args": ["-m", "engram.mcp"] } } }
 ```
 
+`engram_recall` 和 `engram_search` 也支持 `as_of`（epoch 秒）查询某个历史时刻的记忆视图，并支持
+`redact_sensitive=true` 生成适合共享/安全注入的上下文。
+`engram_stats` 返回不含内容的命名空间统计（episode backlog、事实/图谱/冲突计数），适合 agent 自检。
+
 ### JS/TS SDK + OpenAI 兼容（改一个 URL，你现有的 OpenAI 代码就有了记忆）
 
 ```ts
@@ -182,15 +186,27 @@ const out = await engram.chat.completions.create({ model: 'engram', messages: [
   { role: 'user', content: '提醒我一下我最喜欢的歌手' } ] })
 ```
 
+OpenAI 兼容聊天也支持 Engram 扩展：`memory: { as_of: <epoch 秒> }` 用于查询某个历史时刻的记忆视图，
+`memory: { redact_sensitive: true }` 用于在注入上下文时隐藏敏感事实；redacted 上下文只包含非敏感
+结构化事实，不包含画像、摘要或原始片段。
+
+数据导出也遵循同一语义：`/v1/export?include_sensitive=false` 只返回非敏感 facts 及其 graph，不包含画像、
+摘要或原始对话。
+独立关系图接口也支持 `/v1/graph?include_sensitive=false`。
+
 ### 自部署（数据完全在你自己机器上）
 
 ```bash
 pip install "engram-memory[serve]"
-export ENGRAM_OPEN=1                # 开发：bearer 文本即命名空间（生产用 ENGRAM_API_KEYS）
-export ENGRAM_EMBEDDER=bge-small
+export ENGRAM_OPEN=1                # 开发：Bearer 文本即命名空间；匿名需显式 ENGRAM_ALLOW_ANONYMOUS=1
+export ENGRAM_EMBEDDER=hashing      # 零下载默认；用 bge-small 可获得更好的本地嵌入
+export ENGRAM_MAX_HOT_FACTS=10000   # 热层事实上限；冷层事实会在热 miss 时回温
 export ENGRAM_LLM=deepseek          # 可选：启用 /v1/chat/completions 生成
 uvicorn engram.server.app:app --port 8000        # HTTP API + 控制台在 /ui
 ```
+
+`GET /health` 可用于 readiness 与安全的部署排错：它返回鉴权模式、是否允许匿名、嵌入器、LLM 是否已配置、
+存储模式和热用户数，不暴露 key、路径或用户内容。
 
 批量导入见 [`examples/batch_import.py`](examples/batch_import.py)，完整接口文档见 [`API.md`](API.md)。
 

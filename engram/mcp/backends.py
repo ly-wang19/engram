@@ -22,8 +22,16 @@ class Backend(Protocol):
     mode: str
 
     async def remember(self, content: str, session_id: str = "default") -> dict: ...
-    async def recall(self, query: str, n_chunks: int = 6, lean: bool = True) -> dict: ...
+    async def recall(
+        self,
+        query: str,
+        n_chunks: int = 6,
+        lean: bool = True,
+        as_of: float | None = None,
+        redact_sensitive: bool = False,
+    ) -> dict: ...
     async def memories(self) -> dict: ...
+    async def stats(self) -> dict: ...
     async def profile(self) -> dict: ...
     async def add_fact(self, subject: str, predicate: str, object: str) -> dict: ...
     async def import_(self, data: Any, format: str = "auto") -> dict: ...
@@ -46,11 +54,29 @@ class LocalBackend:
     async def remember(self, content: str, session_id: str = "default") -> dict:
         return await asyncio.to_thread(self.svc.remember, self.ns, content, session_id)
 
-    async def recall(self, query: str, n_chunks: int = 6, lean: bool = True) -> dict:
-        return await asyncio.to_thread(self.svc.recall, self.ns, query, lean, n_chunks)
+    async def recall(
+        self,
+        query: str,
+        n_chunks: int = 6,
+        lean: bool = True,
+        as_of: float | None = None,
+        redact_sensitive: bool = False,
+    ) -> dict:
+        return await asyncio.to_thread(
+            self.svc.recall,
+            self.ns,
+            query,
+            lean=lean,
+            n_chunks=n_chunks,
+            as_of=as_of,
+            redact_sensitive=redact_sensitive,
+        )
 
     async def memories(self) -> dict:
         return await asyncio.to_thread(self.svc.memories, self.ns)
+
+    async def stats(self) -> dict:
+        return await asyncio.to_thread(self.svc.stats, self.ns)
 
     async def profile(self) -> dict:
         return await asyncio.to_thread(self.svc.profile, self.ns)
@@ -100,11 +126,26 @@ class RemoteBackend:
     async def remember(self, content: str, session_id: str = "default") -> dict:
         return await self._post("/v1/remember", {"content": content, "session_id": session_id})
 
-    async def recall(self, query: str, n_chunks: int = 6, lean: bool = True) -> dict:
-        return await self._post("/v1/recall", {"query": query, "lean": lean, "n_chunks": n_chunks})
+    async def recall(
+        self,
+        query: str,
+        n_chunks: int = 6,
+        lean: bool = True,
+        as_of: float | None = None,
+        redact_sensitive: bool = False,
+    ) -> dict:
+        body = {"query": query, "lean": lean, "n_chunks": n_chunks}
+        if as_of is not None:
+            body["as_of"] = as_of
+        if redact_sensitive:
+            body["redact_sensitive"] = True
+        return await self._post("/v1/recall", body)
 
     async def memories(self) -> dict:
         return await self._get("/v1/memories")
+
+    async def stats(self) -> dict:
+        return await self._get("/v1/stats")
 
     async def profile(self) -> dict:
         return await self._get("/v1/profile")

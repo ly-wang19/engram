@@ -101,5 +101,28 @@ class InMemoryGraphStore(GraphStore):
             if r.fact_id == fact_id and r.invalid_at is None:
                 r.invalid_at = t
 
+    def delete_relations_for_fact(self, fact_id: str) -> None:
+        for rid, rel in list(self.rels.items()):
+            if rel.fact_id != fact_id:
+                continue
+            self.rels.pop(rid, None)
+            if rid in self._out.get(rel.subject_id, []):
+                self._out[rel.subject_id].remove(rid)
+            if rid in self._in.get(rel.object_id, []):
+                self._in[rel.object_id].remove(rid)
+
+    def prune_orphan_entities(self) -> int:
+        referenced = {r.subject_id for r in self.rels.values()} | {r.object_id for r in self.rels.values()}
+        removed = 0
+        for eid, ent in list(self.entities.items()):
+            if eid in referenced:
+                continue
+            self.entities.pop(eid, None)
+            self._by_name.pop((ent.user_id, ent.name.lower()), None)
+            self._out.pop(eid, None)
+            self._in.pop(eid, None)
+            removed += 1
+        return removed
+
     def relations(self) -> list[Relation]:
         return list(self.rels.values())

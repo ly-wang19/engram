@@ -23,11 +23,72 @@ def load(path: str) -> list[dict]:
         return [json.loads(line) for line in fh if line.strip()]
 
 
+def _percent(values: list[bool]) -> float:
+    return 100.0 * sum(values) / len(values) if values else 0.0
+
+
+def _percentile(values: list[float], p: float) -> float:
+    if not values:
+        return 0.0
+    s = sorted(values)
+    idx = min(len(s) - 1, int(round((p / 100.0) * (len(s) - 1))))
+    return s[idx]
+
+
+def _is_synthetic_harness_log(rows: list[dict]) -> bool:
+    return bool(rows) and any(r.get("type") == "summary" for r in rows) and any("naive_ok" in r for r in rows)
+
+
+def format_synthetic_report(path: str, rows: list[dict]) -> str:
+    item_rows = [r for r in rows if r.get("type") != "summary"]
+    cats = sorted({r.get("category", "?") for r in item_rows})
+    lines = [f"\nFILE: {path}   ({len(item_rows)} items + summary)\n"]
+    lines.append("  Synthetic offline harness (engram / naive-recall)")
+    lines.append("")
+    lines.append("  " + "category".ljust(26) + "engram".ljust(16) + "naive-recall")
+    lines.append("  " + "-" * 56)
+    for cat in cats:
+        subset = [r for r in item_rows if r.get("category", "?") == cat]
+        e = _percent([bool(r.get("ok")) for r in subset])
+        n = _percent([bool(r.get("naive_ok")) for r in subset])
+        lines.append(f"  {cat.ljust(26)}{f'{e:.1f}% ({len(subset)})'.ljust(16)}{n:.1f}% ({len(subset)})")
+    lines.append("  " + "-" * 56)
+    overall = _percent([bool(r.get("ok")) for r in item_rows])
+    naive_overall = _percent([bool(r.get("naive_ok")) for r in item_rows])
+    overall_cell = f"{overall:.1f}% ({len(item_rows)})"
+    lines.append(
+        f"  {'OVERALL'.ljust(26)}"
+        f"{overall_cell.ljust(16)}"
+        f"{naive_overall:.1f}% ({len(item_rows)})"
+    )
+    avg_tokens = sum(r.get("tokens", 0) for r in item_rows) / max(1, len(item_rows))
+    naive_avg_tokens = sum(r.get("naive_tokens", 0) for r in item_rows) / max(1, len(item_rows))
+    latencies = [float(r.get("latency_ms", 0.0)) for r in item_rows]
+    p50_latency = _percentile(latencies, 50)
+    p95_latency = _percentile(latencies, 95)
+    lines.append(
+        f"  {'avg context tokens'.ljust(26)}{f'{avg_tokens:.1f}'.ljust(16)}{naive_avg_tokens:.1f}"
+    )
+    lines.append(
+        f"  {'p50 latency ms'.ljust(26)}{f'{p50_latency:.2f}'.ljust(16)}-"
+    )
+    lines.append(
+        f"  {'p95 latency ms'.ljust(26)}{f'{p95_latency:.2f}'.ljust(16)}-"
+    )
+    lines.append("")
+    lines.append("  Note: synthetic logs are for harness-shape regression, not public benchmark claims.")
+    lines.append("")
+    return "\n".join(lines)
+
+
 def main() -> None:
     if len(sys.argv) < 2:
         print("usage: python eval/report.py <bench_output.jsonl>")
         return
     rows = load(sys.argv[1])
+    if _is_synthetic_harness_log(rows):
+        print(format_synthetic_report(sys.argv[1], rows))
+        return
     systems: list[str] = []
     for r in rows:
         for s in r.get("sys", {}):
@@ -69,10 +130,16 @@ def main() -> None:
     print("  " + "-" * (26 + (w + 2) * len(systems)))
     line = "  " + "OVERALL".ljust(26)
     overall: dict[str, float] = {}
+    scored_counts: dict[str, int] = {}
     for s in systems:
         allv = [v for vs in acc[s].values() for v in vs]
+        scored_counts[s] = len(allv)
         overall[s] = 100 * sum(allv) / len(allv) if allv else 0.0
         line += (f"{overall[s]:.1f}% ({len(allv)})" if allv else "-").ljust(w + 2)
+    print(line)
+    line = "  " + "scored items".ljust(26)
+    for s in systems:
+        line += (f"{scored_counts[s]}/{len(rows)}" if rows else "-").ljust(w + 2)
     print(line)
     line = "  " + "avg context tokens".ljust(26)
     for s in systems:
@@ -81,8 +148,14 @@ def main() -> None:
     line = "  " + "p50 latency ms".ljust(26)
     for s in systems:
         if lats[s]:
-            srt = sorted(lats[s])
-            line += f"{srt[len(srt)//2]:.0f}".ljust(w + 2)
+            line += f"{_percentile(lats[s], 50):.0f}".ljust(w + 2)
+        else:
+            line += "-".ljust(w + 2)
+    print(line)
+    line = "  " + "p95 latency ms".ljust(26)
+    for s in systems:
+        if lats[s]:
+            line += f"{_percentile(lats[s], 95):.0f}".ljust(w + 2)
         else:
             line += "-".ljust(w + 2)
     print(line)

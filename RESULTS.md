@@ -20,13 +20,14 @@ noisy full window, at a fraction of the tokens.
 | full-context baseline (same answerer + judge) | 73.2% | 79k | 0 / 500 |
 
 **Engram `engram_lean` beats the full-context baseline by +10.4 points while using ~8× fewer tokens**
-(9.6k vs 79k) — removing distractors raises accuracy, and the cost stays flat as the history grows
-(full-context can't). Both numbers are on the **official** LongMemEval judge prompts, the **same answerer
-and judge applied to every system** in the harness, all 500 questions, 0 errored.
+(9.6k vs 79k) on this 500-question run. Both numbers are on the **official** LongMemEval judge prompts,
+with the **same answerer and judge applied to every system** in the harness; both `engram_lean` and
+`full_context` completed all 500 questions with 0 errored.
 
 > For reference, in the same 500-question run a non-lean variant that prepends the conflict-resolved facts
 > *above the full history* (`engram_full`, ~79k tokens) scores **83.4%** — i.e. lean retrieval at 9.6k
-> tokens matches full-history accuracy at ~1/8 the cost. The lean number is the one we headline.
+> tokens matches the full-history-plus-facts variant at ~1/8 the context. `engram_full` had 1 errored item,
+> so its 83.4% is over 499 scored questions; the lean number is the one we headline.
 
 ---
 
@@ -43,9 +44,10 @@ and judge applied to every system** in the harness, all 500 questions, 0 errored
 | single-session-preference | 73.3% | 30 | hard industry-wide (frontier LLMs 37–48% on PersonaMem) |
 | **Overall** | **83.6%** | **500** | |
 
-**Efficiency:** mean retrieved context **~9.6k tokens** (~8× leaner than the ~79k full-context baseline);
-the lean read path is what keeps cost flat as history grows. p50 answer latency ~60s is the
-doubao-seed-2.0-pro answer call, not Engram's retrieval (retrieval is sub-second).
+**Efficiency:** mean retrieved context **~9.6k tokens** (~8× leaner than the ~79k full-context baseline)
+in the committed run. End-to-end answer latency for `engram_lean` is p50 **60.5s** / p95 **106.6s** in
+this log; this includes the remote doubao-seed-2.0-pro answer call and is reported as measured, not used
+as a separate retrieval latency claim.
 
 ---
 
@@ -87,7 +89,7 @@ a run (e.g. `engram_lean` vs `full_context`) is apples-to-apples by construction
 
 **The raw logs are committed:**
 - `engram_lean` headline (83.6%, 9.6k tokens): [`results/longmemeval_s_engram_lean_v2_final.jsonl`](results/longmemeval_s_engram_lean_v2_final.jsonl) — 500 lines.
-- full-context baseline (73.2%) + the `engram_full` variant (83.4%), same 500-question run, same answerer + judge: [`results/longmemeval_s_volcano_doubao_deepseekjudge.jsonl`](results/longmemeval_s_volcano_doubao_deepseekjudge.jsonl).
+- full-context baseline (73.2%, 500/500 scored) + the `engram_full` variant (83.4%, 499/500 scored, 1 error), same 500-question run, same answerer + judge: [`results/longmemeval_s_volcano_doubao_deepseekjudge.jsonl`](results/longmemeval_s_volcano_doubao_deepseekjudge.jsonl).
 
 Recompute any table yourself: `python eval/report.py <file.jsonl>`.
 

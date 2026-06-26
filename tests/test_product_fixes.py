@@ -89,6 +89,32 @@ def test_summary_fallback_answers_from_summary():
     assert "pat" in res.answer().lower() or "token" in res.answer().lower()
 
 
+def test_search_uses_summary_fallback_when_no_fact_ranked():
+    mem = Memory()
+    ep = mem.add("To reset the PAT: open settings, regenerate the token, then update CI.",
+                 user_id="u1", session_id="s1")
+    mem.summarize_episodes([ep])
+
+    res = mem.search("How do I reset the PAT?", user_id="u1")
+    assert res.via == "summary"
+    assert "token" in res.answer().lower()
+
+
+def test_summary_fallback_respects_as_of():
+    mem = Memory()
+    old = mem.add("To reset the PAT: use the legacy token page.",
+                  user_id="u1", session_id="old", event_time=1_700_000_000.0)
+    new = mem.add("To reset the PAT: use the new security console.",
+                  user_id="u1", session_id="new", event_time=1_702_592_000.0)
+    mem.summarize_episodes([old, new])
+
+    res = mem._summary_fallback("How do I reset the PAT?", "u1", as_of=1_700_864_000.0)
+    assert res is not None
+    ans = res.answer().lower()
+    assert "legacy token page" in ans
+    assert "new security console" not in ans
+
+
 # ---------------- #7 profile authority ----------------
 def test_profile_build_prefers_authoritative_and_recent():
     from engram.consolidate.summarizer import ProfileBuilder

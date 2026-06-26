@@ -30,8 +30,10 @@ fig, ax = plt.subplots(figsize=(5.0, 3.4))
 
 ax.scatter([9.6], [83.6], marker="*", s=480, color=ENGRAM, zorder=6,
            edgecolor="black", linewidth=0.5, label=r"Engram (engram_lean)")
-ax.scatter([79], [83.4], marker="o", s=80, facecolor="white", edgecolor=ENGRAM,
-           linewidth=1.8, zorder=6, label=r"engram_full (facts + full history)")
+# engram_full: two identical-config runs scored 83.4% and 86.0% -> error bar shows the run-to-run spread
+ax.errorbar([79], [84.7], yerr=[[1.3], [1.3]], marker="o", ms=9, mfc="white", mec=ENGRAM,
+            mew=1.8, ecolor=ENGRAM, elinewidth=1.4, capsize=4, capthick=1.4, zorder=6,
+            label=r"engram_full (facts + full history), 2 runs")
 ax.scatter([79], [73.2], marker="s", s=80, color=BASELINE, zorder=6,
            edgecolor="black", linewidth=0.5, label="full-context baseline")
 
@@ -44,8 +46,8 @@ ax.text(34, 79.7, "+10.4 pts\n~8x fewer tokens", color="0.30", fontsize=8.5,
 
 ax.annotate("83.6% @ 9.6k", (9.6, 83.6), textcoords="offset points",
             xytext=(10, -13), fontsize=8.5, color=ENGRAM, fontweight="bold")
-ax.annotate("83.4% @ 79k", (79, 83.4), textcoords="offset points",
-            xytext=(-6, 8), fontsize=8.0, color=ENGRAM, ha="right")
+ax.annotate("83.4-86.0% @ 79k", (79, 86.0), textcoords="offset points",
+            xytext=(-6, 7), fontsize=8.0, color=ENGRAM, ha="right")
 ax.annotate("73.2% @ 79k", (79, 73.2), textcoords="offset points",
             xytext=(-6, -14), fontsize=8.0, color=BASELINE, ha="right")
 

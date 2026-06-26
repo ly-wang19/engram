@@ -47,6 +47,15 @@ ITEMS: list[EvalItem] = [
         "Where does Dora's colleague work?", "Netflix",
     ),
     EvalItem(
+        "mh2", "multi_hop",
+        [
+            ("My sister Maya is a pediatrician at a children's hospital.", 0),
+            ("Maya just moved to Seattle for a fellowship.", 1),
+            ("I bought a new espresso machine and it's wonderful.", 2),
+        ],
+        "What is the profession of the user's sister who moved to Seattle?", "pediatrician",
+    ),
+    EvalItem(
         "tmp1", "temporal",
         [("My name is Finn and I work at IBM.", 0), ("I now work at Oracle.", 50)],
         "Where does Finn work?", "IBM", as_of_day=20,

@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "engram-memory"
 version = "0.0.1"
-description = "Engram — an open-source long-term memory engine built to be #1 on every public memory benchmark."
+description = "Engram — an open-source, reproducible long-term memory engine for LLM agents."
 readme = "README.md"
 requires-python = ">=3.10"
 license = "AGPL-3.0-only"
@@ -25,6 +25,7 @@ dependencies = []
 [project.optional-dependencies]
 # Real embedding/LLM/vector/graph backends slot in behind the same interfaces.
 backends = ["lancedb>=0.6", "numpy>=1.24"]
+lancedb = ["lancedb>=0.6"]
 embeddings = ["sentence-transformers>=2.2"]  # local BGE embeddings (ENGRAM_EMBEDDER=bge-*; no API key)
 llm = ["litellm>=1.40"]
 # Serving / adoption layer (CLAUDE.md §6).
@@ -39,6 +40,7 @@ all = ["engram-memory[server,mcp,embeddings,backends,llm,eval,dev]"]
 [project.scripts]
 engram-mcp = "engram.mcp.__main__:main"            # run the MCP server
 engram-import = "engram.connectors.__main__:main"  # import a chat/history export
+engram-migrate-pickle = "engram.store.migrate:main" # migrate trusted legacy pickle snapshots
 
 [project.urls]
 Homepage = "https://github.com/your-org/engram"

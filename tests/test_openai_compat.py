@@ -67,6 +67,45 @@ def test_chat_completion_uses_recalled_memory():
         shutil.rmtree(d, ignore_errors=True)
 
 
+def test_chat_completion_supports_as_of_memory_view():
+    d = tempfile.mkdtemp(prefix="engram_oc_")
+    try:
+        svc = MemoryService(data_dir=d, embedder_name="hashing", llm_name="")
+        svc.import_("u", None, "records", [
+            {"session_id": "old", "content": "Wei works at Tencent.", "event_time": 1_700_000_000.0},
+            {"session_id": "new", "content": "Wei works at Moonshot AI.", "event_time": 1_702_592_000.0},
+        ])
+        seen = {}
+        svc.llm = FakeLLM(handler=lambda p, s: seen.setdefault("system", s) and "" or "You worked at Tencent.")
+        body = {"model": "engram", "messages": [{"role": "user", "content": "where did Wei work?"}]}
+        resp = oc.chat_completion(svc, "u", body, as_of=1_700_864_000.0)
+
+        assert resp["engram"]["as_of"] == 1_700_864_000.0
+        assert "Tencent" in (seen["system"] or "")
+        assert "Moonshot AI" not in (seen["system"] or "")
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
+def test_chat_completion_can_redact_sensitive_memory():
+    d = tempfile.mkdtemp(prefix="engram_oc_")
+    try:
+        svc = MemoryService(data_dir=d, embedder_name="hashing", llm_name="")
+        svc.add_fact("u", "user", "has_disease", "diabetes")
+        svc.add_fact("u", "user", "works_at", "Acme")
+        seen = {}
+        svc.llm = FakeLLM(handler=lambda p, s: seen.setdefault("system", s) and "" or "ok")
+        body = {"model": "engram", "messages": [{"role": "user", "content": "what do you know about me?"}]}
+        resp = oc.chat_completion(svc, "u", body, n_chunks=0, redact_sensitive=True)
+
+        assert resp["engram"]["redacted_sensitive"] is True
+        system = seen["system"] or ""
+        assert "Acme" in system
+        assert "diabetes" not in system.lower()
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
 def test_chat_completion_without_llm_raises():
     d = tempfile.mkdtemp(prefix="engram_oc_")
     try:
@@ -110,6 +149,52 @@ def test_chat_completions_endpoint(client_with_llm):
     assert data["engram"]["recalled"] is True and data["engram"]["remembered"] is True
     # the FakeLLM saw the recalled memory injected into its system prompt
     assert any("Shenzhen" in (call["system"] or "") for call in appmod._svc.llm.calls)
+
+
+def test_chat_completions_endpoint_supports_memory_as_of(client_with_llm):
+    c, appmod = client_with_llm
+    h = {"Authorization": "Bearer chat_asof"}
+    c.post("/v1/import", json={
+        "format": "records",
+        "data": [
+            {"session_id": "old", "content": "Wei works at Tencent.", "event_time": 1_700_000_000.0},
+            {"session_id": "new", "content": "Wei works at Moonshot AI.", "event_time": 1_702_592_000.0},
+        ],
+    }, headers=h)
+
+    r = c.post("/v1/chat/completions", json={
+        "model": "engram",
+        "messages": [{"role": "user", "content": "where did Wei work?"}],
+        "memory": {"as_of": 1_700_864_000.0, "remember": False},
+    }, headers=h)
+
+    assert r.status_code == 200
+    data = r.json()
+    assert data["engram"]["as_of"] == 1_700_864_000.0
+    assert data["engram"]["remembered"] is False
+    system = appmod._svc.llm.calls[-1]["system"] or ""
+    assert "Tencent" in system
+    assert "Moonshot AI" not in system
+
+
+def test_chat_completions_endpoint_supports_sensitive_redaction(client_with_llm):
+    c, appmod = client_with_llm
+    h = {"Authorization": "Bearer chat_redact"}
+    c.post("/v1/facts", json={"predicate": "has_disease", "object": "diabetes"}, headers=h)
+    c.post("/v1/facts", json={"predicate": "works_at", "object": "Acme"}, headers=h)
+
+    r = c.post("/v1/chat/completions", json={
+        "model": "engram",
+        "messages": [{"role": "user", "content": "what do you know about me?"}],
+        "memory": {"redact_sensitive": True, "n_chunks": 0, "remember": False},
+    }, headers=h)
+
+    assert r.status_code == 200
+    data = r.json()
+    assert data["engram"]["redacted_sensitive"] is True
+    system = appmod._svc.llm.calls[-1]["system"] or ""
+    assert "Acme" in system
+    assert "diabetes" not in system.lower()
 
 
 def test_chat_completions_streaming(client_with_llm):
