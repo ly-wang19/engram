@@ -70,4 +70,12 @@ class GraphStore(ABC):
     def invalidate_relations_for_fact(self, fact_id: str, t: float) -> None: ...
 
     @abstractmethod
+    def delete_relations_for_fact(self, fact_id: str) -> None:
+        """Hard-remove all graph edges projected from a fact. Use only for user edits/erasure."""
+
+    @abstractmethod
+    def prune_orphan_entities(self) -> int:
+        """Remove entities that are no longer referenced by any relation. Returns removed count."""
+
+    @abstractmethod
     def relations(self) -> list[Relation]: ...

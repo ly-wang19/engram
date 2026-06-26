@@ -25,7 +25,9 @@
 ## Read protocol (safe + recovering — D2/D3)
 1. No `manifest.json` → **empty store**, no error (US1 acceptance scenario 3).
 2. Parse the manifest; `schema_version` greater than supported → `IncompatibleStoreError` (FR-004).
-3. `embedding_dim` ≠ the configured embedder's dim → `DimensionMismatchError` (US2 acceptance scenario 3).
+3. `embedder_id` or `embedding_dim` differs from the configured embedder → `EmbedderMismatchError` or
+   `DimensionMismatchError`, rather than returning neighbors from the wrong vector space (US2 acceptance
+   scenario 3).
 4. Stream exactly the manifest-declared committed prefix for each `*.jsonl`. Missing records or malformed
    JSON **inside** that prefix raise `StoreFormatError`; malformed bytes/records **after** the manifest
    count are treated as an uncommitted torn tail and ignored (FR-005).
@@ -34,6 +36,7 @@
 ## Guarantees
 - **Safe** — opening any file never executes embedded code (SC-002).
 - **Durable** — the committed prefix survives a crash mid-write (SC-003).
+- **Vector-space safe** — stores written with a different embedding model id or dimension fail loudly.
 - **No silent loss** — corruption inside the manifest-committed prefix fails loudly instead of loading a
   partial memory.
 - **Versioned** — incompatible stores fail loudly, never silently (FR-004).

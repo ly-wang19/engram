@@ -130,10 +130,16 @@ def main() -> None:
     print("  " + "-" * (26 + (w + 2) * len(systems)))
     line = "  " + "OVERALL".ljust(26)
     overall: dict[str, float] = {}
+    scored_counts: dict[str, int] = {}
     for s in systems:
         allv = [v for vs in acc[s].values() for v in vs]
+        scored_counts[s] = len(allv)
         overall[s] = 100 * sum(allv) / len(allv) if allv else 0.0
         line += (f"{overall[s]:.1f}% ({len(allv)})" if allv else "-").ljust(w + 2)
+    print(line)
+    line = "  " + "scored items".ljust(26)
+    for s in systems:
+        line += (f"{scored_counts[s]}/{len(rows)}" if rows else "-").ljust(w + 2)
     print(line)
     line = "  " + "avg context tokens".ljust(26)
     for s in systems:

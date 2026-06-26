@@ -34,9 +34,10 @@ INSTRUCTIONS = (
     "depend on what you've learned about the user in past sessions (their preferences, projects, "
     "people, decisions) — it returns a small, dated, relevant context to ground your answer. Use "
     "`engram_remember` whenever the user states a durable fact, preference, or decision worth keeping. "
-    "`engram_search` gives a single direct answer; `engram_list_facts` / `engram_profile` browse what's "
-    "stored; `engram_add_fact` records an authoritative fact; `engram_import` bulk-loads an exported "
-    "history; `engram_forget` erases everything (irreversible)."
+    "`engram_search` gives a single direct answer; `engram_stats` checks content-free memory health; "
+    "`engram_list_facts` / `engram_profile` browse what's stored; `engram_add_fact` records an "
+    "authoritative fact; `engram_import` bulk-loads an exported history; `engram_forget` erases "
+    "everything (irreversible)."
 )
 
 mcp = FastMCP("engram_mcp", instructions=INSTRUCTIONS)
@@ -107,6 +108,10 @@ async def engram_recall(
                                 min_length=1)],
     max_chunks: Annotated[int, Field(description="How many full past conversations to include for detail "
                                      "(0 = facts/summaries only). Default 6.", ge=0, le=20)] = 6,
+    as_of: Annotated[Optional[float], Field(description="Optional epoch seconds for a point-in-time memory "
+                                           "view, e.g. what was believed before a later update.")] = None,
+    redact_sensitive: Annotated[bool, Field(description="When true, omit facts tagged sensitive from the "
+                                            "returned context.")] = False,
     response_format: ResponseFormat = ResponseFormat.MARKDOWN,
 ) -> str:
     """Retrieve a SMALL, relevant, dated slice of the user's long-term memory to ground your answer.
@@ -117,10 +122,16 @@ async def engram_recall(
     answer from it; if it's empty, the memory has nothing on the topic.
 
     Returns (markdown): a context block to read from, with an approximate token count.
-    Returns (json): {"context": str, "tokens_est": int}.
+    Returns (json): {"context": str, "tokens_est": int, "as_of": float|null, "redacted_sensitive": bool}.
     """
     try:
-        data = await backend().recall(query, n_chunks=max_chunks, lean=True)
+        data = await backend().recall(
+            query,
+            n_chunks=max_chunks,
+            lean=True,
+            as_of=as_of,
+            redact_sensitive=redact_sensitive,
+        )
     except Exception as e:  # noqa: BLE001
         return _err(e)
     if response_format == ResponseFormat.JSON:
@@ -135,6 +146,10 @@ async def engram_recall(
 async def engram_search(
     query: Annotated[str, Field(description="A direct factual question, e.g. 'Where does the user work?'",
                                 min_length=1)],
+    as_of: Annotated[Optional[float], Field(description="Optional epoch seconds for a point-in-time memory "
+                                           "view, e.g. answer as of a past date.")] = None,
+    redact_sensitive: Annotated[bool, Field(description="When true, omit facts tagged sensitive and abstain "
+                                            "instead of returning sensitive answers.")] = False,
     response_format: ResponseFormat = ResponseFormat.MARKDOWN,
 ) -> str:
     """Answer a single factual question directly from memory (with the supporting facts).
@@ -144,10 +159,10 @@ async def engram_search(
     attribute isn't stored.
 
     Returns (markdown): the answer plus the facts it rests on.
-    Returns (json): {"answer": str, "facts": [str, ...]}.
+    Returns (json): {"answer": str, "facts": [str, ...], "as_of": float|null, "redacted_sensitive": bool}.
     """
     try:
-        data = await backend().recall(query, lean=False)
+        data = await backend().recall(query, lean=False, as_of=as_of, redact_sensitive=redact_sensitive)
     except Exception as e:  # noqa: BLE001
         return _err(e)
     if response_format == ResponseFormat.JSON:
@@ -244,6 +259,46 @@ async def engram_profile(response_format: ResponseFormat = ResponseFormat.MARKDO
     if facts:
         out += ["", "Key facts:"] + [f"- {t}" for t in facts[:20]]
     return "\n".join(out)
+
+
+@mcp.tool(name="engram_stats", annotations=ToolAnnotations(title="Get memory stats", **_READ))
+async def engram_stats(response_format: ResponseFormat = ResponseFormat.MARKDOWN) -> str:
+    """Get content-free namespace observability: episode counts, consolidation backlog, fact counts,
+    graph counts, pending conflicts, and backend readiness. Use this for health checks and progress
+    audits without exposing profile text, facts, or raw episodes.
+
+    Returns (json): MemoryStats from `/v1/stats`.
+    """
+    try:
+        data = await backend().stats()
+    except Exception as e:  # noqa: BLE001
+        return _err(e)
+    if response_format == ResponseFormat.JSON:
+        return _json(data)
+    c = data.get("counts") or {}
+    tr = data.get("time_range") or {}
+    lines = [
+        "# Engram stats",
+        "",
+        f"- Episodes: {c.get('episodes', 0)} "
+        f"({c.get('episodes_consolidated', 0)} consolidated, {c.get('episodes_pending', 0)} pending, "
+        f"{c.get('episodes_ephemeral', 0)} ephemeral)",
+        f"- Facts: {c.get('facts_live', 0)} live, {c.get('facts_superseded', 0)} superseded, "
+        f"{c.get('facts_sensitive', 0)} sensitive",
+        f"- Heat tiering: {c.get('facts_hot', 0)} hot, {c.get('facts_cold', 0)} cold, "
+        f"{c.get('cold_pages_out', 0)} paged out, {c.get('cold_pages_in', 0)} paged back",
+        f"- Working memory: {c.get('working_live', 0)} live",
+        f"- Graph: {c.get('entities', 0)} entities, {c.get('relations', 0)} relations",
+        f"- Graph hygiene: {c.get('graph_orphan_entities', 0)} orphan entities, "
+        f"{c.get('graph_stale_relations', 0)} stale relations",
+        f"- Pending conflicts: {c.get('pending_conflicts', 0)}",
+        f"- Consolidation backlog: {'yes' if data.get('consolidation_backlog') else 'no'}",
+        f"- Backend: storage={data.get('storage', '?')}, embedder={data.get('embedder', '?')}, "
+        f"llm_configured={bool(data.get('llm_configured'))}",
+    ]
+    if tr.get("first_event_at_h") or tr.get("last_event_at_h"):
+        lines.append(f"- Event range: {tr.get('first_event_at_h') or '?'} to {tr.get('last_event_at_h') or '?'}")
+    return "\n".join(lines)
 
 
 @mcp.tool(name="engram_add_fact", annotations=ToolAnnotations(title="Assert an authoritative fact", **_WRITE))

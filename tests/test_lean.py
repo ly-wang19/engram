@@ -163,6 +163,31 @@ def test_memory_crud_add_edit_delete():
     assert mem.delete_fact("nonexistent") is False
 
 
+def test_update_fact_rebuilds_graph_relation():
+    mem = Memory()
+    f = mem.add_fact("user", "works_at", "ByteDance", user_id="u1")
+
+    mem.update_fact(f.id, object="Moonshot AI")
+
+    graph = mem.graph_data("u1")
+    edge_text = str(graph)
+    assert "Moonshot AI" in edge_text
+    assert "ByteDance" not in edge_text
+    assert len([edge for edge in graph["edges"] if edge["fact_id"] == f.id]) == 1
+
+
+def test_delete_fact_removes_graph_export_edge():
+    mem = Memory()
+    f = mem.add_fact("user", "has_disease", "diabetes", user_id="u1")
+    assert f.id in {edge["fact_id"] for edge in mem.graph_data("u1")["edges"]}
+
+    assert mem.delete_fact(f.id) is True
+
+    graph = mem.graph_data("u1")
+    assert f.id not in {edge["fact_id"] for edge in graph["edges"]}
+    assert "diabetes" not in str(graph).lower()
+
+
 def test_subsumption_drops_contained_fact():
     """MemoryScope contra_repeat: a same-slot fact whose content is a strict subset of a fuller one is
     redundant. Adding the subset is a no-op; adding the superset retires the partial version."""
@@ -242,6 +267,18 @@ def test_evidence_planner_is_query_based_not_benchmark_based():
     kits = plan_evidence("How many model kits have I worked on or bought?")
     assert any("model kit" in q for q in kits.subqueries)
 
+    freq = plan_evidence("How often do I practice yoga now?")
+    assert freq.current_state and not freq.aggregation and not freq.subqueries
+
+    dur = plan_evidence("How many weeks in total did I spend reading these books?")
+    assert dur.duration and dur.aggregation and dur.n_chunks > 0
+
+    ms = plan_evidence("What is the profession of the user's sister who moved to Seattle?")
+    assert ms.multi_hop and ms.use_agentic and ms.n_chunks > 0
+    assert not ms.aggregation
+    assert "sister profession" in ms.subqueries
+    assert "sister moved seattle" in ms.subqueries
+
 
 def test_lean_context_auto_adds_timeline_for_temporal_queries():
     mem = build()
@@ -259,8 +296,65 @@ def test_lean_context_auto_adds_preference_records():
 def test_lean_context_auto_adds_aggregation_evidence():
     mem = build()
     ctx = mem.lean_context("How many trips did I take?", user_id="u1", n_chunks=0)
-    assert "AGGREGATION EVIDENCE (dedupe before counting/listing):" in ctx
+    assert "AGGREGATION EVIDENCE" in ctx
     assert "date | source | evidence" in ctx
+
+
+def test_aggregation_evidence_keeps_raw_candidates_when_summaries_drop_details():
+    mem = Memory()
+    mem.add(
+        "I recently finished a Tamiya 1/48 scale Spitfire Mk.V model kit.",
+        user_id="u1",
+        session_id="s1",
+        event_time=BASE,
+    )
+
+    ctx = mem.lean_context(
+        "How many model kits have I worked on or bought?",
+        user_id="u1",
+        persona=False,
+        n_facts=0,
+        n_summaries=0,
+        n_chunks=0,
+        char_budget=10_000,
+    )
+
+    agg = ctx.split("AGGREGATION EVIDENCE", 1)[1]
+    assert "Spitfire" in agg
+
+
+def test_lean_context_auto_adds_duration_evidence_for_time_totals():
+    mem = Memory()
+    mem.add("I started reading 'The Nightingale' today.", user_id="u1", session_id="s1", event_time=BASE)
+    mem.add("I finished reading 'The Nightingale' today.", user_id="u1", session_id="s2",
+            event_time=BASE + 14 * DAY)
+
+    ctx = mem.lean_context(
+        "How many weeks did I spend reading 'The Nightingale'?",
+        user_id="u1",
+        persona=False,
+        n_facts=0,
+        n_summaries=0,
+        n_chunks=0,
+        char_budget=10_000,
+    )
+
+    assert "DURATION EVIDENCE (pair start/finish dates per item" in ctx
+    assert "started reading" in ctx
+    assert "finished reading" in ctx
+
+
+def test_aggregation_evidence_prioritizes_query_overlap():
+    mem = build()
+    eps = sorted(mem.episodes_doc.values(), key=lambda e: e.event_time)
+    block = mem._aggregation_block(
+        facts=[],
+        summaries=[eps[2], eps[1]],
+        detail_eps=[],
+        query="How many trips to Kyoto?",
+    )
+    body = block.split("--- | --- | ---", 1)[1].lower()
+    assert body.find("kyoto") < body.find("cat named luna")
 
 
 def test_lean_context_auto_adds_current_state_for_now_queries():
@@ -268,6 +362,168 @@ def test_lean_context_auto_adds_current_state_for_now_queries():
     ctx = mem.lean_context("Where do I currently work?", user_id="u1", n_chunks=0)
     assert "CURRENT STATE (live facts only):" in ctx
     assert "current value" in ctx
+
+
+def test_lean_context_as_of_profile_does_not_leak_current_facts():
+    mem = Memory()
+    mem.add("Wei works at Tencent.", user_id="u1", session_id="old", event_time=BASE)
+    mem.add("Wei works at Moonshot AI.", user_id="u1", session_id="new", event_time=BASE + 30 * DAY)
+    mem.consolidate()
+
+    ctx = mem.lean_context(
+        "Where does Wei work?",
+        user_id="u1",
+        as_of=BASE + 10 * DAY,
+        n_chunks=0,
+        char_budget=10_000,
+    )
+    assert "USER PROFILE (as of" in ctx
+    assert "Tencent" in ctx
+    assert "Moonshot AI" not in ctx
+
+
+def test_current_state_preserves_multi_valued_attributes():
+    mem = Memory()
+    mem.add_fact("Wei", "owns", "a bike", user_id="u1")
+    mem.add_fact("Wei", "owns", "a camera", user_id="u1")
+
+    ctx = mem.lean_context(
+        "What do I currently own?",
+        user_id="u1",
+        persona=False,
+        n_chunks=0,
+        char_budget=10_000,
+    )
+    state = ctx.split("CURRENT STATE (live facts only):", 1)[1].split("\n\n", 1)[0]
+    assert "a bike" in state
+    assert "a camera" in state
+
+
+def test_lean_context_uses_multi_hop_subqueries_for_detail_chunks():
+    mem = Memory()
+    eps = [
+        mem.add("My sister Maya is a pediatrician at a children's hospital.", user_id="u1",
+                session_id="s1", event_time=BASE),
+        mem.add("Maya just moved to Seattle for a fellowship.", user_id="u1",
+                session_id="s2", event_time=BASE + DAY),
+        mem.add("I bought a new espresso machine and it is wonderful.", user_id="u1",
+                session_id="s3", event_time=BASE + 2 * DAY),
+    ]
+    mem.summarize_episodes(eps)
+
+    ctx = mem.lean_context(
+        "What is the profession of the user's sister who moved to Seattle?",
+        user_id="u1",
+        persona=False,
+        n_facts=0,
+        n_summaries=0,
+        n_chunks=0,
+    )
+
+    assert "RELEVANT CONVERSATIONS (full detail):" in ctx
+    assert "pediatrician" in ctx.lower()
+    assert "seattle" in ctx.lower()
+
+
+def test_lean_context_graph_paths_use_clean_multihop_plan():
+    mem = Memory()
+    eps = [
+        mem.add("My sister Anna is a lawyer.", user_id="u1", session_id="s1", event_time=BASE),
+        mem.add("My sister Maya is a pediatrician.", user_id="u1", session_id="s2", event_time=BASE + DAY),
+        mem.add("Maya just moved to Seattle.", user_id="u1", session_id="s3", event_time=BASE + 2 * DAY),
+    ]
+    mem.consolidate(eps)
+    mem.summarize_episodes(eps)
+
+    ctx = mem.lean_context(
+        "What is the profession of the user's sister who moved to Seattle?",
+        user_id="u1",
+        persona=False,
+        n_chunks=0,
+        char_budget=10_000,
+    )
+    graph = ctx.split("GRAPH PATHS (relation evidence):", 1)[1].split("\n\n", 1)[0]
+    assert "u1 sister Maya" in graph
+    assert "Maya lives in Seattle" in graph
+    assert "Maya occupation pediatrician" in graph
+    assert "u1 sister Anna" not in graph
+
+
+def test_multihop_planner_includes_cold_tier_relation_facts():
+    mem = Memory()
+    eps = [
+        mem.add("My sister Maya is a pediatrician.", user_id="u1", session_id="s1", event_time=BASE),
+        mem.add("Maya just moved to Seattle.", user_id="u1", session_id="s2", event_time=BASE + DAY),
+    ]
+    mem.consolidate(eps)
+
+    sister = next(f for f in mem.fact_store.values() if f.predicate == "sister")
+    sister.salience = 0.0
+    assert mem.evict_cold(max_hot=len(mem.fact_store.values()) - 1) == 1
+    assert mem.cold_store.get(sister.id) is not None
+
+    ctx = mem.lean_context(
+        "What is the profession of the user's sister who moved to Seattle?",
+        user_id="u1",
+        persona=False,
+        n_chunks=0,
+        char_budget=10_000,
+    )
+    graph = ctx.split("GRAPH PATHS (relation evidence):", 1)[1].split("\n\n", 1)[0]
+    assert "u1 sister Maya" in graph
+    assert "Maya lives in Seattle" in graph
+    assert "Maya occupation pediatrician" in graph
+
+
+def test_deleted_relation_fact_does_not_drive_multihop_planner():
+    mem = Memory()
+    eps = [
+        mem.add("My sister Maya is a pediatrician.", user_id="u1", session_id="s1", event_time=BASE),
+        mem.add("Maya just moved to Seattle.", user_id="u1", session_id="s2", event_time=BASE + DAY),
+    ]
+    mem.consolidate(eps)
+    sister = next(f for f in mem.fact_store.values() if f.predicate == "sister")
+
+    assert mem.delete_fact(sister.id) is True
+
+    res = mem.search("What is the profession of the user's sister who moved to Seattle?", user_id="u1")
+    assert res.via != "multi-hop"
+    assert "pediatrician" not in res.answer().lower()
+
+
+def test_bench_preconsolidation_uses_multi_hop_subqueries():
+    from engram.types import Episode
+    from eval.bench import retrieve_evidence_episodes
+
+    sister = Episode("My sister Maya is a pediatrician.", id="sister", user_id="u1")
+    moved = Episode("Maya just moved to Seattle.", id="moved", user_id="u1")
+    noise = Episode("I bought a new espresso machine.", id="noise", user_id="u1")
+
+    class FakeMem:
+        def retrieve_episodes(self, query, user_id, k):
+            q = query.lower()
+            if "sister profession" in q or q == "profession":
+                return [sister]
+            if "sister moved seattle" in q or q == "seattle" or q == "moved seattle":
+                return [moved]
+            return [noise]
+
+    eps = retrieve_evidence_episodes(
+        FakeMem(),
+        "What is the profession of the user's sister who moved to Seattle?",
+        "u1",
+        2,
+    )
+    assert {e.id for e in eps} == {"sister", "moved"}
+
+    baseline = retrieve_evidence_episodes(
+        FakeMem(),
+        "What is the profession of the user's sister who moved to Seattle?",
+        "u1",
+        2,
+        use_planner=False,
+    )
+    assert [e.id for e in baseline] == ["noise"]
 
 
 def test_cascade_coarse_to_fine_assembles():
@@ -299,6 +555,197 @@ def test_heat_tiered_eviction_pages_cold_preserves_durable():
     assert len(mem.cold_store.values()) == 3, "evicted facts are preserved in the cold tier, not deleted"
 
 
+def test_history_includes_cold_tier_facts():
+    mem = Memory()
+    cold = mem.add_fact("project", "project_note", "cold audit trail", user_id="u1")
+    hot = mem.add_fact("project", "project_note", "hot audit trail", user_id="u1")
+    cold.salience = 0.0
+    hot.salience = 1.0
+    assert mem.evict_cold(max_hot=1) == 1
+    assert mem.cold_store.get(cold.id) is not None
+
+    chain = mem.history("project", "project_note", user_id="u1")
+    assert {f.object for f in chain} == {"cold audit trail", "hot audit trail"}
+
+
+def test_add_fact_supersedes_live_cold_tier_fact():
+    mem = Memory()
+    old = mem.add_fact("user", "project_status", "alpha", user_id="u1")
+    filler = mem.add_fact("user", "project_note", "hot filler", user_id="u1")
+    old.salience = 0.0
+    filler.salience = 1.0
+    assert mem.evict_cold(max_hot=1) == 1
+    assert mem.cold_store.get(old.id) is not None
+
+    new = mem.add_fact("user", "project_status", "beta", user_id="u1")
+    assert new.supersedes == old.id
+    assert old.invalid_at == new.valid_at
+    chain = mem.history("user", "project_status", user_id="u1")
+    assert [f.object for f in chain] == ["alpha", "beta"]
+
+
+def test_search_pages_relevant_cold_fact_back_to_hot():
+    mem = Memory()
+    fact = mem.add_fact("project", "project_status", "alpha", user_id="u1")
+    assert mem.evict_cold(max_hot=0) == 1
+    assert mem.fact_store.get(fact.id) is None
+    assert mem.cold_store.get(fact.id) is not None
+
+    res = mem.search("What is the project status?", user_id="u1")
+    assert res.via == "cold"
+    assert "alpha" in res.answer().lower()
+    assert mem.fact_store.get(fact.id) is not None
+    assert mem.cold_store.get(fact.id) is None
+
+
+def test_cold_page_in_preserves_hot_limit():
+    from engram.config import Config
+
+    mem = Memory(config=Config(max_hot_facts=0, abstain_threshold=2.0))
+    target = mem.add_fact("apollo", "launch_code", "alpha", user_id="u1")
+    filler = mem.add_fact("zephyr", "project_note", "background filler", user_id="u1")
+    target.salience = 0.0
+    filler.salience = 0.1
+    assert mem.evict_cold(max_hot=1) == 1
+    assert mem.cold_store.get(target.id) is not None
+
+    mem.config.max_hot_facts = 1
+    res = mem.search("What is Apollo's launch code?", user_id="u1")
+
+    assert res.via == "cold"
+    assert "alpha" in res.answer().lower()
+    assert len(mem.fact_store.values()) <= 1
+    assert mem.fact_store.get(target.id) is not None
+    assert mem.cold_store.get(filler.id) is not None
+
+
+def test_max_hot_facts_auto_pages_on_add_fact():
+    from engram.config import Config
+
+    mem = Memory(config=Config(max_hot_facts=1))
+    a = mem.add_fact("project", "project_status", "alpha", user_id="u1")
+    b = mem.add_fact("project", "project_note", "beta", user_id="u1")
+    a.salience = 0.0
+    b.salience = 1.0
+    mem._enforce_hot_limit()
+
+    assert len(mem.fact_store.values()) == 1
+    assert len(mem.cold_store.values()) == 1
+    assert mem.cold_pages_out.get("u1", 0) == 1
+
+
+def test_lean_context_pages_cold_fact_when_hot_misses():
+    mem = Memory()
+    fact = mem.add_fact("project", "project_status", "alpha", user_id="u1")
+    assert mem.evict_cold(max_hot=0) == 1
+
+    ctx = mem.lean_context("project status", user_id="u1", n_chunks=0)
+    assert "alpha" in ctx.lower()
+    assert mem.fact_store.get(fact.id) is not None
+    assert mem.cold_store.get(fact.id) is None
+
+
+def test_graph_related_facts_include_cold_tier_facts():
+    mem = Memory()
+    cold = mem.add_fact("project", "project_note", "cold graph evidence", user_id="u1")
+    hot = mem.add_fact("project", "project_status", "hot graph evidence", user_id="u1")
+    cold.salience = 0.0
+    hot.salience = 1.0
+    assert mem.evict_cold(max_hot=1) == 1
+    assert mem.cold_store.get(cold.id) is not None
+
+    related = mem._graph_related_facts("project", mem.resolver.resolve("u1"), None)
+    assert "cold graph evidence" in {f.object for f in related}
+
+
+def test_graph_paths_include_cold_tier_facts():
+    mem = Memory()
+    cold = mem.add_fact("project", "project_note", "cold path evidence", user_id="u1")
+    hot = mem.add_fact("project", "project_status", "hot path evidence", user_id="u1")
+    cold.salience = 0.0
+    hot.salience = 1.0
+    assert mem.evict_cold(max_hot=1) == 1
+
+    block = mem._graph_paths_block("project", mem.resolver.resolve("u1"), None)
+    assert "cold path evidence" in block
+
+
+def test_pending_conflict_and_resolution_include_cold_tier_facts():
+    from engram.types import Conflict
+
+    mem = Memory()
+    old = mem.add_fact("project", "status", "alpha", user_id="u1")
+    new = mem.add_fact("project", "status", "beta", user_id="u1")
+    old.invalid_at = None
+    old.expired_at = None
+    new.supersedes = None
+    old.salience = 0.0
+    new.salience = 1.0
+    assert mem.evict_cold(max_hot=1) == 1
+    assert mem.cold_store.get(old.id) is not None
+    cf = Conflict(older=old.id, newer=new.id, user_id=mem.resolver.resolve("u1"), text_older=old.text, text_newer=new.text)
+    mem.conflicts[cf.id] = cf
+
+    assert mem.pending_conflicts("u1") == [cf]
+    assert mem.resolve_conflict(cf.id, keep="newer") is True
+    assert old.invalid_at is not None
+    assert cf.status == "resolved"
+
+
+def test_update_cold_fact_promotes_without_duplicate():
+    mem = Memory()
+    cold = mem.add_fact("project", "project_note", "old value", user_id="u1")
+    hot = mem.add_fact("project", "project_status", "hot value", user_id="u1")
+    cold.salience = 0.0
+    hot.salience = 1.0
+    assert mem.evict_cold(max_hot=1) == 1
+    assert mem.cold_store.get(cold.id) is not None
+
+    updated = mem.update_fact(cold.id, object="new value")
+
+    assert updated is not None and updated.object == "new value"
+    assert mem.fact_store.get(cold.id) is not None
+    assert mem.cold_store.get(cold.id) is None
+    assert len([f for f in mem._all_facts() if f.id == cold.id]) == 1
+
+
+def test_resolve_conflict_writes_back_to_copying_vector_store():
+    """External vector backends may return payload copies, so conflict resolution must explicitly upsert
+    mutated facts instead of relying on in-memory object identity."""
+    from copy import deepcopy
+
+    from engram.store import InMemoryVectorStore
+    from engram.types import Conflict
+
+    class CopyingVectorStore(InMemoryVectorStore):
+        def upsert(self, key, vector, payload):
+            super().upsert(key, list(vector), deepcopy(payload))
+
+        def get(self, key):
+            payload = super().get(key)
+            return deepcopy(payload) if payload is not None else None
+
+        def values(self):
+            return [deepcopy(payload) for payload in super().values()]
+
+    mem = Memory()
+    older = mem.add_fact("user", "likes", "tea", user_id="u1")
+    newer = mem.add_fact("user", "likes", "coffee", user_id="u1")
+    copy_hot = CopyingVectorStore()
+    for fact in mem.fact_store.values():
+        copy_hot.upsert(fact.id, fact.embedding or [], fact)
+    mem.fact_store = copy_hot
+    mem.cold_store = CopyingVectorStore()
+    mem._rewire()
+
+    cf = Conflict(older=older.id, newer=newer.id, user_id=mem.resolver.resolve("u1"))
+    mem.conflicts[cf.id] = cf
+
+    assert mem.resolve_conflict(cf.id, keep="newer") is True
+    assert not mem.fact_store.get(older.id).is_live()
+    assert mem.fact_store.get(newer.id).supersedes == older.id
+
+
 def test_agentic_multihop_decomposition():
     """Bet B: with an LLM, lean_context decomposes the question into sub-queries and unions their
     retrieval; without an LLM it degrades gracefully to the single query."""
@@ -319,6 +766,27 @@ def test_agentic_multihop_decomposition():
     assert ctx1.strip() and "SESSION SUMMARIES" in ctx1
 
 
+def test_agentic_episode_gather_respects_as_of():
+    """Agentic chunk retrieval must preserve the caller's point-in-time memory view."""
+    from engram.retrieve.agentic import AgenticRetriever
+
+    class FakeLLM:
+        def complete(self, prompt, system=None, **k):
+            return '["trips"]'
+
+    class FakeMemory:
+        def __init__(self):
+            self.calls = []
+
+        def retrieve_episodes(self, query, user_id, k, as_of=None):
+            self.calls.append(as_of)
+            return []
+
+    fake = FakeMemory()
+    AgenticRetriever(fake, FakeLLM()).gather_episodes("Which cities did I visit?", "u1", 1, as_of=BASE)
+    assert fake.calls == [BASE]
+
+
 def test_procedural_memory_surfaces_instructions():
     """Procedural memory: a distinct typed view returning the user's standing how-to/instruction facts."""
     from engram.types import Fact
@@ -331,6 +799,19 @@ def test_procedural_memory_surfaces_instructions():
     proc = mem.procedural("u1")
     objs = {f.object for f in proc}
     assert "water the plants" in objs and "Tencent" not in objs
+
+
+def test_procedural_memory_includes_cold_tier_instructions():
+    mem = Memory()
+    cold = mem.add_fact("u1", "wants_reminder", "water the plants", user_id="u1")
+    hot = mem.add_fact("u1", "works_at", "Tencent", user_id="u1")
+    cold.salience = 0.0
+    hot.salience = 1.0
+    assert mem.evict_cold(max_hot=1) == 1
+
+    objs = {f.object for f in mem.procedural("u1")}
+    assert "water the plants" in objs
+    assert "Tencent" not in objs
 
 
 def test_working_memory_holds_active_query_set():
@@ -432,6 +913,26 @@ def test_reflector_propagates_supersession_into_summaries():
     assert "[updated:" in ep.summary and "three times a week" in ep.summary
 
 
+def test_reflector_uses_cold_tier_superseded_facts():
+    from engram.types import Fact
+
+    mem = Memory()
+    ep = mem.add("I do yoga twice a week.", user_id="u1", session_id="s1", event_time=BASE)
+    old = Fact(subject="u1", predicate="yoga_frequency", object="twice a week",
+               user_id=mem.resolver.resolve("u1"), valid_at=BASE, provenance=[ep.id],
+               invalid_at=BASE + 5 * DAY, expired_at=BASE + 5 * DAY, salience=0.0)
+    new = Fact(subject="u1", predicate="yoga_frequency", object="three times a week",
+               user_id=mem.resolver.resolve("u1"), valid_at=BASE + 5 * DAY, supersedes=old.id,
+               salience=1.0)
+    mem.fact_store.upsert(old.id, [0.0], old)
+    mem.fact_store.upsert(new.id, [0.0], new)
+    mem.summarize_episodes([ep])
+    assert mem.evict_cold(max_hot=1) == 1
+
+    assert mem.reflect("u1") == 1
+    assert "three times a week" in ep.summary
+
+
 def test_type_weight_ranks_preference_and_identity_above_incidental():
     """Type-weighted fusion (MemoryScope/OMEGA): preference > identity > incidental multipliers."""
     from engram.config import Config
@@ -492,6 +993,17 @@ def test_focus_track_boosts_salience_and_mute_hides():
     assert "guitar" not in persona.lower(), "muted topic must not appear in the persona"
 
 
+def test_persona_includes_cold_tier_facts():
+    mem = Memory()
+    cold = mem.add_fact("user", "favorite_language", "Python", user_id="u1")
+    hot = mem.add_fact("user", "project_note", "hot note", user_id="u1")
+    cold.salience = 0.0
+    hot.salience = 1.0
+    assert mem.evict_cold(max_hot=1) == 1
+
+    assert "Python" in mem.build_persona("u1")
+
+
 def test_focus_persists_across_save_open(tmp_path):
     mem = Memory()
     mem.add_fact("user", "uses", "Python", user_id="u1")
@@ -511,6 +1023,62 @@ def test_graph_data_has_no_dangling_edges():
     for e in g["edges"]:
         assert e["source"] in ids and e["target"] in ids, "no dangling edge endpoints"
         assert "predicate" in e and "live" in e
+        assert e["fact_id"] and e["fact_text"]
+        assert isinstance(e["valid_at"], float) and e["valid_at_h"]
+        assert "invalid_at" in e and "invalid_at_h" in e
+        assert isinstance(e["provenance"], list)
+
+
+def test_graph_data_as_of_excludes_future_relations():
+    """The graph view must obey the same valid-time boundary as search/as_of: a future edge is not live
+    in a past snapshot just because it has not been invalidated yet."""
+    mem = Memory()
+    mem.add("Wei works at Tencent.", user_id="u1", event_time=BASE)
+    mem.add("Wei works at Moonshot AI.", user_id="u1", event_time=BASE + 30 * DAY)
+    mem.consolidate()
+
+    past = mem.graph_data("u1", as_of=BASE + 10 * DAY)
+    past_names = {n["name"] for n in past["nodes"]}
+    assert "Tencent" in past_names
+    assert "Moonshot AI" not in past_names
+    assert all(e["live"] for e in past["edges"])
+
+    current = mem.graph_data("u1")
+    assert "Moonshot AI" in {n["name"] for n in current["nodes"]}
+
+
+def test_graph_data_can_exclude_sensitive_fact_edges():
+    mem = Memory()
+    mem.add_fact("user", "has_disease", "diabetes", user_id="u1")
+    mem.add_fact("user", "works_at", "Acme", user_id="u1")
+
+    full = mem.graph_data("u1")
+    assert "diabetes" in str(full).lower()
+    assert "Acme" in str(full)
+
+    safe = mem.graph_data("u1", include_sensitive=False)
+    rendered = str(safe).lower()
+    assert "diabetes" not in rendered
+    assert "Acme" in str(safe)
+    assert all("diabetes" not in e.get("fact_text", "").lower() for e in safe["edges"])
+
+
+def test_graph_data_can_exclude_sensitive_cold_fact_edges():
+    mem = Memory()
+    disease = mem.add_fact("user", "has_disease", "diabetes", user_id="u1")
+    work = mem.add_fact("user", "project_note", "Acme", user_id="u1")
+    disease.salience = 0.0
+    work.salience = 1.0
+    assert mem.evict_cold(max_hot=1) == 1
+    assert mem.cold_store.get(disease.id) is not None
+
+    full = mem.graph_data("u1")
+    assert "diabetes" in str(full).lower()
+
+    safe = mem.graph_data("u1", include_sensitive=False)
+    rendered = str(safe).lower()
+    assert "diabetes" not in rendered
+    assert all(e["fact_id"] != disease.id for e in safe["edges"])
 
 
 def test_memory_policy_edits_extraction_and_persists(tmp_path):
@@ -575,6 +1143,19 @@ def test_structured_profile_tiers_display_only_and_preserves_recall():
     assert any(f.object == "jazz" for f in m.fact_store.values() if f.is_live())
 
 
+def test_structured_profile_includes_cold_tier_facts():
+    m = Memory()
+    cold = m.add_fact("user", "favorite_music", "周杰伦", user_id="u")
+    hot = m.add_fact("user", "project_note", "hot note", user_id="u")
+    cold.salience = 0.0
+    hot.salience = 1.0
+    assert m.evict_cold(max_hot=1) == 1
+
+    p = m.structured_profile("u")
+    items = [it["item"] for values in p["preferences"].values() for it in values]
+    assert "周杰伦" in items
+
+
 def test_working_memory_is_ephemeral_and_never_enters_long_term(tmp_path):
     """Feature ①: the working-memory tier holds transient state OUT of long-term, scoped by session + TTL,
     cleared on session end. The core invariant: ephemeral items NEVER become durable facts."""
@@ -628,6 +1209,34 @@ def test_classification_and_sensitivity_redaction_preserves_recall():
     assert "acme" in redacted.lower(), "non-sensitive facts stay"
     # recall invariant: redaction is a view filter, not deletion — the fact is still stored & live
     assert any(f.object == "diabetes" for f in m.fact_store.values() if f.is_live())
+
+
+def test_redacted_context_omits_free_text_layers_that_can_leak_sensitive_content():
+    """A redacted/shared context must not leak sensitive content through summaries, chunks, or working
+    memory prose. It should rely only on classified, non-sensitive structured facts."""
+    m = Memory()
+    ep = m.add("My private diagnosis is diabetes. I work at Acme.", user_id="u", session_id="s1")
+    ep.summary = "Private diagnosis: diabetes. Job: Acme."
+    m.summary_vec.upsert(ep.id, m.embedder.embed(ep.summary), ep)
+    m.add_fact("user", "has_disease", "diabetes", user_id="u")
+    m.add_fact("user", "works_at", "Acme", user_id="u")
+    m.remember_working("diabetes flare today", user_id="u", session_id="s1")
+
+    redacted = m.lean_context(
+        "what do you know about my diagnosis and work?",
+        user_id="u",
+        session_id="s1",
+        n_summaries=5,
+        n_chunks=5,
+        redact_sensitive=True,
+        char_budget=10_000,
+    )
+
+    assert "Acme" in redacted
+    assert "diabetes" not in redacted.lower()
+    assert "SESSION SUMMARIES" not in redacted
+    assert "RELEVANT CONVERSATIONS" not in redacted
+    assert "WORKING MEMORY" not in redacted
 
 
 def test_ephemeral_remember_keeps_dated_episode_but_creates_no_durable_fact():

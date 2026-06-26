@@ -75,8 +75,15 @@ def _est_tokens(text: str) -> int:
     return len((text or "").split())
 
 
-def chat_completion(svc: Any, user: str, body: dict, n_chunks: int = 6,
-                    do_recall: bool = True) -> dict:
+def chat_completion(
+    svc: Any,
+    user: str,
+    body: dict,
+    n_chunks: int = 6,
+    do_recall: bool = True,
+    as_of: Optional[float] = None,
+    redact_sensitive: bool = False,
+) -> dict:
     """Recall → inject → generate → return an OpenAI ChatCompletion object (with an `engram` extension
     describing what memory was used). Does NOT write memory — the route schedules that off the critical
     path. Raises NoLLMConfigured if generation is requested without an LLM backend."""
@@ -86,7 +93,16 @@ def chat_completion(svc: Any, user: str, body: dict, n_chunks: int = 6,
 
     memory_context = ""
     if do_recall and query:
-        memory_context = (svc.recall(user, query, lean=True, n_chunks=n_chunks).get("context") or "")
+        memory_context = (
+            svc.recall(
+                user,
+                query,
+                lean=True,
+                n_chunks=n_chunks,
+                as_of=as_of,
+                redact_sensitive=redact_sensitive,
+            ).get("context") or ""
+        )
 
     if svc.llm is None:
         raise NoLLMConfigured(
@@ -114,6 +130,8 @@ def chat_completion(svc: Any, user: str, body: dict, n_chunks: int = 6,
         "engram": {
             "recalled": bool(memory_context.strip()),
             "memory_tokens_est": _est_tokens(memory_context),
+            "as_of": as_of,
+            "redacted_sensitive": redact_sensitive,
             "remembered": False,  # the route flips this to True when it schedules the write
         },
     }

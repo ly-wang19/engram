@@ -114,6 +114,56 @@ def test_import_messages_end_to_end_offline():
     assert "Tokyo" in ctx
 
 
+def test_timestamped_records_preserve_message_times_on_import():
+    mem = Memory()
+    records = [
+        {"session_id": "career", "content": "Wei works at Tencent.", "event_time": 1_700_000_000.0},
+        {"session_id": "career", "content": "Wei works at Moonshot AI.", "event_time": 1_700_086_400.0},
+    ]
+    stats = mem.import_data(records, format="records", user_id="u", summarize=False)
+
+    assert stats["sessions"] == 1 and stats["episodes"] == 2
+    chain = mem.history("u", "works_at", user_id="u")
+    assert sorted(f.valid_at for f in chain) == [1_700_000_000.0, 1_700_086_400.0]
+    assert "Tencent" in mem.as_of("Where does Wei work?", 1_700_000_001.0, user_id="u").answer()
+    assert "Moonshot AI" in mem.search("Where does Wei work?", user_id="u").answer()
+
+
+def test_import_messages_dict_sessions_coerce_iso_timestamps():
+    mem = Memory()
+    stats = mem.import_messages([{
+        "session_id": "career",
+        "messages": [{
+            "role": "user",
+            "content": "Wei works at Tencent.",
+            "event_time": "2023-11-14T00:00:00Z",
+        }],
+    }], user_id="u", summarize=False)
+
+    assert stats["episodes"] == 1 and stats["facts_added"] == 1
+    fact = next(iter(mem.fact_store.values()))
+    assert isinstance(fact.valid_at, float)
+    assert fact.valid_at == to_epoch("2023-11-14T00:00:00Z")
+    assert "Tencent" in mem.search("Where does Wei work?", user_id="u").answer()
+
+
+def test_import_messages_dict_sessions_preserve_message_times():
+    mem = Memory()
+    stats = mem.import_messages([{
+        "session_id": "career",
+        "messages": [
+            {"role": "user", "content": "Wei works at Tencent.", "event_time": 1_700_000_000.0},
+            {"role": "user", "content": "Wei works at Moonshot AI.", "event_time": 1_702_592_000.0},
+        ],
+    }], user_id="u", summarize=False)
+
+    assert stats["sessions"] == 1 and stats["episodes"] == 2
+    chain = mem.history("u", "works_at", user_id="u")
+    assert sorted(f.valid_at for f in chain) == [1_700_000_000.0, 1_702_592_000.0]
+    assert "Tencent" in mem.as_of("Where does Wei work?", 1_700_864_000.0, user_id="u").answer()
+    assert "Moonshot AI" in mem.search("Where does Wei work?", user_id="u").answer()
+
+
 def test_import_data_autosniff_and_synthetic_clock():
     mem = Memory()
     arr = [{"role": "user", "content": "I work at Tencent."}]

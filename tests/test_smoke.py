@@ -3,8 +3,10 @@ just RAG: knowledge-update via non-destructive supersession, bi-temporal as-of q
 reasoning, abstention, and identity resolution -- all running offline with zero dependencies."""
 from __future__ import annotations
 
+from engram.config import Config
 from engram import Memory
 from engram.embed import HashingEmbedder
+from engram.types import Fact
 from engram.util import DAY
 
 BASE = 1_700_000_000.0
@@ -43,6 +45,66 @@ def test_knowledge_update_supersedes_current_answer():
     assert "moonshot" in mem.search("Where does Wei work?", user_id="u1").answer().lower()
 
 
+def test_multi_sentence_episode_extracts_every_fact():
+    mem = Memory()
+    mem.add("Wei works at Tencent.\nWei works at Moonshot AI.", user_id="u1", event_time=BASE)
+    mem.consolidate()
+
+    chain = mem.history("Wei", "works_at", user_id="u1")
+    assert {f.object for f in chain} == {"Tencent", "Moonshot AI"}
+    assert "moonshot" in mem.search("Where does Wei work?", user_id="u1").answer().lower()
+
+
+def test_records_import_same_session_extracts_multiple_messages():
+    mem = Memory()
+    stats = mem.import_data([
+        {"session_id": "career", "content": "Wei works at Tencent.", "event_time": BASE},
+        {"session_id": "career", "content": "Wei works at Moonshot AI.", "event_time": BASE + DAY},
+    ], format="records", user_id="u1", summarize=False)
+
+    assert stats["sessions"] == 1
+    assert stats["episodes"] == 2
+    assert stats["facts_added"] == 2
+    assert "tencent" in mem.as_of("Where does Wei work?", BASE + 1, user_id="u1").answer().lower()
+    assert "moonshot" in mem.search("Where does Wei work?", user_id="u1").answer().lower()
+
+
+def test_duplicate_live_identity_slot_reads_current_head():
+    mem = Memory(config=Config(w_sem=0.0, w_lex=0.0, w_graph=0.0, w_rec=0.0, w_sal=1.0))
+    old = Fact(
+        "Wei",
+        "works_at",
+        "Tencent",
+        user_id="u1",
+        valid_at=BASE,
+        salience=100.0,
+        embedding=mem.embedder.embed("Wei works at Tencent"),
+    )
+    new = Fact(
+        "Wei",
+        "works_at",
+        "Moonshot AI",
+        user_id="u1",
+        valid_at=BASE + DAY,
+        salience=1.0,
+        supersedes=old.id,
+        embedding=mem.embedder.embed("Wei works at Moonshot AI"),
+    )
+    mem.fact_store.upsert(old.id, old.embedding or [], old)
+    mem.fact_store.upsert(new.id, new.embedding or [], new)
+
+    assert "moonshot" in mem.search("Where does Wei work?", user_id="u1").answer().lower()
+
+
+def test_multi_valued_identity_facts_are_not_slot_deduped():
+    mem = Memory()
+    mem.add_fact("Wei", "owns", "a bike", user_id="u1")
+    mem.add_fact("Wei", "owns", "a camera", user_id="u1")
+
+    ranked, _ = mem.retriever.retrieve("What does Wei own?", mem.resolver.resolve("u1"), top_k=5)
+    assert {f.object for f, _ in ranked} >= {"a bike", "a camera"}
+
+
 def test_no_hard_delete_history_preserved():
     mem = build()
     chain = mem.history("Wei", "works_at", user_id="u1")
@@ -71,6 +133,44 @@ def test_multi_hop_reasoning():
     assert "moonshot" in r.answer().lower()
 
 
+def test_family_profession_multi_session_reasoning():
+    mem = Memory()
+    mem.add("My sister Maya is a pediatrician at a children's hospital.", user_id="u1",
+            session_id="s1", event_time=BASE)
+    mem.add("Maya just moved to Seattle for a fellowship.", user_id="u1",
+            session_id="s2", event_time=BASE + DAY)
+    mem.consolidate()
+
+    facts = {(f.subject, f.predicate, f.object) for f in mem.fact_store.values()}
+    assert ("u1", "sister", "Maya") in facts
+    assert ("Maya", "occupation", "pediatrician") in facts
+    assert ("Maya", "lives_in", "Seattle") in facts
+
+    r = mem.search("What is the profession of the user's sister who moved to Seattle?", user_id="u1")
+    assert r.via == "multi-hop"
+    assert "pediatrician" in r.answer().lower()
+
+
+def test_multiple_family_relations_accumulate_and_disambiguate():
+    mem = Memory()
+    mem.add("My sister Anna is a lawyer.", user_id="u1", session_id="s1", event_time=BASE)
+    mem.add("My sister Maya is a pediatrician.", user_id="u1", session_id="s2", event_time=BASE + DAY)
+    mem.add("Maya just moved to Seattle.", user_id="u1", session_id="s3", event_time=BASE + 2 * DAY)
+    mem.consolidate()
+
+    sisters = [f for f in mem.history("u1", "sister", user_id="u1") if f.is_live()]
+    assert {f.object for f in sisters} == {"Anna", "Maya"}
+
+    r = mem.search("What is the profession of the user's sister who moved to Seattle?", user_id="u1")
+    assert r.via == "multi-hop"
+    assert "pediatrician" in r.answer().lower()
+    evidence = {f.text for f in r.facts}
+    assert "u1 sister Maya" in evidence
+    assert "Maya lives in Seattle" in evidence
+    assert "Maya occupation pediatrician" in evidence
+    assert "u1 sister Anna" not in evidence
+
+
 def test_abstention_unknown_attribute():
     mem = build()
     # entity is known (Wei) but the attribute (favorite food) was never stated
@@ -92,3 +192,36 @@ def test_profile_reflects_current_state():
     prof = mem.profile("u1")
     assert prof.get("works_at") == "Moonshot AI"
     assert prof.get("lives_in") == "Shenzhen"
+
+
+def test_first_person_occupation_reaches_profile():
+    mem = Memory()
+    mem.add("I am a pediatrician.", user_id="u1", event_time=BASE)
+    mem.consolidate()
+
+    assert ("u1", "occupation", "pediatrician") in {
+        (f.subject, f.predicate, f.object) for f in mem.fact_store.values()
+    }
+    assert mem.profile("u1").get("occupation") == "pediatrician"
+
+
+def test_first_person_works_as_role_is_atomic():
+    mem = Memory()
+    mem.add("I work as a data engineer at Spotify.", user_id="u1", event_time=BASE)
+    mem.consolidate()
+
+    assert ("u1", "occupation", "data engineer") in {
+        (f.subject, f.predicate, f.object) for f in mem.fact_store.values()
+    }
+
+
+def test_first_person_fan_of_is_preference_not_occupation():
+    mem = Memory()
+    mem.add("I'm a fan of jazz.", user_id="u1", event_time=BASE)
+    mem.add("I'm into synthwave.", user_id="u1", event_time=BASE + DAY)
+    mem.consolidate()
+
+    facts = {(f.subject, f.predicate, f.object) for f in mem.fact_store.values()}
+    assert ("u1", "likes", "jazz") in facts
+    assert ("u1", "likes", "synthwave") in facts
+    assert "occupation" not in {p for _, p, _ in facts}

@@ -76,7 +76,7 @@ def make_llm(name: str, **overrides):
     return LiteLLMClient(n, **overrides)
 
 
-def make_embedder(name: str = "bge-small", **overrides):
+def make_embedder(name: str = "hashing", **overrides):
     """hashing (zero-dep offline) | bge-small | bge-m3 | bge-large | st:<model> (sentence-transformers)
     | openai:<model> (LiteLLM)."""
     n = name.strip()

@@ -135,6 +135,8 @@ def _memory_state(mem: Any) -> dict[str, Any]:
         "policy": getattr(mem, "policy", {}),
         "identity": dict(getattr(mem, "_identity", {})),
         "aliases": {k: sorted(v) for k, v in getattr(mem, "_aliases", {}).items()},
+        "cold_pages_out": dict(getattr(mem, "cold_pages_out", {})),
+        "cold_pages_in": dict(getattr(mem, "cold_pages_in", {})),
     }
 
 
@@ -306,4 +308,6 @@ def load_memory(mem: Any, path: str) -> bool:
     }
     mem._identity = state.get("identity") or {}
     mem._aliases = {k: set(v) for k, v in (state.get("aliases") or {}).items()}
+    mem.cold_pages_out = {k: int(v) for k, v in (state.get("cold_pages_out") or {}).items()}
+    mem.cold_pages_in = {k: int(v) for k, v in (state.get("cold_pages_in") or {}).items()}
     return True

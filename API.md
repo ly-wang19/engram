@@ -16,14 +16,16 @@
 git clone https://github.com/ly-wang19/engram.git
 cd engram
 pip install "engram-memory[server]"          # 或 pip install -e ".[server]"
-export ENGRAM_EMBEDDER=bge-small              # 本地嵌入，无需 key
+export ENGRAM_EMBEDDER=hashing                # 零下载默认；用 bge-small 可获得更好的本地嵌入
+export ENGRAM_MAX_HOT_FACTS=10000             # 热层事实上限；冷层事实会在热 miss 时回温
 export ENGRAM_LLM=volcano:doubao-seed-1-6-flash-250615   # 抽取/答题用，需在 .env 配 ARK_API_KEY
 export ENGRAM_ANSWERER=volcano:doubao-seed-2-0-pro-260215 # 答题模型（可选，默认同上）
-export ENGRAM_OPEN=1                          # 开放模式：key 即命名空间
+export ENGRAM_OPEN=1                          # 开发开放模式：Bearer key 即命名空间；匿名需显式 ENGRAM_ALLOW_ANONYMOUS=1
 uvicorn engram.server.app:app --host 0.0.0.0 --port 8456
 # 控制台：http://localhost:8456/ui/
 ```
 > 想做真正的鉴权隔离：去掉 `ENGRAM_OPEN`，改设 `ENGRAM_API_KEYS="alice:sk-a,bob:sk-b"`。
+> 默认不接受无 Bearer 的匿名共享记忆；本地试玩如确实需要匿名，可额外设置 `ENGRAM_ALLOW_ANONYMOUS=1`。
 
 ---
 
@@ -32,6 +34,27 @@ uvicorn engram.server.app:app --host 0.0.0.0 --port 8456
 ```
 Authorization: Bearer <你的key>
 Content-Type: application/json
+```
+
+健康检查不需要鉴权：
+```bash
+curl -s $B/health
+```
+返回不含密钥/用户内容的运行形态，可用于 readiness 与部署排错：
+```json
+{
+  "ok": true,
+  "ready": true,
+  "service": "engram",
+  "auth_mode": "open",
+  "anonymous_allowed": false,
+  "embedder": "HashingEmbedder",
+  "llm_configured": false,
+  "answerer_configured": false,
+  "storage": "memory",
+  "users_hot": 0,
+  "max_hot_users": 64
+}
 ```
 
 ## 2. 写入记忆
@@ -58,8 +81,11 @@ Content-Type: application/json
 ### 3.1 召回 + 答题 + 省 token 对比 — 主用
 `POST /v1/recall`
 ```json
-{ "query": "我最喜欢哪个歌手", "lean": true, "n_chunks": 4 }
+{ "query": "我最喜欢哪个歌手", "lean": true, "n_chunks": 4, "as_of": null, "redact_sensitive": false }
 ```
+`as_of` 可选，传 epoch 秒时返回该历史时刻的记忆视图。
+`redact_sensitive=true` 时只返回已分类的非敏感结构化事实，不包含画像、摘要或原始对话片段，适合
+共享上下文或注入第三方模型。
 返回：
 ```json
 { "answer": "你最喜欢周杰伦。",
@@ -72,13 +98,15 @@ Content-Type: application/json
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
+| GET | `/v1/stats` | 内容无关统计：episode pending/consolidated、hot/cold facts、cold page-in/out、时间范围、敏感事实数量、pending conflicts、运行后端；适合监控 |
 | GET | `/v1/memories` | 全部事实(双时间轴/来源/分类/敏感)+ 原始对话 + 摘要 |
 | GET | `/v1/profile/structured` | 结构化用户画像(基本信息/偏好/习惯) |
+| GET | `/v1/graph?include_sensitive=false` | 安全关系图：排除敏感 fact 对应的边 |
 | GET | `/v1/conflicts` | 待确认的疑似冲突(LLM 检测，需开 `ENGRAM_CONFLICT_DETECTION=1`) |
 | POST | `/v1/conflicts/{id}/resolve` | `{"keep":"newer\|older\|both"}` 让冲突由人确认 |
 | PATCH | `/v1/facts/{id}` | 改事实 `{"object":"...","sensitive":true}` |
 | DELETE | `/v1/facts/{id}` | 删一条 |
-| GET | `/v1/export?include_sensitive=false` | 全量导出 JSON(可排除敏感) |
+| GET | `/v1/export?include_sensitive=false` | 安全结构化导出：仅非敏感 facts + graph；不含画像、摘要、原始对话 |
 | POST | `/v1/forget` | 清空该 key 的全部记忆 |
 
 ## 5. 控制台（可视化）

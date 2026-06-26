@@ -132,14 +132,18 @@ curl -s -X POST $B/v1/recall -H "Authorization: Bearer $K" -H "Content-Type: app
 
 ```bash
 pip install "engram-memory[serve]"
-export ENGRAM_OPEN=1                # dev: bearer text is the namespace (use ENGRAM_API_KEYS in prod)
-export ENGRAM_EMBEDDER=bge-small    # or `hashing` for an instant, no-download dev server
+export ENGRAM_OPEN=1                # dev: Bearer text is the namespace; anonymous requires ENGRAM_ALLOW_ANONYMOUS=1
+export ENGRAM_EMBEDDER=hashing      # zero-download default; use bge-small for better local embeddings
+export ENGRAM_MAX_HOT_FACTS=10000   # heat-tier cap; cold facts page back on hot miss
 export ENGRAM_LLM=deepseek          # optional: enables /v1/chat/completions generation
 uvicorn engram.server.app:app --port 8000        # HTTP API + management console at /ui
 ```
 
+Use `GET /health` for readiness and safe deployment introspection. It reports auth mode, anonymous status,
+embedder, LLM readiness, storage, and hot-user counts without exposing keys, paths, or user data.
+
 **1. MCP server** — give Claude Desktop / Claude Code / Cursor a persistent memory (`engram_recall`,
-`engram_remember`, `engram_search`, `engram_import`, …):
+`engram_remember`, `engram_search`, `engram_stats`, `engram_import`, …):
 
 ```bash
 pip install "engram-memory[mcp]"
@@ -151,6 +155,9 @@ python -m engram.mcp                 # local memory at ~/.engram/data (zero exte
 // claude_desktop_config.json
 { "mcpServers": { "engram": { "command": "python", "args": ["-m", "engram.mcp"] } } }
 ```
+
+`engram_recall` and `engram_search` also accept `as_of` (epoch seconds) for point-in-time memory views and
+`redact_sensitive=true` for shared/safe contexts.
 
 **2. JS/TS SDK + OpenAI-compatible API** — change one URL and your existing OpenAI code gets memory:
 recall + inject before the model answers, remember the turn after.
@@ -165,6 +172,14 @@ const { context } = await engram.recall('where do I live?')
 const out = await engram.chat.completions.create({ model: 'engram', messages: [
   { role: 'user', content: 'Remind me where I work.' } ] })
 ```
+
+For OpenAI-compatible chat, the Engram extension also accepts `memory: { as_of: <epoch seconds> }` for a
+point-in-time memory view, and `memory: { redact_sensitive: true }` to omit sensitive facts from injected
+memory (redacted contexts are structured-facts-only: no profile, summaries, or raw chunks).
+
+For data portability, `/v1/export?include_sensitive=false` returns the same kind of share-safe structured
+view: non-sensitive facts plus their graph, with profile, summaries, and raw episodes omitted.
+The standalone graph endpoint also supports `/v1/graph?include_sensitive=false`.
 
 **3. Batch import** — bring your whole history (ChatGPT export, OpenAI messages, JSONL, transcript;
 auto-detected):

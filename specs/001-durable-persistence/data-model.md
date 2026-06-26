@@ -52,5 +52,6 @@ lossless (Constitution IV).
   "counts": {"episodes": 0, "facts": 0, "entities": 0, "relations": 0, "working": 0, "conflicts": 0}
 }
 ```
-- `embedder_id` + `embedding_dim` guard the model/dimension-mismatch error on open (US2-AC3).
+- `embedder_id` + `embedding_dim` guard model-id and dimension mismatch errors on open (US2-AC3), so a
+  same-dimension but different embedding model cannot silently reuse stale neighbors.
 - `schema_version` gates compatibility (D3); `backend` records which vector store wrote the snapshot.

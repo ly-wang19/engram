@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Optional
+import re
 
 from ..config import Config
 from ..store import GraphStore, VectorStore
@@ -18,9 +19,19 @@ from .lexical import stem, stems
 # query keyword -> graph predicate
 _PRED_KEYWORDS: list[tuple[tuple[str, ...], str]] = [
     (("colleague", "coworker", "co-worker"), "colleague"),
+    (("sister",), "sister"),
+    (("brother",), "brother"),
+    (("mother", "mom"), "mother"),
+    (("father", "dad"), "father"),
+    (("parent",), "parent"),
+    (("child",), "child"),
+    (("spouse", "wife", "husband", "partner"), "spouse"),
     (("work", "works", "working", "employer", "company", "job", "employed"), "works_at"),
+    (("profession", "occupation", "role", "title"), "occupation"),
     (("live", "lives", "living", "city", "reside", "resides"), "lives_in"),
 ]
+_RELATION_PREDS = {"colleague", "sister", "brother", "mother", "father", "parent", "child", "spouse"}
+_ANSWER_ATTR_PREDS = {"works_at", "occupation", "lives_in"}
 
 
 @dataclass
@@ -31,10 +42,24 @@ class PlanResult:
 
 
 class MultiHopPlanner:
-    def __init__(self, graph: GraphStore, fact_store: VectorStore, config: Config) -> None:
+    def __init__(
+        self,
+        graph: GraphStore,
+        fact_store: VectorStore,
+        config: Config,
+        extra_fact_stores: Optional[list[VectorStore]] = None,
+    ) -> None:
         self.graph = graph
         self.fact_store = fact_store
+        self.fact_stores = [fact_store] + list(extra_fact_stores or [])
         self.config = config
+
+    def _fact(self, fact_id: str) -> Optional[Fact]:
+        for store in self.fact_stores:
+            fact = store.get(fact_id)
+            if fact is not None:
+                return fact
+        return None
 
     def _ordered_predicates(self, query: str) -> list[str]:
         toks = stems(query)
@@ -52,9 +77,17 @@ class MultiHopPlanner:
             if pred not in seen:
                 ordered.append(pred)
                 seen.add(pred)
+        rels = [p for p in ordered if p in _RELATION_PREDS]
+        attrs = [p for p in ordered if p in _ANSWER_ATTR_PREDS]
+        if rels and attrs:
+            # Possessive relation questions ("user's sister's profession") mention the desired attribute
+            # before the relation in English, but the graph walk must start from the user -> relation.
+            ordered = rels + [p for p in attrs if p not in rels]
         return ordered
 
     def _anchor_entity(self, query: str, user_id: str):
+        if re.search(r"\b(my|user's|the user's|their|his|her)\b", query.lower()):
+            return self.graph.get_entity(user_id, user_id) or self.graph.get_entity(user_id, "user")
         q = set(stems(query))
         for ent in self.graph.entities.values():
             if ent.user_id != user_id:
@@ -62,6 +95,30 @@ class MultiHopPlanner:
             name_toks = stems(ent.name)
             if name_toks and all(t in q for t in name_toks):
                 return ent
+        return None
+
+    def _location_constraint(self, query: str) -> str:
+        q = query.lower()
+        m = re.search(r"\b(?:moved|relocated|lives?|living)\s+(?:to|in)\s+([a-z][a-z' -]{1,40})", q)
+        if not m:
+            return ""
+        return re.split(r"\b(?:for|with|after|before|who|that|and|or)\b|[?.!,;:]", m.group(1), 1)[0].strip()
+
+    def _location_fact(self, entity_id: str, target: str, as_of: Optional[float]) -> Optional[Fact]:
+        if not target:
+            return None
+        target_terms = set(stems(target))
+        if not target_terms:
+            return None
+        for rel in self.graph.neighbors(entity_id, as_of, "out"):
+            if rel.predicate != "lives_in":
+                continue
+            obj = self.graph.entities.get(rel.object_id)
+            name = obj.name if obj else ""
+            if target_terms <= set(stems(name)):
+                fact = self._fact(rel.fact_id)
+                if fact is not None and fact.is_live(as_of):
+                    return fact
         return None
 
     def plan(self, query: str, user_id: str, as_of: Optional[float] = None) -> Optional[PlanResult]:
@@ -72,22 +129,38 @@ class MultiHopPlanner:
         if anchor is None:
             return None
 
-        frontier = [anchor.id]
-        path_facts: list[Fact] = []
+        frontier_paths: dict[str, list[Fact]] = {anchor.id: []}
+        location = self._location_constraint(query)
         for pred in preds:
-            nxt: list[str] = []
-            for eid in frontier:
-                for rel in self.graph.neighbors(eid, as_of, "out"):
-                    if rel.predicate == pred or (pred == "works_at" and rel.predicate.startswith("work")):
-                        nxt.append(rel.object_id)
-                        fact = self.fact_store.get(rel.fact_id)
-                        if fact is not None:
-                            path_facts.append(fact)
-            if not nxt:
-                return None  # chain broke -> no confident multi-hop answer
-            frontier = nxt
+            if pred in _ANSWER_ATTR_PREDS and location and len(preds) > 1:
+                constrained: dict[str, list[Fact]] = {}
+                for eid, facts in frontier_paths.items():
+                    loc_fact = self._location_fact(eid, location, as_of)
+                    if loc_fact is not None:
+                        constrained[eid] = facts + [loc_fact]
+                if not constrained:
+                    return None
+                frontier_paths = constrained
 
-        answer_names = [self.graph.entities[eid].name for eid in frontier if eid in self.graph.entities]
+            next_paths: dict[str, list[Fact]] = {}
+            for eid, facts in frontier_paths.items():
+                for rel in self.graph.neighbors(eid, as_of, "out"):
+                    rel_pred = rel.predicate
+                    if (
+                        rel_pred == pred
+                        or (pred == "works_at" and rel_pred.startswith("work"))
+                        or (pred == "spouse" and rel_pred in {"wife", "husband", "partner"})
+                    ):
+                        fact = self._fact(rel.fact_id)
+                        if fact is None or not fact.is_live(as_of):
+                            continue
+                        next_paths[rel.object_id] = facts + ([fact] if fact is not None else [])
+            if not next_paths:
+                return None  # chain broke -> no confident multi-hop answer
+            frontier_paths = next_paths
+
+        answer_names = [self.graph.entities[eid].name for eid in frontier_paths if eid in self.graph.entities]
         if not answer_names:
             return None
-        return PlanResult(answer=answer_names[0], facts=path_facts, chain=preds)
+        answer_id = next(eid for eid in frontier_paths if eid in self.graph.entities)
+        return PlanResult(answer=self.graph.entities[answer_id].name, facts=frontier_paths[answer_id], chain=preds)

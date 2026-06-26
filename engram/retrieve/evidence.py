@@ -19,6 +19,7 @@ class EvidenceNeed:
     aggregation: bool = False
     preference: bool = False
     current_state: bool = False
+    duration: bool = False
     multi_hop: bool = False
     exact_lookup: bool = False
     abstention_sensitive: bool = False
@@ -33,11 +34,12 @@ class EvidenceNeed:
 
 _AGG_TERMS = {
     "count", "counts", "many", "much", "total", "sum", "all", "every", "each", "list",
-    "sessions", "times", "often", "frequency", "cities", "places", "trips", "events",
+    "sessions", "times", "cities", "places", "trips", "events",
 }
 _TEMPORAL_TERMS = {
     "when", "date", "day", "before", "after", "during", "between", "first", "last", "latest",
     "recent", "recently", "oldest", "newest", "previous", "timeline", "order", "duration",
+    "week", "weeks", "month", "months", "year", "years", "spent",
 }
 _PREFERENCE_TERMS = {
     "prefer", "prefers", "preference", "favorite", "favourite", "like", "likes", "liked",
@@ -46,11 +48,13 @@ _PREFERENCE_TERMS = {
 }
 _CURRENT_TERMS = {
     "now", "current", "currently", "today", "still", "latest", "new", "newest", "updated",
-    "changed", "anymore", "most_recent",
+    "changed", "anymore", "most_recent", "often", "frequency",
 }
 _RELATION_TERMS = {
     "colleague", "coworker", "friend", "partner", "spouse", "manager", "boss", "child",
-    "parent", "sibling", "company", "employer", "works", "work", "lives", "live",
+    "parent", "sibling", "sister", "brother", "mother", "father", "wife", "husband",
+    "company", "employer", "profession", "occupation", "role", "title", "works", "work",
+    "lives", "live", "moved", "relocated",
 }
 _EXACT_TERMS = {"id", "email", "phone", "url", "link", "address", "number", "code", "identifier"}
 
@@ -59,7 +63,7 @@ _CJK_PATTERNS = {
     "temporal": ("什么时候", "哪天", "日期", "之前", "之后", "最早", "最近", "最新", "第一次", "最后", "期间"),
     "preference": ("喜欢", "偏好", "更爱", "最爱", "讨厌", "不喜欢", "避免", "推荐"),
     "current": ("现在", "当前", "目前", "如今", "最新", "还", "是否仍", "不再"),
-    "relation": ("同事", "朋友", "老板", "经理", "伴侣", "孩子", "父母", "公司", "住在"),
+    "relation": ("同事", "朋友", "老板", "经理", "伴侣", "孩子", "父母", "姐姐", "妹妹", "哥哥", "弟弟", "公司", "职业", "搬到", "住在"),
     "exact": ("邮箱", "电话", "链接", "地址", "编号", "代码", "号码"),
 }
 
@@ -140,6 +144,51 @@ def _aggregation_subqueries(query: str) -> tuple[str, ...]:
     return _dedupe(candidates, query)
 
 
+def _multi_hop_subqueries(query: str) -> tuple[str, ...]:
+    """Deterministic expansion for relation-chain questions.
+
+    Multi-session questions often hide the answer behind two separate pieces of evidence: a relationship
+    anchor ("my sister Maya") and a disambiguating attribute from another session ("Maya moved to Seattle").
+    These subqueries retrieve those pieces without using gold labels or benchmark metadata.
+    """
+    q = query.lower()
+    candidates: list[str] = []
+
+    relation = ""
+    m = re.search(
+        r"\b(?:my|user's|the user's|their|his|her)\s+"
+        r"(sister|brother|mother|father|parent|child|spouse|wife|husband|partner|"
+        r"colleague|coworker|co-worker|friend|manager|boss)\b",
+        q,
+    )
+    if m:
+        relation = m.group(1)
+        candidates.append(relation)
+
+    attrs = [
+        attr for attr in ("profession", "occupation", "role", "title", "job", "employer", "company")
+        if attr in q
+    ]
+    for attr in attrs:
+        candidates.append(attr)
+        if relation:
+            candidates.append(f"{relation} {attr}")
+
+    place = ""
+    m = re.search(r"\b(?:moved|relocated|lives?|living)\s+(?:to|in)\s+([a-z][a-z' -]{1,40})", q)
+    if m:
+        place = re.split(r"\b(?:for|with|after|before|who|that|and|or)\b|[?.!,;:]", m.group(1), 1)[0].strip()
+        if place:
+            candidates.extend((place, f"moved {place}"))
+            if relation:
+                candidates.append(f"{relation} moved {place}")
+
+    if relation and not attrs and not place:
+        candidates.append(f"{relation} relationship")
+
+    return _dedupe(candidates, query)
+
+
 def plan_evidence(query: str) -> EvidenceNeed:
     """Return the evidence structure a question needs, using only question text.
 
@@ -151,7 +200,7 @@ def plan_evidence(query: str) -> EvidenceNeed:
 
     aggregation = (
         _token_hit(toks, _AGG_TERMS)
-        or bool(re.search(r"\bhow\s+(many|much|often)\b", q))
+        or bool(re.search(r"\bhow\s+(many|much)\b", q))
         or _has_phrase(q, _CJK_PATTERNS["aggregation"])
     )
     if aggregation:
@@ -163,6 +212,13 @@ def plan_evidence(query: str) -> EvidenceNeed:
     )
     if timeline:
         reasons.append("temporal")
+
+    duration = (
+        bool(re.search(r"\b(how\s+long|how\s+many\s+(days?|weeks?|months?|years?)|duration|spent)\b", q))
+        or bool(re.search(r"\b(days?|weeks?|months?|years?)\s+in\s+total\b", q))
+    )
+    if duration and "duration" not in reasons:
+        reasons.append("duration")
 
     preference = (
         _token_hit(toks, _PREFERENCE_TERMS)
@@ -195,9 +251,14 @@ def plan_evidence(query: str) -> EvidenceNeed:
 
     kinds = tuple(reasons) if reasons else ("lookup",)
     n_facts = 8 if (preference or current_state or multi_hop or exact_lookup) else 0
-    n_summaries = 12 if aggregation else (6 if timeline else 0)
-    n_chunks = 2 if (preference or exact_lookup) else (1 if aggregation or timeline or multi_hop else 0)
-    subqueries = _aggregation_subqueries(query) if aggregation else ()
+    n_summaries = 12 if aggregation else (6 if (timeline or duration or multi_hop) else 0)
+    n_chunks = 2 if (preference or exact_lookup or multi_hop or duration) else (1 if aggregation or timeline else 0)
+    subquery_items: list[str] = []
+    if aggregation:
+        subquery_items.extend(_aggregation_subqueries(query))
+    if multi_hop:
+        subquery_items.extend(_multi_hop_subqueries(query))
+    subqueries = _dedupe(subquery_items, query)
 
     return EvidenceNeed(
         kinds=kinds,
@@ -205,6 +266,7 @@ def plan_evidence(query: str) -> EvidenceNeed:
         aggregation=aggregation,
         preference=preference,
         current_state=current_state,
+        duration=duration,
         multi_hop=multi_hop,
         exact_lookup=exact_lookup,
         abstention_sensitive=abstention_sensitive,

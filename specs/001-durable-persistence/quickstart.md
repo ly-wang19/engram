@@ -39,7 +39,8 @@ python3 examples/quickstart.py                    # hashing embedder + in-memory
 pytest -q tests/test_persist_safety.py
 ```
 **Expected**: a crafted store file cannot trigger code execution on open; a manifest with a future
-`schema_version` raises `IncompatibleStoreError`.
+`schema_version` raises `IncompatibleStoreError`; embedding dimension/model-id mismatches raise explicit
+errors rather than opening a store in the wrong vector space.
 
 ## Scenario D — Crash recovery (SC-003 · FR-005)
 ```bash

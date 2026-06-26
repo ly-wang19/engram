@@ -169,6 +169,10 @@ python -m engram.mcp                 # 本地记忆，零外部服务
 { "mcpServers": { "engram": { "command": "python", "args": ["-m", "engram.mcp"] } } }
 ```
 
+`engram_recall` 和 `engram_search` 也支持 `as_of`（epoch 秒）查询某个历史时刻的记忆视图，并支持
+`redact_sensitive=true` 生成适合共享/安全注入的上下文。
+`engram_stats` 返回不含内容的命名空间统计（episode backlog、事实/图谱/冲突计数），适合 agent 自检。
+
 ### JS/TS SDK + OpenAI 兼容（改一个 URL，你现有的 OpenAI 代码就有了记忆）
 
 ```ts
@@ -182,15 +186,27 @@ const out = await engram.chat.completions.create({ model: 'engram', messages: [
   { role: 'user', content: '提醒我一下我最喜欢的歌手' } ] })
 ```
 
+OpenAI 兼容聊天也支持 Engram 扩展：`memory: { as_of: <epoch 秒> }` 用于查询某个历史时刻的记忆视图，
+`memory: { redact_sensitive: true }` 用于在注入上下文时隐藏敏感事实；redacted 上下文只包含非敏感
+结构化事实，不包含画像、摘要或原始片段。
+
+数据导出也遵循同一语义：`/v1/export?include_sensitive=false` 只返回非敏感 facts 及其 graph，不包含画像、
+摘要或原始对话。
+独立关系图接口也支持 `/v1/graph?include_sensitive=false`。
+
 ### 自部署（数据完全在你自己机器上）
 
 ```bash
 pip install "engram-memory[serve]"
-export ENGRAM_OPEN=1                # 开发：bearer 文本即命名空间（生产用 ENGRAM_API_KEYS）
-export ENGRAM_EMBEDDER=bge-small
+export ENGRAM_OPEN=1                # 开发：Bearer 文本即命名空间；匿名需显式 ENGRAM_ALLOW_ANONYMOUS=1
+export ENGRAM_EMBEDDER=hashing      # 零下载默认；用 bge-small 可获得更好的本地嵌入
+export ENGRAM_MAX_HOT_FACTS=10000   # 热层事实上限；冷层事实会在热 miss 时回温
 export ENGRAM_LLM=deepseek          # 可选：启用 /v1/chat/completions 生成
 uvicorn engram.server.app:app --port 8000        # HTTP API + 控制台在 /ui
 ```
+
+`GET /health` 可用于 readiness 与安全的部署排错：它返回鉴权模式、是否允许匿名、嵌入器、LLM 是否已配置、
+存储模式和热用户数，不暴露 key、路径或用户内容。
 
 批量导入见 [`examples/batch_import.py`](examples/batch_import.py)，完整接口文档见 [`API.md`](API.md)。
 

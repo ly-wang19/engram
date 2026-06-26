@@ -12,8 +12,8 @@ You need a running Engram server (the SDK talks to its HTTP API):
 
 ```bash
 pip install "engram-memory[serve]"
-export ENGRAM_OPEN=1                 # dev: bearer text is the namespace (use ENGRAM_API_KEYS in prod)
-export ENGRAM_EMBEDDER=bge-small     # or `hashing` for an instant, no-download dev server
+export ENGRAM_OPEN=1                 # dev: Bearer text is the namespace; anonymous requires ENGRAM_ALLOW_ANONYMOUS=1
+export ENGRAM_EMBEDDER=hashing       # zero-download default; use bge-small for better local embeddings
 export ENGRAM_LLM=deepseek           # optional: enables /v1/chat/completions generation
 uvicorn engram.server.app:app --port 8000
 ```
@@ -71,7 +71,10 @@ const stream = await engram.chat.completions.create({
 for await (const chunk of stream) process.stdout.write(chunk.choices[0]?.delta?.content ?? '')
 ```
 
-Control the memory layer per request: `memory: { recall: false }` or `{ remember: false }`.
+Control the memory layer per request: `memory: { recall: false }`, `{ remember: false }`,
+`{ as_of: 1700864000 }` for a point-in-time memory view, or `{ redact_sensitive: true }` to omit
+sensitive facts from injected memory. Redacted contexts are structured-facts-only: no profile, summaries,
+or raw chunks.
 
 ## Importing an existing history
 
@@ -86,18 +89,20 @@ await engram.import({ data: JSON.parse(readFileSync('conversations.json', 'utf8'
 
 | Method | HTTP | Returns |
 | --- | --- | --- |
+| `health()` | GET /health | `Health` readiness + safe deployment introspection |
 | `remember(content, { sessionId? })` | POST /v1/remember | `RememberResult` |
-| `recall(query, { nChunks? })` | POST /v1/recall (lean) | `RecallResult` |
-| `search(query)` | POST /v1/recall | `SearchResult` |
+| `recall(query, { nChunks?, asOf?, redactSensitive? })` | POST /v1/recall (lean) | `RecallResult` |
+| `search(query, { asOf?, redactSensitive? })` | POST /v1/recall | `SearchResult` |
 | `memories()` | GET /v1/memories | `MemoryDump` |
+| `stats()` | GET /v1/stats | `MemoryStats` content-free namespace observability, including consolidation backlog, hot/cold fact tiers, and page-in/out counts |
 | `profile()` | GET /v1/profile | `ProfileResult` |
 | `addFact({ subject?, predicate, object })` | POST /v1/facts | `{ ok, id, text }` |
 | `updateFact(id, patch)` / `deleteFact(id)` | PATCH/DELETE /v1/facts/:id | — |
 | `getFocus()` / `setFocus(f)` | GET/PUT /v1/focus | `Focus` |
 | `getPolicy()` / `setPolicy(p)` | GET/PUT /v1/policy | `PolicyResponse` |
-| `graph()` | GET /v1/graph | `GraphData` |
+| `graph({ asOf?, includeSensitive? })` | GET /v1/graph | `GraphData` |
 | `import(params)` | POST /v1/import | `ImportResult` |
-| `export()` | GET /v1/export | full JSON |
+| `export({ includeSensitive? })` | GET /v1/export | full JSON or share-safe structured JSON |
 | `forget()` | POST /v1/forget | `{ ok, message }` |
 | `chat.completions.create(params)` | POST /v1/chat/completions | `ChatCompletion` / stream |
 

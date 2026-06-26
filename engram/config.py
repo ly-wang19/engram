@@ -35,6 +35,7 @@ class Config:
     candidate_k: int = 24  # per-retriever candidate pool before fusion
     rrf_k: int = 60  # Reciprocal Rank Fusion constant
     max_hops: int = 2  # multi-hop planner depth
+    max_hot_facts: int = 10_000  # heat-tier cap; cold facts remain durable and can page back on hot miss
     abstain_threshold: float = 0.45  # abstain if no attribute match AND best semantic sim below this
     evidence_planner: bool = True  # benchmark-neutral query -> evidence-shape routing for lean_context
 

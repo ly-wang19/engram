@@ -48,7 +48,7 @@ def test_report_reads_synthetic_harness_jsonl(tmp_path):
     report = format_synthetic_report(str(path), load(str(path)))
     assert "Synthetic offline harness" in report
     assert "OVERALL" in report
-    assert "100.0% (9)" in report
+    assert "100.0% (10)" in report
     assert "avg context tokens" in report
     assert "p50 latency ms" in report
     assert "p95 latency ms" in report
