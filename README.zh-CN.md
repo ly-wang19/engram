@@ -229,7 +229,7 @@ TypeScript SDK 的 `engram.export()` 默认走这个安全导出；只有用户�
 `{ includeSensitive: true }`。
 如果要做 C 端“我的记忆”管理页，SDK 也支持分页查看：
 `engram.memories({ factsLimit, factsOffset, episodesLimit, status, query, includeSensitive })`。
-独立关系图接口也支持 `/v1/graph?include_sensitive=false`。
+独立关系图接口默认也是安全视图；只有明确要完整私有图谱时才传 `/v1/graph?include_sensitive=true`。
 
 ### 自部署（数据完全在你自己机器上）
 

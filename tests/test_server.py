@@ -337,7 +337,11 @@ def test_graph_endpoint_can_exclude_sensitive_edges(client):
     client.post("/v1/facts", json={"predicate": "has_disease", "object": "diabetes"}, headers=h)
     client.post("/v1/facts", json={"predicate": "works_at", "object": "Acme"}, headers=h)
 
-    full = client.get("/v1/graph", headers=h).json()
+    default_safe = client.get("/v1/graph", headers=h).json()
+    assert "diabetes" not in str(default_safe).lower()
+    assert "Acme" in str(default_safe)
+
+    full = client.get("/v1/graph?include_sensitive=true", headers=h).json()
     assert "diabetes" in str(full).lower()
     assert "Acme" in str(full)
 

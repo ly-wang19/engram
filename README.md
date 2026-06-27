@@ -226,7 +226,8 @@ The TypeScript SDK's `engram.export()` uses that share-safe export by default; p
 `{ includeSensitive: true }` only for an explicit private export.
 For a user-facing "my memory" page, the SDK also exposes paged inspection:
 `engram.memories({ factsLimit, factsOffset, episodesLimit, status, query, includeSensitive })`.
-The standalone graph endpoint also supports `/v1/graph?include_sensitive=false`.
+The standalone graph endpoint is share-safe by default; pass `/v1/graph?include_sensitive=true` only for
+an explicit private graph inspection.
 
 **3. Batch import** — bring your whole history (ChatGPT export, OpenAI messages, JSONL, transcript;
 auto-detected):

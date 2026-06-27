@@ -612,14 +612,15 @@ def resolve_conflict(conflict_id: str, req: ResolveReq, user: str = Depends(auth
 @app.get("/v1/graph")
 def graph(
     as_of: float | None = None,
-    include_sensitive: bool = True,
+    include_sensitive: bool = False,
     q: str = "",
     live_only: bool = False,
     limit: Optional[int] = None,
     user: str = Depends(auth),
 ):
     """Nodes (entities) + edges (bi-temporal relations) of this user's semantic graph.
-    `include_sensitive=false` omits edges backed by facts tagged sensitive."""
+    Defaults to a share-safe graph that omits edges backed by facts tagged sensitive. Pass
+    `include_sensitive=true` only for an explicit owner-visible graph inspection."""
     return svc().graph(
         user,
         as_of=as_of,

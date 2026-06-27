@@ -150,7 +150,7 @@ const fullPrivatePage = await engram.memories({
 | `updateFact(id, patch)` / `deleteFact(id)` | PATCH/DELETE /v1/facts/:id | — |
 | `getFocus()` / `setFocus(f)` | GET/PUT /v1/focus | `Focus` |
 | `getPolicy()` / `setPolicy(p)` | GET/PUT /v1/policy | `PolicyResponse` |
-| `graph({ asOf?, includeSensitive? })` | GET /v1/graph | `GraphData` |
+| `graph({ asOf?, includeSensitive? })` | GET /v1/graph | `GraphData`; share-safe by default, full owner-visible graph with `includeSensitive: true` |
 | `import(params)` | POST /v1/import | `ImportResult` |
 | `export({ includeSensitive? })` | GET /v1/export | share-safe structured JSON by default; full private JSON with `includeSensitive: true` |
 | `forget({ confirm: true })` | POST /v1/forget | `{ ok, message }`; irreversible namespace wipe |

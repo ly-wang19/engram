@@ -714,7 +714,7 @@ class MemoryService:
         self,
         user: str,
         as_of: float | None = None,
-        include_sensitive: bool = True,
+        include_sensitive: bool = False,
         q: str = "",
         live_only: bool = False,
         limit: Optional[int] = None,

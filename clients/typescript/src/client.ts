@@ -278,6 +278,7 @@ export class EngramClient {
     return this.request('/v1/policy', { method: 'PUT', body: JSON.stringify(patch) })
   }
 
+  /** Semantic graph. Defaults to share-safe; pass includeSensitive=true for the full owner-visible graph. */
   graph(options: { asOf?: number; includeSensitive?: boolean } = {}): Promise<GraphData> {
     const params = new URLSearchParams()
     if (options.asOf !== undefined) params.set('as_of', String(options.asOf))

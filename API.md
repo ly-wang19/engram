@@ -160,7 +160,7 @@ agent session。
 | GET | `/v1/stats` | 内容无关统计：episode pending/consolidated、hot/cold facts、cold page-in/out、时间范围、敏感事实数量、pending conflicts、运行后端；适合监控 |
 | GET | `/v1/memories` | 默认安全视图：非敏感 facts + 数量；完整私有查看需 `include_sensitive=true` |
 | GET | `/v1/profile/structured` | 结构化用户画像(基本信息/偏好/习惯) |
-| GET | `/v1/graph?include_sensitive=false` | 安全关系图：排除敏感 fact 对应的边 |
+| GET | `/v1/graph` | 默认安全关系图：排除敏感 fact 对应的边；完整私有图需 `include_sensitive=true` |
 | GET | `/v1/conflicts` | 待确认的疑似冲突(LLM 检测，需开 `ENGRAM_CONFLICT_DETECTION=1`) |
 | POST | `/v1/conflicts/{id}/resolve` | `{"keep":"newer\|older\|both"}` 让冲突由人确认 |
 | PATCH | `/v1/facts/{id}` | 改事实 `{"object":"...","sensitive":true}` |
