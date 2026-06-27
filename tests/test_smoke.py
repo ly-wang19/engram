@@ -274,3 +274,26 @@ def test_first_person_fan_of_is_preference_not_occupation():
     assert ("u1", "likes", "jazz") in facts
     assert ("u1", "likes", "synthwave") in facts
     assert "occupation" not in {p for _, p, _ in facts}
+
+
+def test_import_style_moving_and_dietary_restrictions_extract_cleanly():
+    mem = Memory()
+    mem.add("I'm moving to Berlin next month for a job at Acme.", user_id="u1", event_time=BASE)
+    mem.add("By the way, I'm vegetarian and allergic to peanuts.", user_id="u1", event_time=BASE + DAY)
+    mem.consolidate()
+
+    facts = {(f.subject, f.predicate, f.object) for f in mem.fact_store.values()}
+    assert ("u1", "lives_in", "Berlin") in facts
+    assert ("u1", "works_at", "Acme") in facts
+    assert ("u1", "diet", "vegetarian") in facts
+    assert ("u1", "allergic_to", "peanuts") in facts
+
+
+def test_assistant_small_talk_is_not_profile_occupation():
+    mem = Memory()
+    mem.add("Exciting! Berlin is great.", user_id="u1", speaker="assistant", event_time=BASE)
+    mem.consolidate()
+
+    facts = {(f.subject, f.predicate, f.object) for f in mem.fact_store.values()}
+    assert ("Berlin", "occupation", "great") not in facts
+    assert "occupation" not in {p for _, p, _ in facts}
