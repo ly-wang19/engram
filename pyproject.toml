@@ -46,8 +46,8 @@ engram-agent-bootstrap = "engram.agent_setup:bootstrap_main" # install + verify 
 engram-agent-doctor = "engram.agent_doctor:main"   # verify an agent's Python/MCP memory runtime
 
 [project.urls]
-Homepage = "https://github.com/your-org/engram"
-Repository = "https://github.com/your-org/engram"
+Homepage = "https://github.com/ly-wang19/engram"
+Repository = "https://github.com/ly-wang19/engram"
 
 [tool.hatch.build.targets.wheel]
 packages = ["engram"]
