@@ -30,6 +30,8 @@ data/
 external/
 .claude/settings.local.json
 .claude/worktrees/
+.claude/skills/
+.agents/skills/
 
 # LaTeX build artifacts
 paper/*.aux
