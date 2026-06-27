@@ -8,6 +8,7 @@ from collections import Counter
 from pathlib import Path
 
 from eval.validate_results import validate_bench_log
+from scripts.check_zero_setup import public_evidence_logs
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -65,6 +66,20 @@ def test_results_md_raw_log_links_exist():
     assert links
     for link in links:
         assert (ROOT / link).exists(), link
+
+
+def test_zero_setup_audits_results_md_evidence_logs():
+    evidence = {path.relative_to(ROOT).as_posix() for path in public_evidence_logs()}
+    results_links = set(
+        re.findall(
+            r"\]\((results/[^)]+\.jsonl)\)",
+            (ROOT / "RESULTS.md").read_text(encoding="utf-8"),
+        )
+    )
+
+    assert results_links <= evidence
+    assert "results/headline_500.jsonl" in evidence
+    assert "results/bb_flash.jsonl" in evidence
 
 
 def test_paper_done_result_logs_are_complete_and_scored():

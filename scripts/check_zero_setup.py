@@ -9,6 +9,7 @@ stdlib compilation.
 from __future__ import annotations
 
 import argparse
+import re
 import subprocess
 import sys
 import tempfile
@@ -16,10 +17,12 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-PUBLIC_EVIDENCE_LOGS = (
-    ROOT / "results/headline_500.jsonl",
-    ROOT / "results/bb_flash.jsonl",
-)
+EVIDENCE_REQUIREMENTS: dict[Path, tuple[str, ...]] = {
+    ROOT / "results/headline_500.jsonl": ("engram_lean", "full_context"),
+    ROOT / "results/bb_flash.jsonl": ("engram_lean", "full_context"),
+    ROOT / "results/longmemeval_s_engram_lean_v2_final.jsonl": ("engram_lean",),
+    ROOT / "results/longmemeval_s_volcano_doubao_deepseekjudge.jsonl": ("full_context",),
+}
 
 
 def _rel(path: Path) -> str:
@@ -36,6 +39,15 @@ def run_step(label: str, cmd: list[str]) -> None:
     subprocess.run(cmd, cwd=ROOT, check=True)
 
 
+def public_evidence_logs() -> tuple[Path, ...]:
+    results_md = (ROOT / "RESULTS.md").read_text(encoding="utf-8")
+    linked = {
+        ROOT / match
+        for match in re.findall(r"\]\((results/[^)]+\.jsonl)\)", results_md)
+    }
+    return tuple(sorted(linked | set(EVIDENCE_REQUIREMENTS)))
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Run Engram's zero-setup smoke checks.")
     parser.add_argument(
@@ -46,7 +58,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     py = sys.executable
-    missing = [path for path in PUBLIC_EVIDENCE_LOGS if not path.exists()]
+    evidence_logs = public_evidence_logs()
+    missing = [path for path in evidence_logs if not path.exists()]
     if missing:
         for path in missing:
             print(f"missing public evidence log: {_rel(path)}", file=sys.stderr)
@@ -62,12 +75,26 @@ def main(argv: list[str] | None = None) -> int:
         )
         run_step("synthetic report", [py, "eval/report.py", str(synthetic_log)])
 
-    evidence = [str(path) for path in PUBLIC_EVIDENCE_LOGS]
-    run_step("public evidence audit", [py, "eval/audit_results.py", "--fail-invalid", *evidence])
-    run_step(
-        "public evidence validation",
-        [py, "eval/validate_results.py", "--expected-rows", "500", "--require-complete", *evidence],
-    )
+    evidence = [str(path) for path in evidence_logs]
+    run_step("public evidence audit", [py, "eval/audit_results.py", *evidence])
+    for path in evidence_logs:
+        systems = EVIDENCE_REQUIREMENTS.get(path)
+        if systems is None:
+            print(f"missing evidence requirement for {_rel(path)}", file=sys.stderr)
+            return 1
+        system_args = [arg for system in systems for arg in ("--system", system)]
+        run_step(
+            f"public evidence validation: {_rel(path)}",
+            [
+                py,
+                "eval/validate_results.py",
+                "--expected-rows",
+                "500",
+                "--require-complete",
+                *system_args,
+                str(path),
+            ],
+        )
     if not args.skip_paper_stats:
         run_step("paper statistics", [py, "paper/compute_stats.py", "--bootstrap-samples", "100"])
     run_step("stdlib compile check", [py, "-m", "compileall", "-q", "engram", "eval", "examples", "tests"])
