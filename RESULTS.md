@@ -81,7 +81,7 @@ HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 python eval/bench.py \
     --out data/run.jsonl
 
 python eval/report.py data/run.jsonl     # prints the per-category table above
-python eval/validate_results.py --expected-rows 500 --require-complete data/run.jsonl
+python eval/validate_results.py --expected-rows 500 --require-complete data/run.jsonl  # 500 = full LongMemEval_S
 ```
 
 The harness applies the **same answerer and judge to every `--systems` entry**, so any comparison *within*
@@ -94,7 +94,7 @@ a run (e.g. `engram_lean` vs `full_context`) is apples-to-apples by construction
 
 Recompute any table yourself: `python eval/report.py <file.jsonl>`. Before a log is used as published
 evidence, check it with
-`python eval/validate_results.py --expected-rows 500 --require-complete <file.jsonl>`.
+`python eval/validate_results.py --expected-rows <full item count> --require-complete <file.jsonl>`.
 
 ### Provider setup
 

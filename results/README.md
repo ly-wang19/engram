@@ -15,10 +15,12 @@ Before committing a new cited full-set run, validate it:
 
 ```bash
 python eval/report.py results/<name>.jsonl
-python eval/validate_results.py --expected-rows 500 --require-complete results/<name>.jsonl
+python eval/validate_results.py --expected-rows <full item count> --require-complete results/<name>.jsonl
 ```
 
 The validator must pass before the log is marked `DONE` or used in public copy.
+For LongMemEval_S full-set runs, `<full item count>` is `500`; use the benchmark's real full item count
+for other datasets.
 
 ## What Not To Commit As Evidence
 

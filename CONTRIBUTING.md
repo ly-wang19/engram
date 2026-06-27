@@ -20,7 +20,8 @@ contributors **and to AI coding agents** working on this repo alike — please f
 - Every published number must trace to a **committed raw log** (`results/*.jsonl`), re-derivable with
   `python eval/report.py <file>`. If you can't point to the log, don't publish the number.
 - Before marking a run as DONE or using it as paper/README evidence, validate it with
-  `python eval/validate_results.py --expected-rows 500 --require-complete <file>`.
+  `python eval/validate_results.py --expected-rows <full item count> --require-complete <file>`
+  (for LongMemEval_S full set, `<full item count>` is `500`).
 - Report the **triple**: accuracy **+** tokens **+** latency — never accuracy alone. Always include the
   **full-context baseline** from the *same run* (same answerer + judge), and say so plainly if we don't beat it.
 - **No cherry-picking.** Full-set numbers only — small samples were repeatedly optimistic here. Use the

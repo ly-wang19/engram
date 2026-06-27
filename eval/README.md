@@ -25,13 +25,15 @@ After a real run writes `results/<name>.jsonl`, use both tools:
 
 ```bash
 python eval/report.py results/<name>.jsonl
-python eval/validate_results.py --expected-rows 500 --require-complete results/<name>.jsonl
+python eval/validate_results.py --expected-rows <full item count> --require-complete results/<name>.jsonl
 ```
 
 - `report.py` summarizes whatever was written: accuracy, context tokens, p50/p95 latency, errors, and
   scored denominators.
 - `validate_results.py` fails if a log is not complete enough to cite: wrong row count, duplicate qids,
   missing fields, unscored rows, or error rows.
+  For LongMemEval_S full-set runs, `<full item count>` is `500`; use the benchmark's real full item count
+  for other datasets.
 
 Only logs that pass validation should be marked `DONE` in paper notes or used in README/RESULTS copy.
 Partial logs, smoke slices, failed competitor runs, and exploratory ablations can stay local until they
