@@ -257,7 +257,7 @@ def test_public_copy_avoids_unmeasured_scale_or_latency_claims():
 
 def test_public_headline_claims_are_traceable_to_results():
     expected_claims = ("83.6", "73.2", "9.6k", "79k")
-    for rel in ("README.md", "README.zh-CN.md", "docs/index.html"):
+    for rel in ("README.md", "README.zh-CN.md", "docs/index.html", "demo/index.html"):
         text = (ROOT / rel).read_text(encoding="utf-8")
         for claim in expected_claims:
             assert claim in text, f"{claim!r} missing from {rel}"
@@ -284,7 +284,7 @@ def test_public_derived_headline_claims_match_raw_logs():
     assert accuracy_delta == 10.4
     assert token_ratio == 8
 
-    docs = ("README.md", "README.zh-CN.md", "RESULTS.md", "docs/index.html")
+    docs = ("README.md", "README.zh-CN.md", "RESULTS.md", "docs/index.html", "demo/index.html")
     for rel in docs:
         text = (ROOT / rel).read_text(encoding="utf-8")
         assert "+10.4" in text, f"derived accuracy delta missing from {rel}"
