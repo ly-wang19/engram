@@ -20,7 +20,7 @@ Every number in the paper is grounded in the committed logs in [`../RESULTS.md`]
 | `main.bbl` | **generated** bibliography — arXiv needs this in the upload (arXiv does not run BibTeX) |
 | `figs/make_figs.py` | regenerates the two **data** figures (matplotlib → vector PDF) |
 | `figs/fig_*.pdf` | the two generated data figures (the TikZ diagrams are inline in `main.tex`) |
-| `compute_stats.py` | recomputes the significance tests + confidence intervals from the committed logs (no model calls) |
+| `compute_stats.py` | recomputes significance tests, confidence intervals, and committed multi-backbone summaries from result logs (no model calls) |
 | `main.pdf` | the compiled **14-page** PDF (incl. appendix: prompts + qualitative examples) |
 | `arxiv_abstract.txt` | the abstract as plain text, ready to paste into the arXiv metadata form |
 | `arxiv-submission.tar.gz` | **the ready-to-upload bundle** (`main.tex` + `references.bib` + `main.bbl` + `figs/*.pdf`) |
@@ -38,6 +38,12 @@ pdflatex -interaction=nonstopmode main.tex   # -> main.pdf
 ```
 
 The two TikZ diagrams compile inline; only the two data charts come from `make_figs.py`.
+
+For a fast statistics smoke test without paying the full bootstrap cost:
+
+```bash
+python3 compute_stats.py --bootstrap-samples 100
+```
 
 ## Before you upload — two things only you can fill in
 

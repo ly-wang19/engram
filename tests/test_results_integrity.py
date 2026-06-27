@@ -335,3 +335,20 @@ def test_report_prints_every_requested_log():
     )
     assert str(ROOT / "results/headline_500.jsonl") in out
     assert str(ROOT / "results/bb_flash.jsonl") in out
+
+
+def test_compute_stats_prints_committed_backbone_summary():
+    out = subprocess.check_output(
+        [
+            sys.executable,
+            str(ROOT / "paper/compute_stats.py"),
+            "--bootstrap-samples",
+            "100",
+        ],
+        text=True,
+    )
+
+    assert "committed multi-backbone headline runs" in out
+    assert "doubao-pro" in out
+    assert "doubao-flash" in out
+    assert "lean-full gap range across committed backbones: +3.0..+12.2 points" in out
