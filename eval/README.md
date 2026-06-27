@@ -34,11 +34,20 @@ python eval/validate_results.py --expected-rows <full item count> --require-comp
   missing fields, unscored rows, or error rows.
   For LongMemEval_S full-set runs, `<full item count>` is `500`; use the benchmark's real full item count
   for other datasets.
+- `audit_results.py` scans a messy local `results/` directory and labels each log `complete`,
+  `incomplete`, or `invalid` so exploratory logs do not get mistaken for evidence.
 
 Only logs that pass validation should be marked `DONE` in paper notes or used in README/RESULTS copy.
 Partial logs, smoke slices, failed competitor runs, and exploratory ablations can stay local until they
 are completed or explicitly documented as exploratory. See [`../results/README.md`](../results/README.md)
 for the commit policy for raw logs.
+
+Before deciding what to commit, audit the directory:
+
+```bash
+python eval/audit_results.py
+python eval/audit_results.py --fail-invalid results/headline_500.jsonl results/bb_flash.jsonl
+```
 
 PersonaMem-v2 is a multiple-choice runner with a different JSONL shape (`pref_type` + picked option,
 not LongMemEval's `cat` + judged `pred/gold`). Validate it with the explicit schema:
