@@ -25,7 +25,9 @@ contributors **and to AI coding agents** working on this repo alike — please f
   `python eval/report.py <file>`. If you can't point to the log, don't publish the number.
 - Before marking a run as DONE or using it as paper/README evidence, validate it with
   `python eval/validate_results.py --expected-rows <full item count> --require-complete <file>`
-  (for LongMemEval_S full set, `<full item count>` is `500`).
+  (for LongMemEval_S full set, `<full item count>` is `500`). If a multi-system log contains an
+  exploratory or explicitly errored system that is not being cited, validate the cited systems with
+  repeatable `--system <name>` flags instead of pretending the whole log is clean.
 - Report the **triple**: accuracy **+** tokens **+** latency — never accuracy alone. Always include the
   **full-context baseline** from the *same run* (same answerer + judge), and say so plainly if we don't beat it.
 - **No cherry-picking.** Full-set numbers only — small samples were repeatedly optimistic here. Use the

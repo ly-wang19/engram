@@ -82,6 +82,15 @@ def test_zero_setup_audits_results_md_evidence_logs():
     assert "results/bb_flash.jsonl" in evidence
 
 
+def test_public_evidence_docs_explain_system_scoped_validation():
+    for rel in ("CONTRIBUTING.md", "RESULTS.md", "eval/README.md", "results/README.md"):
+        text = (ROOT / rel).read_text(encoding="utf-8")
+        assert "--system" in text, f"{rel} must document system-scoped evidence validation"
+
+    results = (ROOT / "RESULTS.md").read_text(encoding="utf-8")
+    assert "--system engram_lean --system full_context" in results
+
+
 def test_paper_done_result_logs_are_complete_and_scored():
     text = (ROOT / "paper/EXPERIMENTS_CHECKLIST.md").read_text(encoding="utf-8")
     links = set()

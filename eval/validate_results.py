@@ -50,8 +50,9 @@ def validate_bench_log(
 ) -> list[str]:
     """Return validation errors for a ``bench.py`` JSONL log.
 
-    ``require_complete`` is the standard for published/DONE evidence: every discovered system must have a
-    scored, non-error result on every row, with prediction and gold present.
+    ``require_complete`` is the standard for published/DONE evidence. By default every discovered system
+    must have a scored, non-error result on every row, with prediction and gold present. Pass
+    ``required_systems`` when only named systems from a multi-system log are being cited.
     """
     if schema not in SCHEMAS:
         return [f"{path}: unknown schema {schema!r}; expected one of {sorted(SCHEMAS)}"]

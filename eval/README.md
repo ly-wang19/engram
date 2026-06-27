@@ -41,6 +41,14 @@ python eval/validate_results.py --expected-rows <full item count> --require-comp
   missing fields, unscored rows, or error rows.
   For LongMemEval_S full-set runs, `<full item count>` is `500`; use the benchmark's real full item count
   for other datasets.
+  If a multi-system log includes an exploratory or explicitly errored system that is not part of the
+  published claim, validate the cited systems explicitly:
+
+```bash
+python eval/validate_results.py --expected-rows 500 --require-complete \
+    --system engram_lean --system full_context results/<name>.jsonl
+```
+
 - `audit_results.py` scans a messy local `results/` directory and labels each log `complete`,
   `incomplete`, or `invalid` so exploratory logs do not get mistaken for evidence.
 

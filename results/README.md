@@ -21,6 +21,9 @@ python eval/validate_results.py --expected-rows <full item count> --require-comp
 The validator must pass before the log is marked `DONE` or used in public copy.
 For LongMemEval_S full-set runs, `<full item count>` is `500`; use the benchmark's real full item count
 for other datasets.
+When public copy cites only selected systems from a multi-system log, validate those systems explicitly
+with repeatable `--system <name>` flags. This keeps disclosed auxiliary-system failures visible without
+blocking a clean cited baseline.
 PersonaMem-v2 logs come from `eval/personamem.py` and use a distinct multiple-choice schema; validate
 them with `--schema personamem` and the sampled item count (for example, `--expected-rows 100` for
 `--n-personas 20 --per-persona 5`).
