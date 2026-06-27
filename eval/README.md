@@ -5,7 +5,14 @@ a number is publishable only when the raw JSONL log is committed, reportable, an
 
 ## Offline Smoke Harness
 
-Run the zero-key synthetic harness first:
+Run the zero-key project smoke first:
+
+```bash
+python scripts/check_zero_setup.py
+```
+
+That command exercises the quickstart, synthetic harness, committed public-log validation, paper stats,
+and stdlib compilation without optional dependencies. To run only the synthetic harness:
 
 ```bash
 python eval/harness.py

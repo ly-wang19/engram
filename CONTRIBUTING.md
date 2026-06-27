@@ -8,7 +8,11 @@ contributors **and to AI coding agents** working on this repo alike — please f
 
 - **Zero-setup invariant.** `python examples/quickstart.py` and `pytest` MUST pass with **no API keys and
   no external services** (hashing embedder + rule extractor + in-memory stores). Never break this.
-- **Tests.** Run `pytest` before pushing; add tests for new behavior. Keep the offline fallbacks deterministic.
+- **Zero-dep smoke check.** Run `python scripts/check_zero_setup.py` before publishing a benchmark or
+  claiming the repo works from a clean checkout. It exercises the quickstart, offline harness, committed
+  evidence-log validation, paper stats, and stdlib compilation without optional packages.
+- **Tests.** Run `pytest` before pushing when test dependencies are installed; add tests for new behavior.
+  Keep the offline fallbacks deterministic.
 - **Interfaces first.** Every external dependency (LLM, embedder, store) sits behind an interface with a
   zero-dep offline fallback. Don't import heavy deps at module top level in core.
 - See [`CLAUDE.md`](CLAUDE.md) for the architecture and conventions.

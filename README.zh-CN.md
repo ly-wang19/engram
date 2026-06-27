@@ -250,7 +250,10 @@ uvicorn engram.server.app:app --port 8000        # HTTP API + 控制台在 /ui
 ## 复现基准
 
 ```bash
-# 1. 零依赖冒烟测试 + 单元测试
+# 1. 零依赖冒烟测试：quickstart + 离线 harness + 证据日志校验
+python scripts/check_zero_setup.py
+
+# 可选：安装测试依赖后跑完整单元测试
 pytest
 
 # 2. 在真实干扰集上测检索召回（不需要 LLM）

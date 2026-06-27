@@ -301,7 +301,10 @@ The full data model and conflict-resolution rules live in [`engram/types.py`](en
 ## Reproduce the benchmark
 
 ```bash
-# 1. zero-dep smoke test + unit tests
+# 1. zero-dep smoke test: quickstart + offline harness + evidence validation
+python scripts/check_zero_setup.py
+
+# optional: full unit suite when test dependencies are installed
 pytest
 
 # 2. retrieval recall on the real haystack (no LLM needed)
