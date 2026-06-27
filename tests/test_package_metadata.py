@@ -23,3 +23,6 @@ def test_package_metadata_links_to_real_repository():
     assert '"url": "https://github.com/ly-wang19/engram"' in ts_package
     assert '"homepage": "https://github.com/ly-wang19/engram/tree/main/clients/typescript"' in ts_package
     assert '"bugs": { "url": "https://github.com/ly-wang19/engram/issues" }' in ts_package
+    assert "](../../" not in ts_readme
+    assert "https://github.com/ly-wang19/engram/blob/main/LICENSE" in ts_readme
+    assert "https://github.com/ly-wang19/engram/blob/main/COMMERCIAL-LICENSE.md" in ts_readme

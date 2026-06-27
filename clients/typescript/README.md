@@ -169,6 +169,8 @@ npm run typecheck
 
 ## License
 
-Engram is **dual-licensed**: open source under [GNU AGPL-3.0](../../LICENSE), or a separate **commercial
+Engram is **dual-licensed**: open source under
+[GNU AGPL-3.0](https://github.com/ly-wang19/engram/blob/main/LICENSE), or a separate **commercial
 license** for proprietary/closed-source use. Commercial use that won't comply with the AGPL requires
-authorization — see [`COMMERCIAL-LICENSE.md`](../../COMMERCIAL-LICENSE.md).
+authorization — see
+[`COMMERCIAL-LICENSE.md`](https://github.com/ly-wang19/engram/blob/main/COMMERCIAL-LICENSE.md).
