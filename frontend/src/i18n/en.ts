@@ -348,6 +348,7 @@ export const en = {
     connectNoneYet: 'None yet',
     connectSessionLabel: 'Test session id',
     connectStepInstall: '1. Install / update Codex memory connector',
+    connectCopyCommand: 'Copy install command',
     connectSecretNote:
       'This command embeds your current API key. Treat it like a password; anyone with it can access this namespace.',
     connectStepTest: '2. Test in a new Codex thread',
@@ -355,6 +356,7 @@ export const en = {
     connectPromptStatus: 'Check connection',
     connectPromptRemember: 'Write a test preference',
     connectPromptClose: 'Close and audit',
+    connectCopyPrompt: 'Copy test prompt',
     connectStatusPrompt: (session: string) =>
       `Check Engram memory status with session_id ${session}. If it is connected, say "Engram is connected."`,
     connectRememberPrompt: (session: string) =>

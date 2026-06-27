@@ -246,8 +246,12 @@ function CodexSetupCard() {
               <div className="inline-flex items-center gap-2 text-sm font-semibold text-slate-100">
                 <Terminal className="h-4 w-4 text-brand-cyan" /> {t.settings.connectStepInstall}
               </div>
-              <Button variant="ghost" onClick={() => copy(command, t.common.copied, t.common.copyFailed)}>
-                <Clipboard className="h-4 w-4" /> {t.common.copy}
+              <Button
+                variant="ghost"
+                aria-label={t.settings.connectCopyCommand}
+                onClick={() => copy(command, t.common.copied, t.common.copyFailed)}
+              >
+                <Clipboard className="h-4 w-4" /> {t.settings.connectCopyCommand}
               </Button>
             </div>
             <pre className="max-h-52 overflow-auto rounded-lg bg-ink-900/70 p-3 text-xs leading-relaxed text-slate-200">
@@ -350,9 +354,10 @@ function PromptCopy({ label, text }: { label: string; text: string }) {
         <span className="text-xs font-medium text-ghost">{label}</span>
         <button
           className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs text-brand-cyan transition hover:bg-white/5 hover:text-brand-mint"
+          aria-label={`${t.settings.connectCopyPrompt}: ${label}`}
           onClick={() => copy(text, t.common.copied, t.common.copyFailed)}
         >
-          <Clipboard className="h-3.5 w-3.5" /> {t.common.copy}
+          <Clipboard className="h-3.5 w-3.5" /> {t.settings.connectCopyPrompt}
         </button>
       </div>
       <div className="rounded-lg bg-ink-900/70 p-3 text-xs leading-relaxed text-slate-200">{text}</div>

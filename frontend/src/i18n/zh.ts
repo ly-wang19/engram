@@ -333,12 +333,14 @@ export const zh: Dict = {
     connectNoneYet: '还没有',
     connectSessionLabel: '测试 session id',
     connectStepInstall: '1. 安装 / 更新 Codex 记忆连接器',
+    connectCopyCommand: '复制安装命令',
     connectSecretNote: '这条命令包含你当前的 API key。请把它当成密码，持有它的人可以访问这个命名空间。',
     connectStepTest: '2. 在新 Codex 线程里测试',
     connectRefresh: '刷新',
     connectPromptStatus: '检查连接',
     connectPromptRemember: '写入测试偏好',
     connectPromptClose: '结束并审计',
+    connectCopyPrompt: '复制测试提示',
     connectStatusPrompt: (session: string) =>
       `检查 Engram 记忆状态，session_id 用 ${session}。如果已连接，回复“Engram 已连接”。`,
     connectRememberPrompt: (session: string) =>
