@@ -8,7 +8,7 @@ from collections import Counter
 from pathlib import Path
 
 from eval.validate_results import validate_bench_log
-from scripts.check_zero_setup import public_evidence_logs
+from scripts.check_zero_setup import EVIDENCE_REQUIREMENTS, public_evidence_logs
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -80,6 +80,21 @@ def test_zero_setup_audits_results_md_evidence_logs():
     assert results_links <= evidence
     assert "results/headline_500.jsonl" in evidence
     assert "results/bb_flash.jsonl" in evidence
+
+
+def test_results_md_evidence_logs_have_validation_requirements():
+    results_links = set(
+        re.findall(
+            r"\]\((results/[^)]+\.jsonl)\)",
+            (ROOT / "RESULTS.md").read_text(encoding="utf-8"),
+        )
+    )
+    requirements = {path.relative_to(ROOT).as_posix() for path in EVIDENCE_REQUIREMENTS}
+
+    assert results_links <= requirements
+    for rel in results_links:
+        systems = EVIDENCE_REQUIREMENTS[ROOT / rel]
+        assert systems, f"{rel} must name at least one required citable system"
 
 
 def test_public_evidence_docs_explain_system_scoped_validation():
