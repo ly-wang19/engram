@@ -1,0 +1,23 @@
+[Unit]
+Description=Engram Memory Service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/engram-memory
+Environment=PYTHONPATH=/home/ubuntu/engram-memory
+Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=-/home/ubuntu/engram-memory/.env
+ExecStart=/home/ubuntu/engram-memory/.venv/bin/python -m uvicorn engram.server.app:app --host 0.0.0.0 --port 8456
+Restart=on-failure
+RestartSec=5
+KillSignal=SIGINT
+TimeoutStopSec=30
+NoNewPrivileges=true
+StandardOutput=append:/home/ubuntu/engram-memory/engram.log
+StandardError=append:/home/ubuntu/engram-memory/engram.log
+
+[Install]
+WantedBy=multi-user.target
