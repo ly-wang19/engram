@@ -65,3 +65,12 @@ def test_zero_setup_contract_mentions_installed_quickstart():
     for rel in ("AGENTS.md", "CLAUDE.md", "CONTRIBUTING.md"):
         text = (ROOT / rel).read_text(encoding="utf-8")
         assert "engram-quickstart" in text, f"{rel} must include the installed quickstart contract"
+
+
+def test_console_seed_default_names_jsonl_stores_not_pickles():
+    seed_console = (ROOT / "eval/seed_console.py").read_text(encoding="utf-8")
+
+    assert 'default="/tmp/console_stores"' in seed_console
+    assert "JSONL store directories" in seed_console
+    assert "console_pkls" not in seed_console
+    assert "sys.path.insert(0, str(ROOT))" in seed_console
