@@ -8,7 +8,11 @@ from collections import Counter
 from pathlib import Path
 
 from eval.validate_results import validate_bench_log
-from scripts.check_zero_setup import EVIDENCE_REQUIREMENTS, public_evidence_logs
+from scripts.check_zero_setup import (
+    EVIDENCE_REQUIREMENTS,
+    format_public_evidence_requirements,
+    public_evidence_logs,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -95,6 +99,15 @@ def test_results_md_evidence_logs_have_validation_requirements():
     for rel in results_links:
         systems = EVIDENCE_REQUIREMENTS[ROOT / rel]
         assert systems, f"{rel} must name at least one required citable system"
+
+
+def test_zero_setup_prints_system_scoped_evidence_requirements():
+    text = format_public_evidence_requirements(public_evidence_logs())
+
+    assert "public evidence requirements" in text
+    assert "results/longmemeval_s_volcano_doubao_deepseekjudge.jsonl: require full_context" in text
+    assert "engram_full" not in text
+    assert "invalid" not in text.lower()
 
 
 def test_public_evidence_docs_explain_system_scoped_validation():

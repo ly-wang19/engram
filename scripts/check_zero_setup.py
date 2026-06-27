@@ -48,6 +48,17 @@ def public_evidence_logs() -> tuple[Path, ...]:
     return tuple(sorted(linked | set(EVIDENCE_REQUIREMENTS)))
 
 
+def format_public_evidence_requirements(paths: tuple[Path, ...]) -> str:
+    lines = ["\n==> public evidence requirements"]
+    for path in paths:
+        systems = EVIDENCE_REQUIREMENTS.get(path)
+        if systems:
+            lines.append(f"- {_rel(path)}: require {', '.join(systems)}")
+        else:
+            lines.append(f"- {_rel(path)}: missing required citable systems")
+    return "\n".join(lines)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Run Engram's zero-setup smoke checks.")
     parser.add_argument(
@@ -75,8 +86,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         run_step("synthetic report", [py, "eval/report.py", str(synthetic_log)])
 
-    evidence = [str(path) for path in evidence_logs]
-    run_step("public evidence audit", [py, "eval/audit_results.py", *evidence])
+    print(format_public_evidence_requirements(evidence_logs), flush=True)
     for path in evidence_logs:
         systems = EVIDENCE_REQUIREMENTS.get(path)
         if systems is None:
