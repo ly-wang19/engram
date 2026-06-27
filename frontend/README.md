@@ -4,7 +4,8 @@ A production-grade web UI for managing your Engram long-term memory — view, as
 customize, and export everything the engine remembers about you.
 
 > 这是给"小白"也能看懂、也能自己管理记忆的前端：查看用户画像、增删改记忆、定制关注点、
-> 可视化时间线与关系图谱、一键导出或清空。对标腾讯 Hunyuan 的记忆管理体验，但**完全开源**。
+> 可视化时间线与关系图谱、一键导出或清空。它把 Engram 的可审计记忆能力做成一个
+> **完全开源**的管理界面。
 
 ## Stack
 

@@ -294,6 +294,31 @@ def test_public_copy_avoids_unmeasured_scale_or_latency_claims():
             assert phrase.lower() not in lowered, f"{phrase!r} found in {rel}"
 
 
+def test_public_copy_avoids_competitor_leaderboard_positioning():
+    forbidden = (
+        "OMEGA",
+        "Mem0-2026",
+        "Hunyuan",
+        "SOTA",
+        "Public LongMemEval_S SOTA",
+        "WE BEAT THIS",
+        "对标腾讯",
+    )
+    public_surfaces = (
+        "README.md",
+        "README.zh-CN.md",
+        "RESULTS.md",
+        "docs/index.html",
+        "demo/index.html",
+        "frontend/README.md",
+        "eval/report.py",
+    )
+    for rel in public_surfaces:
+        text = (ROOT / rel).read_text(encoding="utf-8")
+        for phrase in forbidden:
+            assert phrase not in text, f"{phrase!r} found in {rel}"
+
+
 def test_public_headline_claims_are_traceable_to_results():
     expected_claims = ("83.6", "73.2", "9.6k", "79k")
     for rel in ("README.md", "README.zh-CN.md", "docs/index.html", "demo/index.html"):

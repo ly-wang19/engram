@@ -133,6 +133,36 @@ def test_report_uses_personamem_pref_type_as_category(tmp_path):
     assert "PersonaMem-v2 is a multiple-choice personalization benchmark" in report
 
 
+def test_report_only_prints_reproducible_log_systems(tmp_path):
+    path = tmp_path / "bench.jsonl"
+    rows = [
+        {
+            "qid": "q1",
+            "cat": "single-session-user",
+            "sys": {
+                "engram_lean": {
+                    "ok": True,
+                    "tok": 123,
+                    "lat": 45.6,
+                    "err": None,
+                    "pred": "A",
+                    "gold": "A",
+                }
+            },
+        }
+    ]
+
+    report = format_bench_report(str(path), rows)
+
+    assert "engram_lean" in report
+    assert "SOTA" not in report
+    assert "Public LongMemEval_S SOTA" not in report
+    assert "OMEGA" not in report
+    assert "Mem0-2026" not in report
+    assert "Hunyuan" not in report
+    assert "WE BEAT THIS" not in report
+
+
 def test_report_keeps_long_categories_readable(tmp_path):
     path = tmp_path / "personamem.jsonl"
     rows = [
