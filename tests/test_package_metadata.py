@@ -51,3 +51,9 @@ def test_python_console_scripts_resolve_to_callables():
         module = importlib.import_module(module_name)
         func = getattr(module, attr, None)
         assert callable(func), f"{name} target {target} is not callable"
+
+
+def test_zero_setup_contract_mentions_installed_quickstart():
+    for rel in ("AGENTS.md", "CLAUDE.md", "CONTRIBUTING.md"):
+        text = (ROOT / rel).read_text(encoding="utf-8")
+        assert "engram-quickstart" in text, f"{rel} must include the installed quickstart contract"

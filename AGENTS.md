@@ -195,8 +195,9 @@ Target benchmarks, in order: LongMemEval_S → LongMemEval_M → LOCOMO → Pers
 └── tests/                     # smoke + unit tests
 ```
 
-**Zero-setup invariant:** `python examples/quickstart.py` and `pytest` MUST run with **no API keys and no
-third-party services**, using the hashing embedder + rule-based extractor + in-memory stores. Real
+**Zero-setup invariant:** `python examples/quickstart.py`, installed `engram-quickstart`, and `pytest`
+MUST run with **no API keys and no third-party services**, using the hashing embedder + rule-based
+extractor + in-memory stores. Real
 backends (LanceDB/Qdrant/pgvector, Kuzu/Neo4j, LiteLLM for any LLM, BGE embeddings/reranker) are optional
 extras that slot in behind the same interfaces. We never break the zero-setup demo.
 
