@@ -65,6 +65,17 @@ def test_results_md_raw_log_links_exist():
         assert (ROOT / link).exists(), link
 
 
+def test_paper_done_result_logs_exist():
+    text = (ROOT / "paper/EXPERIMENTS_CHECKLIST.md").read_text(encoding="utf-8")
+    links = set()
+    for line in text.splitlines():
+        if "[DONE" in line:
+            links.update(re.findall(r"results/[A-Za-z0-9_.-]+\.jsonl", line))
+    assert links
+    for link in links:
+        assert (ROOT / link).exists(), link
+
+
 def test_results_md_raw_logs_have_required_schema():
     text = (ROOT / "RESULTS.md").read_text(encoding="utf-8")
     links = sorted(set(re.findall(r"\]\((results/[^)]+\.jsonl)\)", text)))

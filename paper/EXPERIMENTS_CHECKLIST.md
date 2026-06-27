@@ -18,14 +18,17 @@ committed `results/*.jsonl`; `eval/report.py <log>` prints the table; stats via 
 
 ---
 
-## P0 — Integrity fix (IN PROGRESS, do first)
+## P0 — Integrity fix (DONE, committed evidence)
 Canonical single-run headline so lean+full are within-run and trace to the reproduce command, and
 `engram_full` reported as run-to-run variance (83.4 ↔ 86.0), not a cherry-picked single value.
 ```
 python eval/bench.py --data s --limit 500 --systems engram_lean,full_context \
   --answerer volcano:doubao-seed-2-0-pro-260215  <common flags>  --out results/headline_500.jsonl
 ```
-→ **Fixes** Table 1 provenance + the "within-run" wording. (Running now.)
+→ **Result:** `results/headline_500.jsonl` (500/500 scored, 0 errors): `engram_lean` 79.0% vs
+`full_context` 76.0% at 7.3k vs 79.2k context tokens. This fixes Table 1 provenance and supports
+the "within-run" wording for this answerer/config. It does **not** replace the public README headline
+unless README/RESULTS are updated in the same change.
 
 ---
 
@@ -33,16 +36,19 @@ python eval/bench.py --data s --limit 500 --systems engram_lean,full_context \
 Re-run the headline (lean vs full_context) with 2–3 answerer backbones; **only `--answerer` changes.**
 Shows lean>full holds regardless of the reader model — and quantifies cross-backbone spread.
 ```
-# frontier (have): volcano:doubao-seed-2-0-pro-260215   -> results/bb_doubao.jsonl   [DONE = headline]
+# frontier (have): volcano:doubao-seed-2-0-pro-260215   -> results/headline_500.jsonl   [DONE]
 python eval/bench.py --data s --limit 500 --systems engram_lean,full_context \
   --answerer univibe:gpt-5.5            <common flags> --out results/bb_gpt55.jsonl
 python eval/bench.py --data s --limit 500 --systems engram_lean,full_context \
-  --answerer volcano:doubao-seed-1-6-flash-250615  <common flags> --out results/bb_flash.jsonl  # small/open-ish
+  --answerer volcano:doubao-seed-1-6-flash-250615  <common flags> --out results/bb_flash.jsonl  # small/open-ish [DONE]
 ```
 → **Artifact:** Table "Headline across 3 backbones" (lean acc, full acc, Δ, per backbone) + a sentence:
 "the lean>full gain holds across backbones (Δ = +X..+Y)."
 → **Needs:** only API keys you already have. **Cost:** ~3 × the headline run.
 → **Note:** report each as mean of the backbone; the Δ (lean−full) is the claim, robust to per-backbone level.
+→ **Completed so far:** `results/headline_500.jsonl` gives Δ=+3.0; `results/bb_flash.jsonl` gives
+Δ=+12.2 (500/500 scored, 0 errors). `results/bb_gpt55.jsonl` is not committed because the available
+local log is partial and should not be cited.
 
 ## P2 — Competitor memory systems  ★ kills "you only beat full-context"
 Run Mem0 / Zep / HippoRAG on the SAME rig (adapters already in `eval/bench.py`).
