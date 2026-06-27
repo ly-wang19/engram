@@ -264,6 +264,8 @@ def test_evidence_planner_is_query_based_not_benchmark_based():
 
     pref = plan_evidence("What food do I prefer or dislike?")
     assert pref.preference and pref.n_chunks > 0
+    diet = plan_evidence("What are my dietary restrictions?")
+    assert diet.preference and diet.n_chunks > 0
 
     temporal = plan_evidence("When was the first time I traveled after Lisbon?")
     assert temporal.timeline
@@ -295,6 +297,17 @@ def test_lean_context_auto_adds_preference_records():
     ctx = mem.lean_context("What is my favorite language?", user_id="u1", n_chunks=0)
     assert "PREFERENCE RECORDS (current, structured):" in ctx
     assert "favorite language" in ctx.lower()
+
+
+def test_lean_context_auto_adds_dietary_restriction_records():
+    mem = Memory()
+    mem.add("I'm vegetarian and allergic to peanuts.", user_id="u1", event_time=BASE)
+    mem.consolidate()
+
+    ctx = mem.lean_context("What are my dietary restrictions?", user_id="u1", n_chunks=0)
+    assert "PREFERENCE RECORDS (current, structured):" in ctx
+    assert "diet" in ctx and "vegetarian" in ctx
+    assert "allergic to" in ctx and "peanuts" in ctx
 
 
 def test_lean_context_auto_adds_aggregation_evidence():

@@ -1019,7 +1019,7 @@ class Memory:
 
     _PREFERENCE_MARKERS = (
         "like", "dislike", "prefer", "favorite", "favourite", "love", "hate", "avoid", "allergic",
-        "interested",
+        "interested", "diet",
     )
 
     def _preference_block(self, user: str, query: str, facts: list[Fact], limit: int = 24) -> str:

@@ -288,6 +288,11 @@ def test_import_style_moving_and_dietary_restrictions_extract_cleanly():
     assert ("u1", "diet", "vegetarian") in facts
     assert ("u1", "allergic_to", "peanuts") in facts
 
+    profile = mem.structured_profile("u1")
+    dietary_items = [it for items in profile["preferences"].values() for it in items]
+    assert any(it["predicate"] == "diet" and it["item"] == "vegetarian" for it in dietary_items)
+    assert any(it["predicate"] == "allergic_to" and it["item"] == "peanuts" for it in dietary_items)
+
 
 def test_assistant_small_talk_is_not_profile_occupation():
     mem = Memory()

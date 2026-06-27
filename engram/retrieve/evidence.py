@@ -42,7 +42,8 @@ _TEMPORAL_TERMS = {
 _PREFERENCE_TERMS = {
     "prefer", "prefers", "preference", "favorite", "favourite", "like", "likes", "liked",
     "dislike", "dislikes", "hate", "hates", "love", "loves", "avoid", "avoids", "allergic",
-    "recommend", "recommendation",
+    "diet", "dietary", "restriction", "restrictions", "vegetarian", "vegan", "intolerant",
+    "intolerance", "recommend", "recommendation",
 }
 _CURRENT_TERMS = {
     "now", "current", "currently", "today", "still", "latest", "new", "newest", "updated",
@@ -59,7 +60,8 @@ _EXACT_TERMS = {"id", "email", "phone", "url", "link", "address", "number", "cod
 _CJK_PATTERNS = {
     "aggregation": ("多少", "几个", "几次", "哪些", "所有", "全部", "一共", "总共", "列出", "每次"),
     "temporal": ("什么时候", "哪天", "日期", "之前", "之后", "最早", "最近", "最新", "第一次", "最后", "期间"),
-    "preference": ("喜欢", "偏好", "更爱", "最爱", "讨厌", "不喜欢", "避免", "推荐"),
+    "preference": ("喜欢", "偏好", "更爱", "最爱", "讨厌", "不喜欢", "避免", "推荐",
+                   "忌口", "过敏", "饮食禁忌"),
     "current": ("现在", "当前", "目前", "如今", "最新", "还", "是否仍", "不再"),
     "relation": ("同事", "朋友", "老板", "经理", "伴侣", "孩子", "父母", "姐姐", "妹妹", "哥哥", "弟弟", "公司", "职业", "搬到", "住在"),
     "exact": ("邮箱", "电话", "链接", "地址", "编号", "代码", "号码"),
