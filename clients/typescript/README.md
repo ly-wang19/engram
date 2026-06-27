@@ -1,6 +1,6 @@
 # engram-memory (TypeScript/JavaScript SDK)
 
-Official SDK for [Engram](https://github.com/your-org/engram) — the open-source long-term memory engine
+Official SDK for [Engram](https://github.com/ly-wang19/engram) — the open-source long-term memory engine
 for LLM agents. Zero runtime dependencies (uses the global `fetch`); works in Node 18+, browsers, Deno,
 Bun, and edge runtimes.
 
