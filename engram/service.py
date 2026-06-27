@@ -893,13 +893,15 @@ class MemoryService:
             "consolidation_backlog": bool(pending_episodes),
         }
 
-    def export(self, user: str, include_sensitive: bool = True) -> dict:
-        """Data export. With `include_sensitive=True`, this is full-fidelity portability: every fact's
-        bi-temporal stamps + provenance, raw episodes, summaries, profile, focus, and graph.
+    def export(self, user: str, include_sensitive: bool = False) -> dict:
+        """Data export.
 
-        With `include_sensitive=False`, the payload is a share-safe structured export: only non-sensitive
-        facts plus a graph derived from those facts. Free-text layers (profile, raw episodes, summaries)
-        are omitted because they can fold sensitive content into prose."""
+        Default is a share-safe structured export: only non-sensitive facts plus a graph derived from
+        those facts. Free-text layers (profile, raw episodes, summaries) are omitted because they can
+        fold sensitive content into prose. With `include_sensitive=True`, this is full-fidelity
+        portability: every fact's bi-temporal stamps + provenance, raw episodes, summaries, profile,
+        focus, and graph.
+        """
         mem = self.get(user)
         _facts = [f for f in _all_facts(mem)
                   if include_sensitive or not getattr(f, "sensitive", False)]

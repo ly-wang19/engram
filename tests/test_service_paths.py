@@ -347,6 +347,7 @@ def test_service_memories_and_export_include_cold_facts(tmp_path):
     assert {f["object"] for f in memories["facts"]} == {"cold-value", "hot-value"}
 
     exported = svc.export("u")
+    assert exported["include_sensitive"] is False
     assert {f["object"] for f in exported["facts"]} == {"cold-value", "hot-value"}
 
 

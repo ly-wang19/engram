@@ -511,7 +511,14 @@ def test_export_without_sensitive_omits_free_text_layers_and_sensitive_graph(cli
     client.post("/v1/facts", json={"predicate": "has_disease", "object": "diabetes"}, headers=h)
     client.post("/v1/facts", json={"predicate": "works_at", "object": "Acme"}, headers=h)
 
-    full = client.get("/v1/export", headers=h).json()
+    default_safe = client.get("/v1/export", headers=h).json()
+    assert default_safe["include_sensitive"] is False
+    assert default_safe["redacted_sensitive"] is True
+    assert "diabetes" not in str(default_safe).lower()
+    assert default_safe["profile"] == ""
+    assert default_safe["episodes"] == []
+
+    full = client.get("/v1/export?include_sensitive=true", headers=h).json()
     assert full["include_sensitive"] is True
     assert any("diabetes" in f["text"].lower() for f in full["facts"])
     assert full["episodes"]

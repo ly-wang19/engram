@@ -628,11 +628,13 @@ def graph(
 
 # --- ④ privacy: full data export (GDPR-style portability); erase is POST /v1/forget ---
 @app.get("/v1/export")
-def export(include_sensitive: bool = True, user: str = Depends(auth)):
-    """Download EVERYTHING stored for this user as a single JSON (data portability). Full fidelity:
-    every fact's bi-temporal stamps + provenance, raw episodes, summaries, profile, and focus.
-    `include_sensitive=false` returns a share-safe structured export: non-sensitive facts + their graph,
-    with free-text profile/episodes/summaries omitted."""
+def export(include_sensitive: bool = False, user: str = Depends(auth)):
+    """Download this user's memory as JSON (data portability).
+
+    Defaults to a share-safe structured export: non-sensitive facts + their graph, with free-text
+    profile/episodes/summaries omitted. Pass `include_sensitive=true` only for an explicit full private
+    export with every fact's bi-temporal stamps + provenance, raw episodes, summaries, profile, and focus.
+    """
     from fastapi.responses import JSONResponse
 
     data = svc().export(user, include_sensitive=include_sensitive)
