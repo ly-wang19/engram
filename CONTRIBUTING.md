@@ -40,9 +40,9 @@ Engram stands on its own. Be confident, but honest.
 
 - **Don't name-drop or benchmark-compare competitors** in public-facing copy, and don't frame features as
   "borrowed from <big company>". Describe what *Engram* does, on its own merits.
-- **No unbenchmarked claims.** Don't write "scales to 1M tokens", "SOTA", "#1", or similar unless a
-  committed log backs it. Prefer the *proven* property (e.g. "the retrieved slice stays small as history
-  grows, so cost stays flat") over an aspirational number.
+- **No unbenchmarked claims.** Don't write "scales to 1M tokens", "SOTA", "#1", "cost stays flat as
+  history grows", or similar unless a committed log backs it. Prefer the proven property (e.g. "answers
+  from a retrieved slice rather than replaying the full history") over an aspirational scaling claim.
 - **No stale status.** Don't leave "in progress / 验证中 / coming soon" on something that's already done
   (or vice versa). Keep the **English and 中文** copy in sync (README ×2, landing page).
 
