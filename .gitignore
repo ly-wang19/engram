@@ -11,6 +11,7 @@ dist/
 .ruff_cache/
 .mypy_cache/
 .pnpm-store/
+frontend/pnpm-workspace.yaml
 .coverage
 htmlcov/
 
