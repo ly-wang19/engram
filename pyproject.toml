@@ -38,6 +38,7 @@ dev = ["pytest>=7.0", "pytest-asyncio>=0.23", "ruff>=0.4"]
 all = ["engram-memory[server,mcp,embeddings,backends,llm,eval,dev]"]
 
 [project.scripts]
+engram-quickstart = "engram.quickstart:main"       # zero-setup installed demo
 engram-mcp = "engram.mcp.__main__:main"            # run the MCP server
 engram-import = "engram.connectors.__main__:main"  # import a chat/history export
 engram-migrate-pickle = "engram.store.migrate:main" # migrate trusted legacy pickle snapshots

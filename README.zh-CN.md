@@ -117,6 +117,8 @@ flowchart TB
 
 ```bash
 python examples/quickstart.py
+# 或者安装后：
+engram-quickstart
 ```
 
 用离线确定性兜底（哈希嵌入器、规则抽取器、内存存储）跑完整流程 —— 写入 → 固化 → 检索。真实后端

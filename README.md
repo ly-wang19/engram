@@ -71,6 +71,8 @@ same discipline to larger corpora is the active roadmap, alongside the hardest c
 
 ```bash
 python examples/quickstart.py
+# or, after pip install:
+engram-quickstart
 ```
 
 Runs the full pipeline — ingest → consolidate → retrieve — using offline deterministic fallbacks (hashing
