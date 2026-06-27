@@ -3,8 +3,8 @@
 
 This script intentionally uses only the Python standard library. It is the quick
 confidence check for contributors before they install optional services or test
-dependencies: quickstart, offline eval, evidence-log validation, paper stats, and
-stdlib compilation.
+dependencies: source + installed-module quickstarts, offline eval, evidence-log validation, paper stats,
+and stdlib compilation.
 """
 from __future__ import annotations
 
@@ -78,7 +78,8 @@ def main(argv: list[str] | None = None) -> int:
 
     with tempfile.TemporaryDirectory(prefix="engram_zero_setup_") as tmp:
         synthetic_log = Path(tmp) / "synthetic_durable.jsonl"
-        run_step("quickstart", [py, "examples/quickstart.py"])
+        run_step("source quickstart", [py, "examples/quickstart.py"])
+        run_step("installed-module quickstart", [py, "-m", "engram.quickstart"])
         run_step("offline synthetic eval", [py, "eval/harness.py"])
         run_step(
             "durable smoke eval",

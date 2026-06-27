@@ -14,6 +14,7 @@ def test_package_metadata_links_to_real_repository():
     ts_readme = (ROOT / "clients/typescript/README.md").read_text(encoding="utf-8")
     ts_index = (ROOT / "clients/typescript/src/index.ts").read_text(encoding="utf-8")
     quickstart_example = (ROOT / "examples/quickstart.py").read_text(encoding="utf-8")
+    zero_setup = (ROOT / "scripts/check_zero_setup.py").read_text(encoding="utf-8")
 
     assert "your-org" not in pyproject
     assert "your-org" not in ts_package_text
@@ -26,6 +27,7 @@ def test_package_metadata_links_to_real_repository():
     assert 'license-files = ["LICENSE", "COMMERCIAL-LICENSE.md"]' in pyproject
     assert 'engram-quickstart = "engram.quickstart:main"' in pyproject
     assert "from engram.quickstart import main" in quickstart_example
+    assert '"-m", "engram.quickstart"' in zero_setup
     assert ts_package["repository"]["url"] == "https://github.com/ly-wang19/engram"
     assert ts_package["repository"]["directory"] == "clients/typescript"
     assert ts_package["homepage"] == "https://github.com/ly-wang19/engram/tree/main/clients/typescript"
