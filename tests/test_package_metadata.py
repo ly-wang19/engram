@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import importlib
 import json
+import tomllib
 from pathlib import Path
 
 
@@ -36,3 +38,16 @@ def test_package_metadata_links_to_real_repository():
     assert "](../../" not in ts_readme
     assert "https://github.com/ly-wang19/engram/blob/main/LICENSE" in ts_readme
     assert "https://github.com/ly-wang19/engram/blob/main/COMMERCIAL-LICENSE.md" in ts_readme
+
+
+def test_python_console_scripts_resolve_to_callables():
+    pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    scripts = pyproject["project"]["scripts"]
+
+    assert scripts
+    for name, target in scripts.items():
+        module_name, _, attr = target.partition(":")
+        assert module_name and attr, f"{name} target must be module:callable"
+        module = importlib.import_module(module_name)
+        func = getattr(module, attr, None)
+        assert callable(func), f"{name} target {target} is not callable"
