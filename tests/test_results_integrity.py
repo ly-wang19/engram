@@ -250,6 +250,17 @@ def test_public_headline_claims_are_traceable_to_results():
         assert "RESULTS.md" in text, f"{rel} must link headline claims back to methodology/raw logs"
 
 
+def test_contributor_headline_claims_match_results():
+    expected_claims = ("83.6", "73.2", "+10.4", "9.6k", "79k")
+    stale_claims = ("74.8", "+8.8")
+    for rel in ("AGENTS.md", "CLAUDE.md"):
+        text = (ROOT / rel).read_text(encoding="utf-8")
+        for claim in expected_claims:
+            assert claim in text, f"{claim!r} missing from {rel}"
+        for claim in stale_claims:
+            assert claim not in text, f"stale claim {claim!r} found in {rel}"
+
+
 def test_public_derived_headline_claims_match_raw_logs():
     lean = _metrics(ROOT / "results/longmemeval_s_engram_lean_v2_final.jsonl", "engram_lean")
     baseline = _metrics(ROOT / "results/longmemeval_s_volcano_doubao_deepseekjudge.jsonl", "full_context")
