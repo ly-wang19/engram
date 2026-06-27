@@ -37,6 +37,7 @@
   "engines": { "node": ">=18" },
   "repository": { "type": "git", "url": "https://github.com/ly-wang19/engram", "directory": "clients/typescript" },
   "homepage": "https://github.com/ly-wang19/engram/tree/main/clients/typescript",
+  "bugs": { "url": "https://github.com/ly-wang19/engram/issues" },
   "devDependencies": {
     "tsup": "^8.0.0",
     "typescript": "^5.4.0"

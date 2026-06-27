@@ -48,6 +48,8 @@ engram-agent-doctor = "engram.agent_doctor:main"   # verify an agent's Python/MC
 [project.urls]
 Homepage = "https://github.com/ly-wang19/engram"
 Repository = "https://github.com/ly-wang19/engram"
+Documentation = "https://github.com/ly-wang19/engram#readme"
+Issues = "https://github.com/ly-wang19/engram/issues"
 
 [tool.hatch.build.targets.wheel]
 packages = ["engram"]

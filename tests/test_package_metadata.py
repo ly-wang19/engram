@@ -18,5 +18,8 @@ def test_package_metadata_links_to_real_repository():
     assert "your-org" not in ts_index
     assert 'Homepage = "https://github.com/ly-wang19/engram"' in pyproject
     assert 'Repository = "https://github.com/ly-wang19/engram"' in pyproject
+    assert 'Documentation = "https://github.com/ly-wang19/engram#readme"' in pyproject
+    assert 'Issues = "https://github.com/ly-wang19/engram/issues"' in pyproject
     assert '"url": "https://github.com/ly-wang19/engram"' in ts_package
     assert '"homepage": "https://github.com/ly-wang19/engram/tree/main/clients/typescript"' in ts_package
+    assert '"bugs": { "url": "https://github.com/ly-wang19/engram/issues" }' in ts_package
