@@ -65,7 +65,7 @@ def test_results_md_raw_log_links_exist():
         assert (ROOT / link).exists(), link
 
 
-def test_paper_done_result_logs_exist():
+def test_paper_done_result_logs_are_complete_and_scored():
     text = (ROOT / "paper/EXPERIMENTS_CHECKLIST.md").read_text(encoding="utf-8")
     links = set()
     for line in text.splitlines():
@@ -73,7 +73,36 @@ def test_paper_done_result_logs_exist():
             links.update(re.findall(r"results/[A-Za-z0-9_.-]+\.jsonl", line))
     assert links
     for link in links:
-        assert (ROOT / link).exists(), link
+        path = ROOT / link
+        assert path.exists(), link
+        rows = _rows(path)
+        qids = [row["qid"] for row in rows]
+        assert len(rows) == 500, link
+        assert len(qids) == len(set(qids)), f"{link} contains duplicate qids"
+        systems = sorted({system for row in rows for system in row.get("sys", {})})
+        assert systems, link
+        for system in systems:
+            scored = []
+            errors = 0
+            for i, row in enumerate(rows, start=1):
+                assert isinstance(row.get("cat"), str) and row["cat"], f"{link}:{i} missing cat"
+                result = row.get("sys", {}).get(system)
+                assert isinstance(result, dict), f"{link}:{i} missing {system}"
+                assert {"ok", "tok", "lat", "err"} <= set(result), (
+                    f"{link}:{i} {system} missing required result keys"
+                )
+                assert isinstance(result["tok"], int) and result["tok"] >= 0, f"{link}:{i} {system} bad tok"
+                assert isinstance(result["lat"], (int, float)) and result["lat"] >= 0, (
+                    f"{link}:{i} {system} bad lat"
+                )
+                if result["err"]:
+                    errors += 1
+                elif result["ok"] is not None:
+                    assert isinstance(result["ok"], bool), f"{link}:{i} {system} bad ok"
+                    assert {"pred", "gold"} <= set(result), f"{link}:{i} {system} missing pred/gold"
+                    scored.append(result)
+            assert errors == 0, f"{link}:{system} has errors"
+            assert len(scored) == len(rows), f"{link}:{system} is not fully scored"
 
 
 def test_results_md_raw_logs_have_required_schema():
