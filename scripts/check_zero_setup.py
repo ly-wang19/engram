@@ -23,6 +23,13 @@ EVIDENCE_REQUIREMENTS: dict[Path, tuple[str, ...]] = {
     ROOT / "results/longmemeval_s_engram_lean_v2_final.jsonl": ("engram_lean",),
     ROOT / "results/longmemeval_s_volcano_doubao_deepseekjudge.jsonl": ("full_context",),
 }
+CONSOLE_HELP_MODULES = (
+    "engram.agent_doctor",
+    "engram.agent_setup",
+    "engram.connectors",
+    "engram.mcp",
+    "engram.store.migrate",
+)
 
 
 def _rel(path: Path) -> str:
@@ -80,6 +87,8 @@ def main(argv: list[str] | None = None) -> int:
         synthetic_log = Path(tmp) / "synthetic_durable.jsonl"
         run_step("source quickstart", [py, "examples/quickstart.py"])
         run_step("installed-module quickstart", [py, "-m", "engram.quickstart"])
+        for module in CONSOLE_HELP_MODULES:
+            run_step(f"console help: {module}", [py, "-m", module, "--help"])
         run_step("offline synthetic eval", [py, "eval/harness.py"])
         run_step(
             "durable smoke eval",

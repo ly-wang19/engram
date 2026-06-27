@@ -30,6 +30,14 @@ def test_package_metadata_links_to_real_repository():
     assert 'engram-quickstart = "engram.quickstart:main"' in pyproject
     assert "from engram.quickstart import main" in quickstart_example
     assert '"-m", "engram.quickstart"' in zero_setup
+    for module in (
+        "engram.agent_doctor",
+        "engram.agent_setup",
+        "engram.connectors",
+        "engram.mcp",
+        "engram.store.migrate",
+    ):
+        assert f'"{module}"' in zero_setup
     assert ts_package["repository"]["url"] == "https://github.com/ly-wang19/engram"
     assert ts_package["repository"]["directory"] == "clients/typescript"
     assert ts_package["homepage"] == "https://github.com/ly-wang19/engram/tree/main/clients/typescript"
