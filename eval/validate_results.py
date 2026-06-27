@@ -13,7 +13,9 @@ from pathlib import Path
 from typing import Any
 
 
-REQUIRED_RESULT_KEYS = {"ok", "tok", "lat", "err"}
+BENCH_REQUIRED_RESULT_KEYS = {"ok", "tok", "lat", "err"}
+PERSONAMEM_REQUIRED_RESULT_KEYS = {"ok", "tok", "lat", "pick"}
+SCHEMAS = {"bench", "personamem"}
 
 
 def _load_rows(path: Path) -> tuple[list[dict[str, Any]], list[str]]:
@@ -43,12 +45,15 @@ def validate_bench_log(
     *,
     expected_rows: int | None = None,
     require_complete: bool = False,
+    schema: str = "bench",
 ) -> list[str]:
     """Return validation errors for a ``bench.py`` JSONL log.
 
     ``require_complete`` is the standard for published/DONE evidence: every discovered system must have a
     scored, non-error result on every row, with prediction and gold present.
     """
+    if schema not in SCHEMAS:
+        return [f"{path}: unknown schema {schema!r}; expected one of {sorted(SCHEMAS)}"]
     path = Path(path)
     rows, errors = _load_rows(path)
     if errors:
@@ -67,9 +72,14 @@ def validate_bench_log(
             errors.append(f"{prefix}: missing qid")
         else:
             qids.append(qid)
-        cat = row.get("cat")
-        if not isinstance(cat, str) or not cat:
-            errors.append(f"{prefix}: missing cat")
+        if schema == "bench":
+            cat = row.get("cat")
+            if not isinstance(cat, str) or not cat:
+                errors.append(f"{prefix}: missing cat")
+        else:
+            pref_type = row.get("pref_type")
+            if not isinstance(pref_type, str) or not pref_type:
+                errors.append(f"{prefix}: missing pref_type")
         sys_obj = row.get("sys")
         if not isinstance(sys_obj, dict) or not sys_obj:
             errors.append(f"{prefix}: missing sys")
@@ -79,7 +89,7 @@ def validate_bench_log(
                 errors.append(f"{prefix}: empty system name")
                 continue
             systems.add(system)
-            _validate_result(prefix, system, result, require_complete, errors)
+            _validate_result(prefix, system, result, require_complete, schema, errors)
 
     if len(qids) != len(set(qids)):
         errors.append(f"{path}: duplicate qids")
@@ -95,7 +105,7 @@ def validate_bench_log(
                 if result is None:
                     missing += 1
                     continue
-                if result.get("err"):
+                if schema == "bench" and result.get("err"):
                     errored += 1
                 elif result.get("ok") is not None:
                     scored += 1
@@ -113,12 +123,14 @@ def _validate_result(
     system: str,
     result: Any,
     require_complete: bool,
+    schema: str,
     errors: list[str],
 ) -> None:
     if not isinstance(result, dict):
         errors.append(f"{prefix}: {system} result must be object")
         return
-    missing = REQUIRED_RESULT_KEYS - set(result)
+    required = BENCH_REQUIRED_RESULT_KEYS if schema == "bench" else PERSONAMEM_REQUIRED_RESULT_KEYS
+    missing = required - set(result)
     if missing:
         errors.append(f"{prefix}: {system} missing keys {sorted(missing)}")
         return
@@ -128,6 +140,10 @@ def _validate_result(
         errors.append(f"{prefix}: {system} tok must be a non-negative int")
     if not isinstance(result["lat"], (int, float)) or result["lat"] < 0:
         errors.append(f"{prefix}: {system} lat must be a non-negative number")
+    if schema == "personamem":
+        if not isinstance(result["pick"], int) or not -1 <= result["pick"] <= 3:
+            errors.append(f"{prefix}: {system} pick must be an int in [-1, 3]")
+        return
     if result["err"] is not None and not isinstance(result["err"], str):
         errors.append(f"{prefix}: {system} err must be string or null")
     if result["err"] is None and result["ok"] is not None:
@@ -139,6 +155,12 @@ def _validate_result(
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="Validate Engram benchmark JSONL logs.")
     ap.add_argument("logs", nargs="+", help="results/*.jsonl files to validate")
+    ap.add_argument(
+        "--schema",
+        choices=sorted(SCHEMAS),
+        default="bench",
+        help="log schema to validate: bench.py JSONL or eval/personamem.py JSONL",
+    )
     ap.add_argument("--expected-rows", type=int, default=None, help="require an exact row count")
     ap.add_argument(
         "--require-complete",
@@ -153,6 +175,7 @@ def main(argv: list[str] | None = None) -> int:
             log,
             expected_rows=args.expected_rows,
             require_complete=args.require_complete,
+            schema=args.schema,
         )
         if errors:
             all_errors.extend(errors)

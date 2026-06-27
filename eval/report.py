@@ -98,7 +98,7 @@ def format_bench_report(path: str, rows: list[dict]) -> str:
     for r in rows:
         # abstention items (qid ..._abs) are graded by the official 'unanswerable' judge — break them out
         # as their own bucket so the 'do-not-refuse' prompt tension is visible, not hidden in the category.
-        cat = "abstention" if str(r.get("qid", "")).endswith("_abs") else r.get("cat", "?")
+        cat = "abstention" if str(r.get("qid", "")).endswith("_abs") else r.get("cat") or r.get("pref_type", "?")
         for s in systems:
             res = r.get("sys", {}).get(s)
             if not res:
@@ -111,19 +111,20 @@ def format_bench_report(path: str, rows: list[dict]) -> str:
                 lats[s].append(res.get("lat", 0.0))
 
     cats = sorted({c for s in systems for c in acc[s]})
+    cat_w = max(26, *(len(c) for c in cats), len("avg context tokens")) + 2
     w = max(14, *(len(s) for s in systems)) if systems else 14
     lines = [f"\nFILE: {path}   ({len(rows)} items written)\n"]
-    header = "  " + "category".ljust(26) + "".join(s.ljust(w + 2) for s in systems)
+    header = "  " + "category".ljust(cat_w) + "".join(s.ljust(w + 2) for s in systems)
     lines.append(header)
-    lines.append("  " + "-" * (26 + (w + 2) * len(systems)))
+    lines.append("  " + "-" * (cat_w + (w + 2) * len(systems)))
     for cat in cats:
-        line = "  " + cat.ljust(26)
+        line = "  " + cat.ljust(cat_w)
         for s in systems:
             vs = acc[s].get(cat, [])
             line += (f"{100*sum(vs)/len(vs):.1f}% ({len(vs)})" if vs else "-").ljust(w + 2)
         lines.append(line)
-    lines.append("  " + "-" * (26 + (w + 2) * len(systems)))
-    line = "  " + "OVERALL".ljust(26)
+    lines.append("  " + "-" * (cat_w + (w + 2) * len(systems)))
+    line = "  " + "OVERALL".ljust(cat_w)
     overall: dict[str, float] = {}
     scored_counts: dict[str, int] = {}
     for s in systems:
@@ -132,40 +133,44 @@ def format_bench_report(path: str, rows: list[dict]) -> str:
         overall[s] = 100 * sum(allv) / len(allv) if allv else 0.0
         line += (f"{overall[s]:.1f}% ({len(allv)})" if allv else "-").ljust(w + 2)
     lines.append(line)
-    line = "  " + "scored items".ljust(26)
+    line = "  " + "scored items".ljust(cat_w)
     for s in systems:
         line += (f"{scored_counts[s]}/{len(rows)}" if rows else "-").ljust(w + 2)
     lines.append(line)
-    line = "  " + "avg context tokens".ljust(26)
+    line = "  " + "avg context tokens".ljust(cat_w)
     for s in systems:
         line += (f"{sum(toks[s])//len(toks[s])}" if toks[s] else "-").ljust(w + 2)
     lines.append(line)
-    line = "  " + "p50 latency ms".ljust(26)
+    line = "  " + "p50 latency ms".ljust(cat_w)
     for s in systems:
         if lats[s]:
             line += f"{_percentile(lats[s], 50):.0f}".ljust(w + 2)
         else:
             line += "-".ljust(w + 2)
     lines.append(line)
-    line = "  " + "p95 latency ms".ljust(26)
+    line = "  " + "p95 latency ms".ljust(cat_w)
     for s in systems:
         if lats[s]:
             line += f"{_percentile(lats[s], 95):.0f}".ljust(w + 2)
         else:
             line += "-".ljust(w + 2)
     lines.append(line)
-    line = "  " + "errors".ljust(26)
+    line = "  " + "errors".ljust(cat_w)
     for s in systems:
         line += str(errs[s]).ljust(w + 2)
     lines.append(line)
 
-    lines.append("\n  Public LongMemEval_S SOTA (overall):")
-    for name, score in SOTA.items():
-        best = max(overall.values()) if overall else 0.0
-        flag = ""
-        if best:
-            flag = "  <- WE BEAT THIS" if best >= score else f"  (gap {score - best:+.1f})"
-        lines.append(f"    {name:22s} {score:.1f}{flag}")
+    is_personamem = any("pref_type" in r for r in rows)
+    if not is_personamem:
+        lines.append("\n  Public LongMemEval_S SOTA (overall):")
+        for name, score in SOTA.items():
+            best = max(overall.values()) if overall else 0.0
+            flag = ""
+            if best:
+                flag = "  <- WE BEAT THIS" if best >= score else f"  (gap {score - best:+.1f})"
+            lines.append(f"    {name:22s} {score:.1f}{flag}")
+    else:
+        lines.append("\n  Note: PersonaMem-v2 is a multiple-choice personalization benchmark; LongMemEval_S SOTA rows do not apply.")
     lines.append("")
     return "\n".join(lines)
 

@@ -40,6 +40,15 @@ Partial logs, smoke slices, failed competitor runs, and exploratory ablations ca
 are completed or explicitly documented as exploratory. See [`../results/README.md`](../results/README.md)
 for the commit policy for raw logs.
 
+PersonaMem-v2 is a multiple-choice runner with a different JSONL shape (`pref_type` + picked option,
+not LongMemEval's `cat` + judged `pred/gold`). Validate it with the explicit schema:
+
+```bash
+python eval/personamem.py --n-personas 20 --per-persona 5 --out results/personamem_v2.jsonl
+python eval/report.py results/personamem_v2.jsonl
+python eval/validate_results.py --schema personamem --expected-rows 100 --require-complete results/personamem_v2.jsonl
+```
+
 ## Next Experiments
 
 See [`M2_RUNBOOK.md`](M2_RUNBOOK.md) and [`../paper/EXPERIMENTS_CHECKLIST.md`](../paper/EXPERIMENTS_CHECKLIST.md)
