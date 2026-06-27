@@ -9,7 +9,7 @@ description = "Engram — an open-source, reproducible long-term memory engine f
 readme = "README.md"
 requires-python = ">=3.10"
 license = "AGPL-3.0-only"
-license-files = ["LICENSE"]
+license-files = ["LICENSE", "COMMERCIAL-LICENSE.md"]
 authors = [{ name = "Engram contributors" }]
 keywords = ["memory", "llm", "agents", "rag", "knowledge-graph", "long-term-memory", "bi-temporal"]
 classifiers = [

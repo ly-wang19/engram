@@ -22,6 +22,7 @@ def test_package_metadata_links_to_real_repository():
     assert 'Repository = "https://github.com/ly-wang19/engram"' in pyproject
     assert 'Documentation = "https://github.com/ly-wang19/engram#readme"' in pyproject
     assert 'Issues = "https://github.com/ly-wang19/engram/issues"' in pyproject
+    assert 'license-files = ["LICENSE", "COMMERCIAL-LICENSE.md"]' in pyproject
     assert ts_package["repository"]["url"] == "https://github.com/ly-wang19/engram"
     assert ts_package["repository"]["directory"] == "clients/typescript"
     assert ts_package["homepage"] == "https://github.com/ly-wang19/engram/tree/main/clients/typescript"
