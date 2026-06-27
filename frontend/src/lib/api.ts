@@ -25,6 +25,12 @@ import type {
 // VITE_API_BASE when the API lives elsewhere.
 const BASE = (import.meta.env.VITE_API_BASE ?? '').replace(/\/$/, '')
 
+export function apiBaseUrl(): string {
+  if (typeof window === 'undefined') return BASE || 'http://localhost:8000'
+  if (!BASE) return window.location.origin
+  return new URL(BASE, window.location.origin).toString().replace(/\/$/, '')
+}
+
 export class ApiError extends Error {
   constructor(
     public status: number,
