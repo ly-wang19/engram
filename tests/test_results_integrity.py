@@ -321,3 +321,17 @@ def test_report_prints_scored_denominators_for_errored_systems():
     assert "scored items" in out
     assert "499/500" in out
     assert "500/500" in out
+
+
+def test_report_prints_every_requested_log():
+    out = subprocess.check_output(
+        [
+            sys.executable,
+            str(ROOT / "eval/report.py"),
+            str(ROOT / "results/headline_500.jsonl"),
+            str(ROOT / "results/bb_flash.jsonl"),
+        ],
+        text=True,
+    )
+    assert str(ROOT / "results/headline_500.jsonl") in out
+    assert str(ROOT / "results/bb_flash.jsonl") in out

@@ -1,7 +1,7 @@
 """Honest results reporter (CLAUDE.md Bet D): from a bench.py output JSONL, print the TRIPLE —
 accuracy + tokens + latency — per category and overall, for every system, next to the public SOTA.
 
-    python eval/report.py data/star.jsonl
+    python eval/report.py data/star.jsonl [more.jsonl ...]
 
 A number we cannot reproduce does not exist; this is the one place that turns raw run logs into the
 table we'd publish. It never fabricates: it reads only what the run actually scored, and it shows the
@@ -81,14 +81,9 @@ def format_synthetic_report(path: str, rows: list[dict]) -> str:
     return "\n".join(lines)
 
 
-def main() -> None:
-    if len(sys.argv) < 2:
-        print("usage: python eval/report.py <bench_output.jsonl>")
-        return
-    rows = load(sys.argv[1])
+def format_bench_report(path: str, rows: list[dict]) -> str:
     if _is_synthetic_harness_log(rows):
-        print(format_synthetic_report(sys.argv[1], rows))
-        return
+        return format_synthetic_report(path, rows)
     systems: list[str] = []
     for r in rows:
         for s in r.get("sys", {}):
@@ -117,17 +112,17 @@ def main() -> None:
 
     cats = sorted({c for s in systems for c in acc[s]})
     w = max(14, *(len(s) for s in systems)) if systems else 14
-    print(f"\nFILE: {sys.argv[1]}   ({len(rows)} items written)\n")
+    lines = [f"\nFILE: {path}   ({len(rows)} items written)\n"]
     header = "  " + "category".ljust(26) + "".join(s.ljust(w + 2) for s in systems)
-    print(header)
-    print("  " + "-" * (26 + (w + 2) * len(systems)))
+    lines.append(header)
+    lines.append("  " + "-" * (26 + (w + 2) * len(systems)))
     for cat in cats:
         line = "  " + cat.ljust(26)
         for s in systems:
             vs = acc[s].get(cat, [])
             line += (f"{100*sum(vs)/len(vs):.1f}% ({len(vs)})" if vs else "-").ljust(w + 2)
-        print(line)
-    print("  " + "-" * (26 + (w + 2) * len(systems)))
+        lines.append(line)
+    lines.append("  " + "-" * (26 + (w + 2) * len(systems)))
     line = "  " + "OVERALL".ljust(26)
     overall: dict[str, float] = {}
     scored_counts: dict[str, int] = {}
@@ -136,42 +131,51 @@ def main() -> None:
         scored_counts[s] = len(allv)
         overall[s] = 100 * sum(allv) / len(allv) if allv else 0.0
         line += (f"{overall[s]:.1f}% ({len(allv)})" if allv else "-").ljust(w + 2)
-    print(line)
+    lines.append(line)
     line = "  " + "scored items".ljust(26)
     for s in systems:
         line += (f"{scored_counts[s]}/{len(rows)}" if rows else "-").ljust(w + 2)
-    print(line)
+    lines.append(line)
     line = "  " + "avg context tokens".ljust(26)
     for s in systems:
         line += (f"{sum(toks[s])//len(toks[s])}" if toks[s] else "-").ljust(w + 2)
-    print(line)
+    lines.append(line)
     line = "  " + "p50 latency ms".ljust(26)
     for s in systems:
         if lats[s]:
             line += f"{_percentile(lats[s], 50):.0f}".ljust(w + 2)
         else:
             line += "-".ljust(w + 2)
-    print(line)
+    lines.append(line)
     line = "  " + "p95 latency ms".ljust(26)
     for s in systems:
         if lats[s]:
             line += f"{_percentile(lats[s], 95):.0f}".ljust(w + 2)
         else:
             line += "-".ljust(w + 2)
-    print(line)
+    lines.append(line)
     line = "  " + "errors".ljust(26)
     for s in systems:
         line += str(errs[s]).ljust(w + 2)
-    print(line)
+    lines.append(line)
 
-    print("\n  Public LongMemEval_S SOTA (overall):")
+    lines.append("\n  Public LongMemEval_S SOTA (overall):")
     for name, score in SOTA.items():
         best = max(overall.values()) if overall else 0.0
         flag = ""
         if best:
             flag = "  <- WE BEAT THIS" if best >= score else f"  (gap {score - best:+.1f})"
-        print(f"    {name:22s} {score:.1f}{flag}")
-    print()
+        lines.append(f"    {name:22s} {score:.1f}{flag}")
+    lines.append("")
+    return "\n".join(lines)
+
+
+def main() -> None:
+    if len(sys.argv) < 2:
+        print("usage: python eval/report.py <bench_output.jsonl> [more.jsonl ...]")
+        return
+    for path in sys.argv[1:]:
+        print(format_bench_report(path, load(path)))
 
 
 if __name__ == "__main__":
