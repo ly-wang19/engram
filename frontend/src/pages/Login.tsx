@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from 'react'
-import { ArrowRight, KeyRound } from 'lucide-react'
+import { ArrowRight, KeyRound, Sparkles } from 'lucide-react'
 
 import { Brand } from '../components/Sidebar'
 import { Button } from '../components/ui'
@@ -12,7 +12,7 @@ export default function Login() {
   const login = useAuth((s) => s.login)
   const t = useT()
   const health = useHealth()
-  const [key, setKey] = useState('1') // demo namespace: public, fully-loaded memory to explore
+  const [key, setKey] = useState(() => makePrivateKey())
 
   const submit = (e: FormEvent) => {
     e.preventDefault()
@@ -59,6 +59,15 @@ export default function Login() {
               />
             </div>
           </label>
+          <div className="mt-3 grid gap-2 sm:grid-cols-2">
+            <Button type="button" variant="ghost" onClick={() => setKey(makePrivateKey())}>
+              <Sparkles className="h-4 w-4" /> {t.login.generateKey}
+            </Button>
+            <Button type="button" variant="ghost" onClick={() => setKey('1')}>
+              <KeyRound className="h-4 w-4" /> {t.login.useDemoKey}
+            </Button>
+          </div>
+          <p className="mt-2 text-xs leading-relaxed text-ghost">{t.login.keyHint}</p>
 
           <Button type="submit" className="mt-6 w-full" disabled={!key.trim()}>
             {t.login.submit} <ArrowRight className="h-4 w-4" />
@@ -69,4 +78,9 @@ export default function Login() {
       </div>
     </div>
   )
+}
+
+function makePrivateKey() {
+  if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) return `engram-${crypto.randomUUID()}`
+  return `engram-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`
 }
