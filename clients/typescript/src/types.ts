@@ -183,11 +183,11 @@ export interface MemoryListOptions {
   query?: string
   /** Alias for query, matching the HTTP parameter. */
   q?: string
-  /** Owner view defaults to true; pass false for a share-safe list that omits sensitive facts/free text. */
+  /** Defaults to a share-safe list; pass true only for explicit owner-visible raw episodes/profile. */
   includeSensitive?: boolean
 }
 
-/** Everything stored for a user (GET /v1/memories). */
+/** Paged memory view (GET /v1/memories); share-safe by default. */
 export interface MemoryDump {
   user: string
   profile: string

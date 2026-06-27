@@ -20,7 +20,11 @@ import type { RememberScope } from '../types'
 
 export default function Conversations() {
   const [limit, setLimit] = useState(20)
-  const { data, isLoading, isError, error } = useMemories({ facts_limit: 0, episodes_limit: limit })
+  const { data, isLoading, isError, error } = useMemories({
+    facts_limit: 0,
+    episodes_limit: limit,
+    include_sensitive: true,
+  })
   const remember = useRemember()
   const [sessionId, setSessionId] = useState('console:manual')
   const currentSession = sessionId.trim() || 'default'

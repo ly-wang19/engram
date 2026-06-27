@@ -114,7 +114,7 @@ const fullPrivate = await engram.export({ includeSensitive: true })
 // Content-free session index: which Codex / Claude / app sessions touched this namespace.
 const sessions = await engram.sessions({ limit: 20, query: 'claude-code' })
 
-// Owner view: paginate and search the user's editable memories.
+// Share-safe/default view: paginate and search editable non-sensitive facts.
 const page = await engram.memories({
   factsLimit: 50,
   factsOffset: 0,
@@ -123,11 +123,11 @@ const page = await engram.memories({
   query: 'work',
 })
 
-// Share-safe/list-preview view: omit sensitive facts plus free-text layers.
-const safePage = await engram.memories({
+// Owner-visible inspection view: include raw episodes, profile, and sensitive facts.
+const fullPrivatePage = await engram.memories({
   factsLimit: 50,
-  episodesLimit: 0,
-  includeSensitive: false,
+  episodesLimit: 10,
+  includeSensitive: true,
 })
 ```
 
@@ -142,7 +142,7 @@ const safePage = await engram.memories({
 | `sessions({ limit?, offset?, query? })` | GET /v1/sessions | content-free cross-agent/app session index |
 | `sessionReport(sessionId, { includeSensitive? })` | GET /v1/sessions/report | `SessionReport` for what this session saved |
 | `search(query, { asOf?, redactSensitive? })` | POST /v1/recall | `SearchResult` |
-| `memories({ factsLimit?, factsOffset?, episodesLimit?, episodesOffset?, status?, query?, includeSensitive? })` | GET /v1/memories | paged `MemoryDump` for user-owned memory management |
+| `memories({ factsLimit?, factsOffset?, episodesLimit?, episodesOffset?, status?, query?, includeSensitive? })` | GET /v1/memories | paged `MemoryDump`; share-safe by default, full owner-visible view with `includeSensitive: true` |
 | `agentStatus({ sessionId? })` | GET /v1/agent/status | `AgentStatus` content-free namespace/session/focus/counts/next actions |
 | `stats()` | GET /v1/stats | `MemoryStats` content-free namespace observability, including consolidation backlog, hot/cold fact tiers, and page-in/out counts |
 | `profile()` | GET /v1/profile | `ProfileResult` |

@@ -374,7 +374,15 @@ def test_memories_endpoint_supports_pagination_filtering_and_sensitive_create(cl
         "sensitive": True,
     }, headers=h)
 
-    episode_page = client.get("/v1/memories?facts_limit=0&episodes_limit=1", headers=h).json()
+    safe_default = client.get("/v1/memories?facts_limit=10&episodes_limit=1", headers=h).json()
+    assert safe_default["profile"] == ""
+    assert safe_default["episodes"] == []
+    assert all(not f["sensitive"] for f in safe_default["facts"])
+
+    episode_page = client.get(
+        "/v1/memories?facts_limit=0&episodes_limit=1&include_sensitive=true",
+        headers=h,
+    ).json()
     assert len(episode_page["episodes"]) == 1
     assert episode_page["episodes_page"]["total"] == 2
     assert episode_page["episodes_page"]["has_more"] is True

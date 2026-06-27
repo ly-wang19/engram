@@ -350,11 +350,15 @@ def memories(
     episodes_offset: int = 0,
     status: Optional[str] = None,
     q: str = "",
-    include_sensitive: bool = True,
+    include_sensitive: bool = False,
     user: str = Depends(auth),
 ):
-    """See EVERYTHING stored for this user — the raw episodes, the extracted bi-temporal facts (live and
-    superseded, with provenance), and the L2 session summaries. This is the 'look inside my memory' view."""
+    """Browse stored memory.
+
+    Defaults to a share-safe view: non-sensitive facts plus content-free counts, with profile/raw episodes
+    omitted. Pass `include_sensitive=true` only for an explicit owner-visible inspection view with raw
+    episodes, summaries, profile, and sensitive facts.
+    """
     return svc().memories(
         user,
         facts_limit=facts_limit,

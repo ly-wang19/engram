@@ -738,10 +738,14 @@ class MemoryService:
         episodes_offset: int = 0,
         status: Optional[str] = None,
         q: str = "",
-        include_sensitive: bool = True,
+        include_sensitive: bool = False,
     ) -> dict:
-        """Everything stored for this user: profile, counts, bi-temporal facts (live + superseded with
-        provenance), raw episodes + L2 summaries. The 'look inside my memory' payload."""
+        """Browse stored memory.
+
+        Default is share-safe: non-sensitive facts plus content-free counts, with profile/raw episodes
+        omitted. With `include_sensitive=True`, this is the owner-visible inspection payload: profile,
+        raw episodes + L2 summaries, and sensitive facts.
+        """
         from .localize import display_of  # localized rendering for Chinese-recorded facts
 
         mem = self.get(user)
