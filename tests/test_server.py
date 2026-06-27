@@ -46,6 +46,16 @@ def test_health(client):
     assert "data_dir" not in data and "api_keys" not in data
 
 
+def test_private_api_responses_are_not_cacheable(client):
+    h = hdr("cache_headers")
+
+    memories = client.get("/v1/memories", headers=h)
+    exported = client.get("/v1/export", headers=h)
+
+    assert memories.headers["cache-control"] == "no-store"
+    assert exported.headers["cache-control"] == "no-store"
+
+
 def test_remember_recall_roundtrip(client):
     h = hdr("alice")
     assert client.post("/v1/remember", json={"content": "My name is Wei and I live in Shenzhen."},

@@ -91,7 +91,9 @@ app = FastAPI(
 async def cache_headers(request: Request, call_next):
     response = await call_next(request)
     path = request.url.path
-    if path.startswith("/ui/assets/"):
+    if path.startswith("/v1/"):
+        response.headers["Cache-Control"] = "no-store"
+    elif path.startswith("/ui/assets/"):
         response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
     elif path == "/ui" or path.startswith("/ui/") or path == "/":
         response.headers["Cache-Control"] = "no-cache"
