@@ -29,8 +29,8 @@ export function Timeline({ facts }: { facts: MemoryFact[] }) {
                   live ? 'bg-brand-mint' : 'bg-slate-500',
                 )}
               />
-              <div className="min-w-0">
-                <span className={cx('text-sm', !live && 'text-ghost line-through')}>{f.display || f.text}</span>
+              <div className="min-w-0 flex-1">
+                <span className={cx('break-all text-sm', !live && 'text-ghost line-through')}>{f.display || f.text}</span>
                 <span className="ml-2 inline-flex flex-wrap items-center gap-1.5 align-middle">
                   {f.source === 'user' && (
                     <span className="inline-flex items-center gap-1 text-[10px] text-brand-amber">

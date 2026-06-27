@@ -28,11 +28,22 @@ const engram = new EngramClient({
   apiKey: 'sk-alice-123', // one key == one isolated memory namespace
 })
 
+const sessionId = 'codex:super-memory:thread-123'
+
+// content-free wiring check: namespace/session/focus/counts/next actions, no memory text
+const status = await engram.agentStatus({ sessionId })
+console.log(status.recommended_next_actions)
+
 // write
-await engram.remember('I live in Shenzhen and work at Tencent.')
+await engram.remember('I live in Shenzhen and work at Tencent.', { sessionId })
 
 // read — a small, dated, relevant slice to ground your own prompt
-const { context, tokens_est } = await engram.recall('where do I live?')
+const { context, tokens_est } = await engram.recall('where do I live?', { sessionId })
+
+// thread/task ended — finish consolidation, summarize, clear working memory
+await engram.closeSession(sessionId)
+const report = await engram.sessionReport(sessionId) // what this session saved; sensitive facts redacted
+const sessions = await engram.sessions({ limit: 20, query: 'codex' }) // content-free cross-agent index
 
 // or a single direct answer (abstains when not in memory)
 const { answer } = await engram.search('Where do I work?')
@@ -47,9 +58,10 @@ the model answers, and remembers the turn afterward. Use the SDK's `chat.complet
 const completion = await engram.chat.completions.create({
   model: 'engram',
   messages: [{ role: 'user', content: 'Remind me where I work.' }],
+  memory: { session_id: 'codex:super-memory:thread-123', scope: 'auto' },
 })
 console.log(completion.choices[0].message.content)
-console.log(completion.engram) // { recalled, memory_tokens_est, remembered }
+console.log(completion.engram) // { recalled, memory_tokens_est, session_id, remembered }
 ```
 
 …or keep your existing OpenAI SDK and just change the base URL:
@@ -71,10 +83,11 @@ const stream = await engram.chat.completions.create({
 for await (const chunk of stream) process.stdout.write(chunk.choices[0]?.delta?.content ?? '')
 ```
 
-Control the memory layer per request: `memory: { recall: false }`, `{ remember: false }`,
-`{ as_of: 1700864000 }` for a point-in-time memory view, or `{ redact_sensitive: true }` to omit
-sensitive facts from injected memory. Redacted contexts are structured-facts-only: no profile, summaries,
-or raw chunks.
+Control the memory layer per request: `memory: { session_id: 'codex:repo:thread' }` to attach the turn to
+an agent thread, `{ scope: 'long' }` / `{ scope: 'working' }` for write routing, `{ recall: false }`,
+`{ remember: false }`, `{ as_of: 1700864000 }` for a point-in-time memory view, or
+`{ redact_sensitive: true }` to omit sensitive facts from injected memory. Redacted contexts are
+structured-facts-only: no profile, summaries, or raw chunks.
 
 ## Importing an existing history
 
@@ -85,15 +98,52 @@ import { readFileSync } from 'node:fs'
 await engram.import({ data: JSON.parse(readFileSync('conversations.json', 'utf8')), format: 'chatgpt' })
 ```
 
+## User-owned export
+
+```ts
+// Safe by default: non-sensitive facts + graph; no profile, raw episodes, or summaries.
+const portable = await engram.export()
+
+// Full private export only after an explicit user action.
+const fullPrivate = await engram.export({ includeSensitive: true })
+```
+
+## Memory management UI
+
+```ts
+// Content-free session index: which Codex / Claude / app sessions touched this namespace.
+const sessions = await engram.sessions({ limit: 20, query: 'claude-code' })
+
+// Owner view: paginate and search the user's editable memories.
+const page = await engram.memories({
+  factsLimit: 50,
+  factsOffset: 0,
+  episodesLimit: 0,
+  status: 'live',
+  query: 'work',
+})
+
+// Share-safe/list-preview view: omit sensitive facts plus free-text layers.
+const safePage = await engram.memories({
+  factsLimit: 50,
+  episodesLimit: 0,
+  includeSensitive: false,
+})
+```
+
 ## API surface
 
 | Method | HTTP | Returns |
 | --- | --- | --- |
 | `health()` | GET /health | `Health` readiness + safe deployment introspection |
-| `remember(content, { sessionId? })` | POST /v1/remember | `RememberResult` |
-| `recall(query, { nChunks?, asOf?, redactSensitive? })` | POST /v1/recall (lean) | `RecallResult` |
+| `remember(content, { sessionId?, scope? })` | POST /v1/remember | `RememberResult` |
+| `recall(query, { nChunks?, sessionId?, asOf?, redactSensitive? })` | POST /v1/recall (lean) | `RecallResult` |
+| `closeSession(sessionId, { summarize?, clearWorking? })` | POST /v1/sessions/close | `CloseSessionResult` |
+| `sessions({ limit?, offset?, query? })` | GET /v1/sessions | content-free cross-agent/app session index |
+| `sessionReport(sessionId, { includeSensitive? })` | GET /v1/sessions/report | `SessionReport` for what this session saved |
 | `search(query, { asOf?, redactSensitive? })` | POST /v1/recall | `SearchResult` |
-| `memories()` | GET /v1/memories | `MemoryDump` |
+| `memories({ factsLimit?, factsOffset?, episodesLimit?, episodesOffset?, status?, query?, includeSensitive? })` | GET /v1/memories | paged `MemoryDump` for user-owned memory management |
+| `agentStatus({ sessionId? })` | GET /v1/agent/status | `AgentStatus` content-free namespace/session/focus/counts/next actions |
 | `stats()` | GET /v1/stats | `MemoryStats` content-free namespace observability, including consolidation backlog, hot/cold fact tiers, and page-in/out counts |
 | `profile()` | GET /v1/profile | `ProfileResult` |
 | `addFact({ subject?, predicate, object })` | POST /v1/facts | `{ ok, id, text }` |
@@ -102,8 +152,8 @@ await engram.import({ data: JSON.parse(readFileSync('conversations.json', 'utf8'
 | `getPolicy()` / `setPolicy(p)` | GET/PUT /v1/policy | `PolicyResponse` |
 | `graph({ asOf?, includeSensitive? })` | GET /v1/graph | `GraphData` |
 | `import(params)` | POST /v1/import | `ImportResult` |
-| `export({ includeSensitive? })` | GET /v1/export | full JSON or share-safe structured JSON |
-| `forget()` | POST /v1/forget | `{ ok, message }` |
+| `export({ includeSensitive? })` | GET /v1/export | share-safe structured JSON by default; full private JSON with `includeSensitive: true` |
+| `forget({ confirm: true })` | POST /v1/forget | `{ ok, message }`; irreversible namespace wipe |
 | `chat.completions.create(params)` | POST /v1/chat/completions | `ChatCompletion` / stream |
 
 Errors throw `EngramError` with `.status` and a parsed `.detail`.
@@ -113,6 +163,7 @@ Errors throw `EngramError` with `.status` and a parsed `.detail`.
 ```bash
 npm install
 npm run build       # dual ESM + CJS + .d.ts into dist/
+npm test            # runtime smoke tests against the built dist/
 npm run typecheck
 ```
 

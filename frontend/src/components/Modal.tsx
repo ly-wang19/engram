@@ -18,6 +18,7 @@ export function Modal({
   children: ReactNode
   footer?: ReactNode
 }) {
+  const t = useT()
   useEffect(() => {
     if (!open) return
     const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose()
@@ -33,7 +34,7 @@ export function Modal({
       <div className="card relative z-10 w-full max-w-lg animate-fade-up p-5 sm:p-6">
         <div className="mb-4 flex items-center justify-between">
           <h3 className="text-base font-semibold">{title}</h3>
-          <button onClick={onClose} className="rounded-lg p-1.5 text-ghost transition hover:text-slate-100">
+          <button onClick={onClose} aria-label={t.common.cancel} className="rounded-lg p-1.5 text-ghost transition hover:text-slate-100">
             <X className="h-5 w-5" />
           </button>
         </div>
@@ -54,6 +55,7 @@ export function ConfirmDialog({
   confirmLabel,
   danger = false,
   loading = false,
+  confirmDisabled = false,
 }: {
   open: boolean
   onClose: () => void
@@ -63,6 +65,7 @@ export function ConfirmDialog({
   confirmLabel?: string
   danger?: boolean
   loading?: boolean
+  confirmDisabled?: boolean
 }) {
   const t = useT()
   return (
@@ -75,7 +78,7 @@ export function ConfirmDialog({
           <Button variant="ghost" onClick={onClose}>
             {t.common.cancel}
           </Button>
-          <Button variant={danger ? 'danger' : 'primary'} loading={loading} onClick={onConfirm}>
+          <Button variant={danger ? 'danger' : 'primary'} loading={loading} disabled={confirmDisabled} onClick={onConfirm}>
             {confirmLabel ?? t.common.confirm}
           </Button>
         </>

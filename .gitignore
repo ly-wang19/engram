@@ -10,6 +10,7 @@ dist/
 .pytest_cache/
 .ruff_cache/
 .mypy_cache/
+.pnpm-store/
 .coverage
 htmlcov/
 
@@ -27,6 +28,12 @@ env/
 .DS_Store
 data/
 external/
+.claude/settings.local.json
+.claude/worktrees/
+
+# LaTeX build artifacts
+paper/*.aux
+paper/*.out
 
 # Keep curated benchmark logs (committable evidence)
 !results/

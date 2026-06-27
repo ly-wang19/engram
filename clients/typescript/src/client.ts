@@ -13,15 +13,20 @@ import type {
   ChatCompletion,
   ChatCompletionChunk,
   ChatCompletionCreateParams,
+  CloseSessionResult,
+  AgentStatus,
   Fact,
   FactInput,
   FactPatch,
+  ForgetOptions,
   Focus,
   GraphData,
   Health,
   ImportParams,
   ImportResult,
+  MemoryExport,
   MemoryDump,
+  MemoryListOptions,
   MemoryStats,
   OkMessage,
   Policy,
@@ -30,6 +35,9 @@ import type {
   RecallResult,
   RememberResult,
   SearchResult,
+  SessionIndex,
+  SessionListOptions,
+  SessionReport,
 } from './types'
 
 /** Thrown for any non-2xx response. `detail` carries the parsed error body when available. */
@@ -132,25 +140,65 @@ export class EngramClient {
 
   // --- write / read memory --------------------------------------------------
   /** Store a message and consolidate it into bi-temporal facts. */
-  remember(content: string, options: { sessionId?: string } = {}): Promise<RememberResult> {
+  remember(
+    content: string,
+    options: { sessionId?: string; scope?: string } = {},
+  ): Promise<RememberResult> {
     return this.post<RememberResult>('/v1/remember', {
       content,
       session_id: options.sessionId ?? 'default',
+      scope: options.scope ?? 'auto',
     })
   }
 
   /** Retrieve a small, relevant, dated context to answer from (the lean read path). */
   recall(
     query: string,
-    options: { nChunks?: number; asOf?: number; redactSensitive?: boolean } = {},
+    options: { nChunks?: number; sessionId?: string; asOf?: number; redactSensitive?: boolean } = {},
   ): Promise<RecallResult> {
     return this.post<RecallResult>('/v1/recall', {
       query,
       lean: true,
       n_chunks: options.nChunks ?? 6,
+      session_id: options.sessionId ?? null,
       as_of: options.asOf ?? null,
       redact_sensitive: options.redactSensitive ?? false,
     })
+  }
+
+  /** Finish a thread/task: consolidate pending episodes, summarize, clear working memory, and persist. */
+  closeSession(
+    sessionId = 'default',
+    options: { summarize?: boolean; clearWorking?: boolean } = {},
+  ): Promise<CloseSessionResult> {
+    return this.post<CloseSessionResult>('/v1/sessions/close', {
+      session_id: sessionId,
+      summarize: options.summarize ?? true,
+      clear_working: options.clearWorking ?? true,
+    })
+  }
+
+  /** Audit what durable facts a session contributed. Sensitive fact text is redacted by default. */
+  sessionReport(
+    sessionId: string,
+    options: { includeSensitive?: boolean } = {},
+  ): Promise<SessionReport> {
+    const params = new URLSearchParams({
+      session_id: sessionId,
+      include_sensitive: options.includeSensitive ? 'true' : 'false',
+    })
+    return this.request<SessionReport>(`/v1/sessions/report?${params}`)
+  }
+
+  /** Content-free cross-agent/app session index for memory management UIs. */
+  sessions(options: SessionListOptions = {}): Promise<SessionIndex> {
+    const params = new URLSearchParams()
+    if (options.limit !== undefined) params.set('limit', String(options.limit))
+    if (options.offset !== undefined) params.set('offset', String(options.offset))
+    const query = options.query ?? options.q
+    if (query !== undefined) params.set('q', query)
+    const qs = params.toString()
+    return this.request<SessionIndex>(`/v1/sessions${qs ? `?${qs}` : ''}`)
   }
 
   /** Answer a single factual question directly (abstains when not in memory). */
@@ -163,14 +211,32 @@ export class EngramClient {
     })
   }
 
-  /** Everything stored for this namespace: profile, counts, facts, episodes. */
-  memories(): Promise<MemoryDump> {
-    return this.request<MemoryDump>('/v1/memories')
+  /** Everything stored for this namespace, with paging/filtering for user-owned memory UIs. */
+  memories(options: MemoryListOptions = {}): Promise<MemoryDump> {
+    const params = new URLSearchParams()
+    if (options.factsLimit !== undefined) params.set('facts_limit', String(options.factsLimit))
+    if (options.factsOffset !== undefined) params.set('facts_offset', String(options.factsOffset))
+    if (options.episodesLimit !== undefined) params.set('episodes_limit', String(options.episodesLimit))
+    if (options.episodesOffset !== undefined) params.set('episodes_offset', String(options.episodesOffset))
+    if (options.status !== undefined) params.set('status', options.status)
+    const query = options.query ?? options.q
+    if (query !== undefined) params.set('q', query)
+    if (options.includeSensitive !== undefined) {
+      params.set('include_sensitive', options.includeSensitive ? 'true' : 'false')
+    }
+    const qs = params.toString()
+    return this.request<MemoryDump>(`/v1/memories${qs ? `?${qs}` : ''}`)
   }
 
   /** Content-free namespace stats for dashboards/readiness probes. */
   stats(): Promise<MemoryStats> {
     return this.request<MemoryStats>('/v1/stats')
+  }
+
+  /** Content-free agent/session status: namespace, focus, counts, and recommended memory actions. */
+  agentStatus(options: { sessionId?: string } = {}): Promise<AgentStatus> {
+    const qs = options.sessionId === undefined ? '' : `?session_id=${encodeURIComponent(options.sessionId)}`
+    return this.request<AgentStatus>(`/v1/agent/status${qs}`)
   }
 
   /** The synthesized user profile + key facts. */
@@ -228,17 +294,19 @@ export class EngramClient {
     return this.post<ImportResult>('/v1/import', params)
   }
 
-  /** Data export. Pass includeSensitive=false for a share-safe structured export. */
-  export<T = Record<string, unknown>>(options: { includeSensitive?: boolean } = {}): Promise<T> {
-    const qs = options.includeSensitive === undefined
-      ? ''
-      : `?include_sensitive=${options.includeSensitive ? 'true' : 'false'}`
+  /** Data export. Defaults to a share-safe structured export; pass includeSensitive=true for full private export. */
+  export<T = MemoryExport>(options: { includeSensitive?: boolean } = {}): Promise<T> {
+    const includeSensitive = options.includeSensitive ?? false
+    const qs = `?include_sensitive=${includeSensitive ? 'true' : 'false'}`
     return this.request<T>(`/v1/export${qs}`)
   }
 
-  /** Erase ALL memory in this namespace (irreversible). */
-  forget(): Promise<OkMessage> {
-    return this.post<OkMessage>('/v1/forget', {})
+  /** Erase ALL memory in this namespace (irreversible); requires explicit confirmation. */
+  forget(options: ForgetOptions): Promise<OkMessage> {
+    if (!options?.confirm) {
+      throw new EngramError(400, 'forget requires { confirm: true } because it permanently erases this namespace')
+    }
+    return this.post<OkMessage>('/v1/forget', { confirm: true })
   }
 
   // --- OpenAI-compatible chat ----------------------------------------------

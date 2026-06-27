@@ -109,6 +109,31 @@ print(mem.search("Where does Wei work?", user_id="u1").answer())
 
 Engram ships a full **access layer** so any agent or app can use it — all backed by one multi-tenant
 service (`MemoryService`), where each API key is an isolated memory namespace.
+The bundled console at `/ui` exposes the same product loop for humans: content-free session status,
+session-scoped writes with `scope=auto|long|working`, close-session, session report, paged memory
+management, safe export, and confirmed erase.
+For the recommended lifecycle across Claude Code, Codex, Cursor, and custom agents, see
+[`docs/cross-agent-memory.md`](docs/cross-agent-memory.md) and the copy-paste adapter recipes in
+[`docs/agent-adapters.md`](docs/agent-adapters.md). A one-session lifecycle smoke test (local zero-server
+or HTTP, including `agent_status`, `remember`, `close_session`, and `session_report`) is available at
+[`examples/cross_agent_lifecycle.py`](examples/cross_agent_lifecycle.py), and a two-agent handoff smoke
+test is available at
+[`examples/cross_agent_handoff.py`](examples/cross_agent_handoff.py).
+You can also generate client-specific setup snippets with
+`engram-agent-setup --client codex --local --namespace me` (zero-server local MCP) or
+`engram-agent-setup --client codex --api-url http://localhost:8000 --api-key me` (HTTP service).
+Add `--python /path/to/python` when the agent should launch a specific environment with
+`engram-memory[mcp]` installed. The fast local path is
+`engram-agent-bootstrap --local --dry-run --namespace me --python /path/to/python` followed by
+`engram-agent-bootstrap --local --namespace me --python /path/to/python`; it installs Codex + project
+`.mcp.json`, runs the doctor against the installed config files, and prints a ready-to-paste AGENTS.md
+policy. Add
+`--install-policy` to write that policy into a managed AGENTS.md block with backup/uninstall support.
+For Codex, `engram-agent-setup --install-codex --dry-run ...` previews
+the exact `~/.codex/config.toml` change, `--install-codex --doctor` applies it with a backup and verifies
+the actual MCP stdio launch path, and `--uninstall-codex` removes only Engram's MCP block. For Claude
+Code, Cursor, and project-level MCP clients, `engram-agent-setup --install-mcp-json --doctor ...` manages
+`.mcp.json` with the same dry-run, backup, and uninstall flow.
 
 ### Call it right now — hosted API, zero setup
 
@@ -143,7 +168,9 @@ Use `GET /health` for readiness and safe deployment introspection. It reports au
 embedder, LLM readiness, storage, and hot-user counts without exposing keys, paths, or user data.
 
 **1. MCP server** — give Claude Desktop / Claude Code / Cursor a persistent memory (`engram_recall`,
-`engram_remember`, `engram_search`, `engram_stats`, `engram_import`, …):
+`engram_remember`, `engram_close_session`, `engram_agent_status`, `engram_list_facts`,
+`engram_list_sessions`, `engram_update_fact`, `engram_delete_fact`, `engram_get_focus`,
+`engram_set_focus`, `engram_search`, `engram_stats`, `engram_import`, `engram_export`, …):
 
 ```bash
 pip install "engram-memory[mcp]"
@@ -159,26 +186,46 @@ python -m engram.mcp                 # local memory at ~/.engram/data (zero exte
 `engram_recall` and `engram_search` also accept `as_of` (epoch seconds) for point-in-time memory views and
 `redact_sensitive=true` for shared/safe contexts.
 
+For agent clients, the intended lifecycle is: call `engram_agent_status` at startup when you need a
+content-free wiring check, recall before work that may depend on prior sessions, remember durable
+user/project facts with `scope="long"` or `scope="auto"`, use `scope="working"` for short-lived
+current-task state, then call `engram_close_session` when a thread ends or switches tasks. The close
+step does not delete the transcript; it finishes consolidation, creates missing session summaries,
+clears ephemeral working memory, and persists the namespace.
+When the user asks to correct or remove one memory, use `engram_list_facts` to find the fact id, then
+`engram_update_fact` or `engram_delete_fact(confirm=true)` for a precise edit instead of wiping the
+whole namespace. When the user asks the agent to emphasize or suppress a topic class, use
+`engram_set_focus` instead of rewriting facts.
+
 **2. JS/TS SDK + OpenAI-compatible API** — change one URL and your existing OpenAI code gets memory:
 recall + inject before the model answers, remember the turn after.
 
 ```ts
 import { EngramClient } from 'engram-memory'                  // npm i engram-memory
 const engram = new EngramClient({ baseUrl: 'http://42.193.220.197:8456', apiKey: 'my-app' })  // or your own host
+await engram.agentStatus({ sessionId: 'app:my-product:conversation-123' }) // content-free wiring check
 await engram.remember('I live in Shenzhen and work at Tencent.')
 const { context } = await engram.recall('where do I live?')
+await engram.closeSession('app:my-product:conversation-123')
+const report = await engram.sessionReport('app:my-product:conversation-123') // what this session saved
 
 // drop-in OpenAI compatibility (works with the official `openai` SDK too — just set base_url):
 const out = await engram.chat.completions.create({ model: 'engram', messages: [
   { role: 'user', content: 'Remind me where I work.' } ] })
 ```
 
-For OpenAI-compatible chat, the Engram extension also accepts `memory: { as_of: <epoch seconds> }` for a
-point-in-time memory view, and `memory: { redact_sensitive: true }` to omit sensitive facts from injected
-memory (redacted contexts are structured-facts-only: no profile, summaries, or raw chunks).
+For OpenAI-compatible chat, the Engram extension also accepts
+`memory: { session_id: "codex:repo:thread", scope: "auto" }` to attach the turn to an agent thread,
+`memory: { as_of: <epoch seconds> }` for a point-in-time memory view, and
+`memory: { redact_sensitive: true }` to omit sensitive facts from injected memory (redacted contexts are
+structured-facts-only: no profile, summaries, or raw chunks).
 
 For data portability, `/v1/export?include_sensitive=false` returns the same kind of share-safe structured
 view: non-sensitive facts plus their graph, with profile, summaries, and raw episodes omitted.
+The TypeScript SDK's `engram.export()` uses that share-safe export by default; pass
+`{ includeSensitive: true }` only for an explicit private export.
+For a user-facing "my memory" page, the SDK also exposes paged inspection:
+`engram.memories({ factsLimit, factsOffset, episodesLimit, status, query, includeSensitive })`.
 The standalone graph endpoint also supports `/v1/graph?include_sensitive=false`.
 
 **3. Batch import** — bring your whole history (ChatGPT export, OpenAI messages, JSONL, transcript;

@@ -83,6 +83,7 @@ def chat_completion(
     do_recall: bool = True,
     as_of: Optional[float] = None,
     redact_sensitive: bool = False,
+    session_id: Optional[str] = None,
 ) -> dict:
     """Recall → inject → generate → return an OpenAI ChatCompletion object (with an `engram` extension
     describing what memory was used). Does NOT write memory — the route schedules that off the critical
@@ -99,6 +100,7 @@ def chat_completion(
                 query,
                 lean=True,
                 n_chunks=n_chunks,
+                session_id=session_id,
                 as_of=as_of,
                 redact_sensitive=redact_sensitive,
             ).get("context") or ""
@@ -130,6 +132,7 @@ def chat_completion(
         "engram": {
             "recalled": bool(memory_context.strip()),
             "memory_tokens_est": _est_tokens(memory_context),
+            "session_id": session_id,
             "as_of": as_of,
             "redacted_sensitive": redact_sensitive,
             "remembered": False,  # the route flips this to True when it schedules the write

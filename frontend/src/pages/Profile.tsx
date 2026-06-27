@@ -2,7 +2,7 @@ import { Check, HelpCircle, Lock, ThumbsDown, ThumbsUp, Trash2, UserRound } from
 
 import { Badge, Card, CardTitle, EmptyState, ErrorState, PageHeader, Spinner, cx } from '../components/ui'
 import { toast } from '../components/Toast'
-import { useAddFact, useDeleteFact, useStructuredProfile } from '../hooks/queries'
+import { useAddFact, useDeleteFact, useMemories, useStructuredProfile } from '../hooks/queries'
 import { useT } from '../i18n'
 import type { Dict } from '../i18n/en'
 import type { Evidence, ProfileItem } from '../types'
@@ -18,7 +18,7 @@ function EvidenceChip({ e }: { e: Evidence }) {
   return (
     <span
       className={cx(
-        'inline-flex items-center gap-1 rounded px-1.5 py-px text-[10px]',
+        'inline-flex shrink-0 items-center gap-1 rounded px-1.5 py-px text-[10px]',
         e.kind === 'user' ? 'bg-brand-amber/15 text-brand-amber' : 'bg-white/5 text-ghost',
       )}
       title={t.profile.evidenceTitle}
@@ -34,12 +34,12 @@ function PrefChip({ it }: { it: ProfileItem }) {
   return (
     <span
       className={cx(
-        'inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-sm',
+        'inline-flex min-w-0 max-w-full flex-wrap items-center gap-1.5 rounded-lg px-2.5 py-1 text-sm',
         like ? 'bg-brand-mint/12 text-brand-mint' : 'bg-brand-rose/12 text-brand-rose',
       )}
     >
-      {like ? <ThumbsUp className="h-3.5 w-3.5" /> : <ThumbsDown className="h-3.5 w-3.5" />}
-      <span className="text-slate-100">{it.item}</span>
+      {like ? <ThumbsUp className="h-3.5 w-3.5 shrink-0" /> : <ThumbsDown className="h-3.5 w-3.5 shrink-0" />}
+      <span className="min-w-0 max-w-full break-all text-slate-100">{it.item}</span>
       <EvidenceChip e={it.evidence} />
     </span>
   )
@@ -47,6 +47,7 @@ function PrefChip({ it }: { it: ProfileItem }) {
 
 export default function Profile() {
   const { data, isLoading, isError, error } = useStructuredProfile()
+  const memories = useMemories({ facts_limit: 240, episodes_limit: 0 })
   const addFact = useAddFact()
   const deleteFact = useDeleteFact()
   const t = useT()
@@ -87,10 +88,11 @@ export default function Profile() {
             {data.basic.map((b) => (
               <div key={b.field}>
                 <div className="text-xs text-ghost">{b.label}</div>
-                <div className="mt-0.5 flex items-center gap-2">
-                  <span className="text-sm text-slate-100">{b.value}</span>
+                <div className="mt-0.5 flex min-w-0 flex-wrap items-center gap-2">
+                  <span className="min-w-0 break-words text-sm text-slate-100">{b.value}</span>
                   <EvidenceChip e={b.evidence} />
                 </div>
+                <HistoricalSlot factId={b.fact_id} facts={memories.data?.facts ?? []} />
               </div>
             ))}
           </div>
@@ -122,9 +124,9 @@ export default function Profile() {
           <CardTitle hint={t.profile.habitsHint}>{t.profile.habitsTitle}</CardTitle>
           <ul className="space-y-1.5">
             {data.habits.map((h) => (
-              <li key={h.fact_id} className="flex items-center gap-2 text-sm text-slate-200">
-                <span className="h-1.5 w-1.5 rounded-full bg-brand-violet" />
-                {h.text}
+              <li key={h.fact_id} className="flex min-w-0 items-center gap-2 text-sm text-slate-200">
+                <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-brand-violet" />
+                <span className="min-w-0 break-words">{h.text}</span>
                 <EvidenceChip e={h.evidence} />
               </li>
             ))}
@@ -147,9 +149,9 @@ export default function Profile() {
           </p>
           <ul className="divide-y divide-line">
             {data.tentative.map((it) => (
-              <li key={it.fact_id} className="flex items-center gap-3 py-2.5">
+              <li key={it.fact_id} className="flex flex-col gap-2 py-2.5 sm:flex-row sm:items-center sm:gap-3">
                 <Badge tone={it.polarity === 'like' ? 'live' : 'old'}>{it.polarity === 'like' ? t.profile.like : t.profile.dislike}</Badge>
-                <span className="flex-1 text-sm text-slate-100">
+                <span className="min-w-0 flex-1 break-all text-sm text-slate-100">
                   {it.item} <span className="text-xs text-ghost">· {it.category}</span>
                 </span>
                 <EvidenceChip e={it.evidence} />
@@ -172,5 +174,32 @@ export default function Profile() {
         </Card>
       )}
     </div>
+  )
+}
+
+function HistoricalSlot({ factId, facts }: { factId: string; facts: Array<{ id: string; subject: string; predicate: string; object: string; status: string; invalid_at: string | null }> }) {
+  const t = useT()
+  const current = facts.find((f) => f.id === factId)
+  if (!current) return null
+  const old = facts.filter(
+    (f) =>
+      f.id !== current.id &&
+      f.status !== 'live' &&
+      f.subject === current.subject &&
+      f.predicate === current.predicate,
+  )
+  if (!old.length) return null
+  return (
+    <details className="mt-2">
+      <summary className="cursor-pointer text-[11px] text-brand-cyan">{t.profile.historicalValues}</summary>
+      <ul className="mt-1 space-y-1">
+        {old.slice(0, 4).map((f) => (
+          <li key={f.id} className="break-words text-[11px] text-ghost">
+            {f.object}
+            {f.invalid_at ? ` · ${f.invalid_at}` : ''}
+          </li>
+        ))}
+      </ul>
+    </details>
   )
 }

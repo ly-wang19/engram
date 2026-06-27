@@ -105,6 +105,55 @@ def test_multi_valued_identity_facts_are_not_slot_deduped():
     assert {f.object for f, _ in ranked} >= {"a bike", "a camera"}
 
 
+def test_project_rules_are_structured_multi_value_memory():
+    mem = Memory()
+    mem.add(
+        "Project rule: benchmark claims require committed raw logs before public copy changes.",
+        user_id="codex-e2e",
+        session_id="codex:repo:thread",
+    )
+    mem.add(
+        "Project preference: Codex should close Engram sessions when tasks end.",
+        user_id="codex-e2e",
+        session_id="codex:repo:thread",
+    )
+    mem.consolidate()
+
+    live = [f for f in mem.fact_store.values() if f.is_live()]
+    assert {f.predicate for f in live} >= {"rule", "preference"}
+    assert any(f.text.startswith("project rule ") for f in live)
+    assert any(f.text.startswith("project preference ") for f in live)
+    assert any("raw logs" in f.object for f in live)
+    assert any("close Engram sessions" in f.object for f in live)
+    assert len(live) == 2
+
+
+def test_short_project_rule_context_preserves_key_constraint():
+    mem = Memory()
+    user = "codex-e2e"
+    session = "codex:repo:thread"
+    mem.add(
+        "Project rule: Engram benchmark claims must be backed by committed raw logs before public copy changes.",
+        user_id=user,
+        session_id=session,
+    )
+    mem.add(
+        "Project preference: Codex should use Engram as cross-agent memory and call engram_close_session when a task ends.",
+        user_id=user,
+        session_id=session,
+    )
+    mem.consolidate()
+
+    ctx = mem.lean_context(
+        "What should Codex remember about benchmark claims and session closing?",
+        user_id=user,
+        session_id=session,
+        n_chunks=4,
+    )
+    assert "raw logs" in ctx
+    assert "engram_close_session" in ctx
+
+
 def test_no_hard_delete_history_preserved():
     mem = build()
     chain = mem.history("Wei", "works_at", user_id="u1")

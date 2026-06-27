@@ -138,6 +138,24 @@ print(mem.search("Where does Wei work?", user_id="u1").answer())
 
 Engram 自带完整**接入层**:HTTP API + MCP + JS/TS SDK + OpenAI 兼容,都走同一个多租户核心
 （`MemoryService`），**每个 API key 就是一个互相隔离的记忆空间**。
+内置控制台 `/ui` 也体现同一条产品闭环：不含正文的 session status、带 `scope=auto|long|working`
+的会话写入、结束会话、session report 审计、分页记忆管理、安全导出和显式确认清空。
+跨 Claude Code / Codex / Cursor / 自研 agent 的推荐生命周期见
+[`docs/cross-agent-memory.md`](docs/cross-agent-memory.md) 与
+[`docs/agent-adapters.md`](docs/agent-adapters.md)；单会话生命周期自测（本地零服务或 HTTP，包含
+`agent_status`、`remember`、`close_session`、`session_report`）见
+[`examples/cross_agent_lifecycle.py`](examples/cross_agent_lifecycle.py)，双 agent 交接自测见
+[`examples/cross_agent_handoff.py`](examples/cross_agent_handoff.py)。如果 agent 需要用指定 Python
+环境启动 MCP，可用 `engram-agent-setup --client codex --local --namespace me --python /path/to/python`
+生成本地零服务配置，或用 `--api-url ... --api-key ...` 生成 HTTP 服务配置；最快本地路径是
+先 `engram-agent-bootstrap --local --dry-run --namespace me --python /path/to/python` 预览，再
+`engram-agent-bootstrap --local --namespace me --python /path/to/python` 安装 Codex + 项目 `.mcp.json`、
+运行 doctor 验证已写入配置和 MCP runtime，并输出可粘贴进 AGENTS.md 的策略文本；
+加 `--install-policy` 可把这段策略写入受管理的 AGENTS.md block，支持备份和卸载。Codex
+也支持 `engram-agent-setup --install-codex --dry-run ...` 预览写入，`--install-codex --doctor`
+备份后安装并立刻自检真实 MCP stdio 启动链路，`--uninstall-codex` 只移除 Engram 的 MCP 配置块。
+Claude Code / Cursor / 项目级 MCP 客户端可用 `engram-agent-setup --install-mcp-json --doctor ...`
+以同样的 dry-run、备份、卸载流程管理 `.mcp.json`。
 
 ### 直接调用托管 API（零搭建）
 
@@ -171,27 +189,46 @@ python -m engram.mcp                 # 本地记忆，零外部服务
 
 `engram_recall` 和 `engram_search` 也支持 `as_of`（epoch 秒）查询某个历史时刻的记忆视图，并支持
 `redact_sensitive=true` 生成适合共享/安全注入的上下文。
-`engram_stats` 返回不含内容的命名空间统计（episode backlog、事实/图谱/冲突计数），适合 agent 自检。
+`engram_agent_status` 适合 agent 开工前做不含正文的接线检查：当前 namespace、session、focus、计数和下一步建议。
+`engram_stats` 返回不含内容的命名空间统计（episode backlog、事实/图谱/冲突计数），适合健康检查。
+MCP 的 `engram_remember` 支持 `scope="long"|"auto"|"working"`：长期事实进长期记忆，当前任务临时状态
+用 `working`。`engram_close_session` 用于线程结束或切换任务时整理该 session：补摘要、清 working memory、持久化。
+用户要看哪些 Codex / Claude Code / app 会话写过记忆时，agent 可调用 `engram_list_sessions`；
+它只返回 session id、时间和计数，不返回记忆正文。
+用户要纠错或删除单条记忆时，agent 可先用 `engram_list_facts` 找到 fact id，再调用
+`engram_update_fact` 或 `engram_delete_fact(confirm=true)` 精确处理，不需要清空整个命名空间。
+用户要导出自己的记忆时，agent 可调用 `engram_export(response_format="json")`；默认是安全导出
+（非敏感 facts + graph），用户明确要完整私有导出时再传 `include_sensitive=true`。
+用户要“以后多关注某类信息 / 少召回某类信息”时，agent 可用 `engram_get_focus` 查看当前策略，再用
+`engram_set_focus` 更新关注或屏蔽主题。
 
 ### JS/TS SDK + OpenAI 兼容（改一个 URL，你现有的 OpenAI 代码就有了记忆）
 
 ```ts
 import { EngramClient } from 'engram-memory'                  // npm i engram-memory
 const engram = new EngramClient({ baseUrl: 'http://42.193.220.197:8456', apiKey: 'my-app' })
+await engram.agentStatus({ sessionId: 'app:my-product:conversation-123' }) // 不含正文的接线检查
 await engram.remember('我在字节做后端，最喜欢周杰伦。')
 const { context } = await engram.recall('我喜欢哪个歌手？')
+await engram.closeSession('app:my-product:conversation-123')
+const report = await engram.sessionReport('app:my-product:conversation-123') // 这一轮保存了什么
 
 // 直接替换 OpenAI 的 base_url 即可（官方 openai SDK 也行）：
 const out = await engram.chat.completions.create({ model: 'engram', messages: [
   { role: 'user', content: '提醒我一下我最喜欢的歌手' } ] })
 ```
 
-OpenAI 兼容聊天也支持 Engram 扩展：`memory: { as_of: <epoch 秒> }` 用于查询某个历史时刻的记忆视图，
+OpenAI 兼容聊天也支持 Engram 扩展：`memory: { session_id: "codex:repo:thread", scope: "auto" }`
+用于把轮次归到某个 agent 线程，`memory: { as_of: <epoch 秒> }` 用于查询某个历史时刻的记忆视图，
 `memory: { redact_sensitive: true }` 用于在注入上下文时隐藏敏感事实；redacted 上下文只包含非敏感
 结构化事实，不包含画像、摘要或原始片段。
 
 数据导出也遵循同一语义：`/v1/export?include_sensitive=false` 只返回非敏感 facts 及其 graph，不包含画像、
 摘要或原始对话。
+TypeScript SDK 的 `engram.export()` 默认走这个安全导出；只有用户明确要完整私有导出时再传
+`{ includeSensitive: true }`。
+如果要做 C 端“我的记忆”管理页，SDK 也支持分页查看：
+`engram.memories({ factsLimit, factsOffset, episodesLimit, status, query, includeSensitive })`。
 独立关系图接口也支持 `/v1/graph?include_sensitive=false`。
 
 ### 自部署（数据完全在你自己机器上）

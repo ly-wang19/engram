@@ -20,6 +20,7 @@ export interface Health {
 
 export interface RememberResult {
   ok: boolean
+  scope?: string
   /** number of new facts extracted by consolidation */
   extracted?: number
   /** total live facts after this write */
@@ -47,12 +48,89 @@ export interface SearchResult {
   redacted_sensitive: boolean
 }
 
+export interface CloseSessionResult {
+  ok: boolean
+  session_id: string
+  episodes: number
+  pending_consolidated: number
+  facts_added: number
+  duplicates: number
+  invalidated: number
+  summaries: number
+  reflected: number
+  working_cleared: number
+}
+
+export interface SessionReportFact {
+  id: string
+  text: string
+  display: string
+  valid_at: string
+  invalid_at: string | null
+  status: FactStatus
+  source: FactSource
+  category: string
+  sensitive: boolean
+  redacted: boolean
+  provenance: string[]
+  subject?: string
+  predicate?: string
+  object?: string
+}
+
+export interface SessionReport {
+  ok: boolean
+  user: string
+  session_id: string
+  include_sensitive: boolean
+  episodes: number
+  episodes_consolidated: number
+  episodes_pending: number
+  working_live: number
+  facts_added: number
+  facts_redacted: number
+  facts: SessionReportFact[]
+}
+
+export interface SessionIndexItem {
+  id: string
+  episodes: number
+  episodes_consolidated: number
+  episodes_pending: number
+  facts_added: number
+  facts_sensitive: number
+  working_live: number
+  summaries: number
+  first_event_at: number | null
+  first_event_at_h: string | null
+  last_event_at: number | null
+  last_event_at_h: string | null
+}
+
+export interface SessionIndex {
+  ok: boolean
+  user: string
+  sessions: SessionIndexItem[]
+  page: MemoryPage<SessionIndexItem>
+  next_offset: number | null
+}
+
+export interface SessionListOptions {
+  limit?: number
+  offset?: number
+  /** Text search over session ids. */
+  query?: string
+  /** Alias for query, matching the HTTP parameter. */
+  q?: string
+}
+
 export type FactStatus = 'live' | 'superseded'
 export type FactSource = 'extracted' | 'user'
 
 export interface Fact {
   id: string
   text: string
+  display?: string
   subject: string
   predicate: string
   object: string
@@ -63,6 +141,9 @@ export interface Fact {
   status: FactStatus
   source: FactSource
   supersedes: string | null
+  category?: string
+  sensitive?: boolean
+  redacted?: boolean
   salience: number
   provenance: string[]
 }
@@ -81,6 +162,31 @@ export interface MemoryCounts {
   summaries: number
 }
 
+export type MemoryStatusFilter = 'live' | 'current' | 'superseded' | 'old' | 'history'
+
+export interface MemoryPage<T> {
+  offset: number
+  limit: number | null
+  total: number
+  next_offset: number | null
+  has_more: boolean
+  items: T[]
+}
+
+export interface MemoryListOptions {
+  factsLimit?: number
+  factsOffset?: number
+  episodesLimit?: number
+  episodesOffset?: number
+  status?: MemoryStatusFilter
+  /** Text search over facts; raw episodes are searched only when includeSensitive=true. */
+  query?: string
+  /** Alias for query, matching the HTTP parameter. */
+  q?: string
+  /** Owner view defaults to true; pass false for a share-safe list that omits sensitive facts/free text. */
+  includeSensitive?: boolean
+}
+
 /** Everything stored for a user (GET /v1/memories). */
 export interface MemoryDump {
   user: string
@@ -88,6 +194,12 @@ export interface MemoryDump {
   counts: MemoryCounts
   facts: Fact[]
   episodes: EpisodeView[]
+  facts_page: MemoryPage<Fact>
+  episodes_page: MemoryPage<EpisodeView>
+  next_offsets: {
+    facts: number | null
+    episodes: number | null
+  }
 }
 
 export interface MemoryStats {
@@ -128,6 +240,35 @@ export interface MemoryStats {
   llm_configured: boolean
   answerer_configured: boolean
   consolidation_backlog: boolean
+}
+
+export interface AgentStatus {
+  ok: boolean
+  user: string
+  session_id: string | null
+  mode: 'content_free_agent_status'
+  focus: Focus
+  session: {
+    id: string | null
+    episodes: number
+    episodes_pending: number
+    working_live: number
+  }
+  counts: MemoryStats['counts']
+  consolidation_backlog: boolean
+  storage: string
+  embedder: string
+  llm_configured: boolean
+  recommended_next_actions: string[]
+  tools: {
+    read_context: string
+    write_memory: string
+    close_session: string
+    inspect_facts: string
+    correct_fact: string
+    delete_fact: string
+    focus: string
+  }
 }
 
 export interface ProfileResult {
@@ -181,12 +322,16 @@ export interface FactInput {
   subject?: string
   predicate: string
   object: string
+  sensitive?: boolean
+  category?: string
 }
 
 export interface FactPatch {
   subject?: string
   predicate?: string
   object?: string
+  sensitive?: boolean
+  category?: string
 }
 
 export interface ImportMessageInput {
@@ -221,6 +366,56 @@ export interface ImportResult {
   summaries: number
 }
 
+export interface MemoryExportFact {
+  id: string
+  subject: string
+  predicate: string
+  object: string
+  text: string
+  source: FactSource
+  status: FactStatus
+  category: string
+  sensitive: boolean
+  salience: number
+  confidence: number
+  valid_at: number
+  valid_at_h: string
+  invalid_at: number | null
+  invalid_at_h: string | null
+  created_at: number
+  expired_at: number | null
+  supersedes: string | null
+  provenance: string[]
+}
+
+export interface MemoryExportEpisode {
+  id: string
+  session_id: string
+  speaker: string
+  event_time: number
+  date: string
+  content: string
+  summary: string
+}
+
+export interface MemoryExport {
+  engram_export_version: 1
+  user: string
+  include_sensitive: boolean
+  redacted_sensitive: boolean
+  profile: string
+  focus: Focus
+  facts: MemoryExportFact[]
+  episodes: MemoryExportEpisode[]
+  graph: GraphData
+  redaction_note?: string
+}
+
+export interface ForgetOptions {
+  /** Must be true; wiping a namespace is irreversible. */
+  confirm: true
+}
+
 // --- OpenAI-compatible chat (POST /v1/chat/completions) ---------------------
 
 export type ChatRole = 'system' | 'user' | 'assistant' | 'tool'
@@ -237,6 +432,10 @@ export interface MemoryControls {
   recall?: boolean
   /** remember the user turn after answering (default true) */
   remember?: boolean
+  /** conversation/thread id for recall and the background write */
+  session_id?: string
+  /** auto | long | working; controls how the background write is routed */
+  scope?: string
   /** number of full past conversations to include for detail (default 6) */
   n_chunks?: number
   /** epoch seconds for a point-in-time memory view */
@@ -270,9 +469,11 @@ export interface ChatUsage {
 export interface EngramChatMeta {
   recalled: boolean
   memory_tokens_est: number
+  session_id?: string | null
   as_of: number | null
   redacted_sensitive: boolean
   remembered: boolean
+  remember_scope?: string
 }
 
 export interface ChatCompletion {

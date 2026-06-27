@@ -14,12 +14,14 @@ import {
 } from '../components/ui'
 import { Badge } from '../components/ui'
 import { toast } from '../components/Toast'
-import { useMemories, useRemember } from '../hooks/queries'
+import { useMemories, useRemember, useStructuredProfile } from '../hooks/queries'
 import { splitStamp } from '../lib/format'
 import { useT } from '../i18n'
+import type { StructuredProfile } from '../types'
 
 export default function Dashboard() {
-  const { data, isLoading, isError, error } = useMemories()
+  const { data, isLoading, isError, error } = useMemories({ facts_limit: 6, episodes_limit: 0, status: 'live' })
+  const profile = useStructuredProfile()
   const remember = useRemember()
   const t = useT()
   const [text, setText] = useState('')
@@ -77,9 +79,9 @@ export default function Dashboard() {
 
       <div className="grid gap-6 lg:grid-cols-2">
         <Card>
-          <CardTitle hint={t.dashboard.personaHint}>{t.dashboard.personaTitle}</CardTitle>
-          {data.profile ? (
-            <pre className="whitespace-pre-wrap text-sm leading-relaxed text-slate-200">{data.profile}</pre>
+          <CardTitle hint={t.dashboard.structuredHint}>{t.dashboard.personaTitle}</CardTitle>
+          {profile.data && !profile.isError ? (
+            <StructuredProfileMini data={profile.data} />
           ) : (
             <EmptyState title={t.dashboard.personaEmptyTitle} hint={t.dashboard.personaEmptyHint} icon={<Sparkles className="h-6 w-6" />} />
           )}
@@ -109,6 +111,48 @@ export default function Dashboard() {
           )}
         </Card>
       </div>
+    </div>
+  )
+}
+
+function StructuredProfileMini({ data }: { data: StructuredProfile }) {
+  const t = useT()
+  const prefItems = Object.entries(data.preferences).flatMap(([cat, items]) =>
+    items.slice(0, 4).map((item) => ({ ...item, cat })),
+  )
+  const empty = data.counts.basic + data.counts.preferences + data.counts.habits === 0
+  if (empty) return <EmptyState title={t.dashboard.personaEmptyTitle} hint={t.dashboard.personaEmptyHint} />
+  return (
+    <div className="space-y-4">
+      {data.basic.length > 0 && (
+        <div className="grid gap-3 sm:grid-cols-2">
+          {data.basic.slice(0, 4).map((b) => (
+            <div key={b.field} className="rounded-xl border border-line bg-white/[0.03] p-3">
+              <div className="text-[11px] uppercase tracking-wide text-ghost">{b.label}</div>
+              <div className="mt-1 break-words text-sm font-medium text-slate-100">{b.value}</div>
+            </div>
+          ))}
+        </div>
+      )}
+      {prefItems.length > 0 && (
+        <div className="flex flex-wrap gap-2">
+          {prefItems.slice(0, 12).map((it) => (
+            <span key={it.fact_id} className="inline-flex min-w-0 max-w-full whitespace-normal break-all rounded-lg bg-brand-mint/10 px-2.5 py-1 text-sm text-slate-100">
+              {it.item}
+            </span>
+          ))}
+        </div>
+      )}
+      {data.habits.length > 0 && (
+        <ul className="space-y-1.5 text-sm text-slate-200">
+          {data.habits.slice(0, 4).map((h) => (
+            <li key={h.fact_id} className="flex gap-2">
+              <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-brand-violet" />
+              <span className="break-words">{h.text}</span>
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   )
 }

@@ -1,18 +1,31 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
-import { api } from '../lib/api'
+import {
+  api,
+  type GraphQuery,
+  type MemoriesQuery,
+  type RecallOptions,
+  type RememberOptions,
+  type SessionsQuery,
+} from '../lib/api'
 import { useAuth } from '../store/auth'
 import type { FactEdit, FactWrite, Focus, Policy } from '../types'
 
 // Query keys are namespaced by the signed-in key so switching accounts never bleeds cache.
 const ns = () => useAuth.getState().apiKey ?? 'anon'
 export const qk = {
-  memories: () => ['memories', ns()] as const,
-  graph: () => ['graph', ns()] as const,
+  memoriesRoot: () => ['memories', ns()] as const,
+  memories: (params: MemoriesQuery = {}) => ['memories', ns(), params] as const,
+  sessionsRoot: () => ['sessions', ns()] as const,
+  sessions: (params: SessionsQuery = {}) => ['sessions', ns(), params] as const,
+  agentStatus: (sessionId?: string) => ['agent-status', ns(), sessionId ?? 'default'] as const,
+  sessionReport: (sessionId: string) => ['session-report', ns(), sessionId] as const,
+  graphRoot: () => ['graph', ns()] as const,
+  graph: (params: GraphQuery = {}) => ['graph', ns(), params] as const,
   focus: () => ['focus', ns()] as const,
   policy: () => ['policy', ns()] as const,
   profile: () => ['profile', ns()] as const,
-  working: () => ['working', ns()] as const,
+  working: (sessionId?: string) => ['working', ns(), sessionId ?? 'all'] as const,
   conflicts: () => ['conflicts', ns()] as const,
   health: () => ['health'] as const,
 }
@@ -21,14 +34,40 @@ export function useHealth() {
   return useQuery({ queryKey: qk.health(), queryFn: api.health, staleTime: 30_000, retry: false })
 }
 
-export function useMemories() {
+export function useMemories(params: MemoriesQuery = {}) {
   const enabled = !!useAuth((s) => s.apiKey)
-  return useQuery({ queryKey: qk.memories(), queryFn: api.memories, enabled, retry: false })
+  return useQuery({ queryKey: qk.memories(params), queryFn: () => api.memories(params), enabled, retry: false })
 }
 
-export function useGraph() {
+export function useSessions(params: SessionsQuery = {}) {
   const enabled = !!useAuth((s) => s.apiKey)
-  return useQuery({ queryKey: qk.graph(), queryFn: api.graph, enabled, retry: false })
+  return useQuery({ queryKey: qk.sessions(params), queryFn: () => api.sessions(params), enabled, retry: false })
+}
+
+export function useAgentStatus(sessionId?: string) {
+  const enabled = !!useAuth((s) => s.apiKey)
+  return useQuery({
+    queryKey: qk.agentStatus(sessionId),
+    queryFn: () => api.agentStatus(sessionId),
+    enabled,
+    retry: false,
+    staleTime: 15_000,
+  })
+}
+
+export function useSessionReport(sessionId: string | null | undefined, includeSensitive = false) {
+  const enabled = !!useAuth((s) => s.apiKey) && !!sessionId
+  return useQuery({
+    queryKey: qk.sessionReport(sessionId ?? ''),
+    queryFn: () => api.sessionReport(sessionId!, includeSensitive),
+    enabled,
+    retry: false,
+  })
+}
+
+export function useGraph(params: GraphQuery = {}) {
+  const enabled = !!useAuth((s) => s.apiKey)
+  return useQuery({ queryKey: qk.graph(params), queryFn: () => api.graph(params), enabled, retry: false })
 }
 
 export function useFocus() {
@@ -40,8 +79,9 @@ export function useFocus() {
 function useInvalidateMemory() {
   const qc = useQueryClient()
   return () => {
-    qc.invalidateQueries({ queryKey: qk.memories() })
-    qc.invalidateQueries({ queryKey: qk.graph() })
+    qc.invalidateQueries({ queryKey: qk.memoriesRoot() })
+    qc.invalidateQueries({ queryKey: qk.sessionsRoot() })
+    qc.invalidateQueries({ queryKey: qk.graphRoot() })
     qc.invalidateQueries({ queryKey: qk.focus() })
     qc.invalidateQueries({ queryKey: qk.profile() })
   }
@@ -52,9 +92,9 @@ export function useStructuredProfile() {
   return useQuery({ queryKey: qk.profile(), queryFn: api.structuredProfile, enabled, retry: false })
 }
 
-export function useWorking() {
+export function useWorking(sessionId?: string) {
   const enabled = !!useAuth((s) => s.apiKey)
-  return useQuery({ queryKey: qk.working(), queryFn: () => api.working(), enabled, retry: false })
+  return useQuery({ queryKey: qk.working(sessionId), queryFn: () => api.working(sessionId), enabled, retry: false })
 }
 
 export function useConflicts() {
@@ -69,9 +109,9 @@ export function useResolveConflict() {
       api.resolveConflict(id, keep),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: qk.conflicts() })
-      qc.invalidateQueries({ queryKey: qk.memories() })
+      qc.invalidateQueries({ queryKey: qk.memoriesRoot() })
       qc.invalidateQueries({ queryKey: qk.profile() })
-      qc.invalidateQueries({ queryKey: qk.graph() })
+      qc.invalidateQueries({ queryKey: qk.graphRoot() })
     },
   })
 }
@@ -89,20 +129,36 @@ export function useClearWorking() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: (session_id?: string) => api.clearWorking(session_id),
-    onSuccess: () => qc.invalidateQueries({ queryKey: qk.working() }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['working', ns()] }),
   })
 }
 
 export function useRemember() {
   const invalidate = useInvalidateMemory()
   return useMutation({
-    mutationFn: (content: string) => api.remember(content),
+    mutationFn: (req: string | ({ content: string } & RememberOptions)) =>
+      typeof req === 'string' ? api.remember(req) : api.remember(req.content, req),
     onSuccess: invalidate,
   })
 }
 
+export function useCloseSession() {
+  const invalidate = useInvalidateMemory()
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (session_id?: string) => api.closeSession(session_id),
+    onSuccess: () => {
+      invalidate()
+      qc.invalidateQueries({ queryKey: ['working', ns()] })
+    },
+  })
+}
+
 export function useRecall() {
-  return useMutation({ mutationFn: (query: string) => api.recall(query) })
+  return useMutation({
+    mutationFn: (req: string | ({ query: string } & RecallOptions)) =>
+      typeof req === 'string' ? api.recall(req) : api.recall(req.query, req),
+  })
 }
 
 export function useAddFact() {
@@ -144,7 +200,7 @@ export function useSetPolicy() {
     mutationFn: (patch: Partial<Policy>) => api.setPolicy(patch),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: qk.policy() })
-      qc.invalidateQueries({ queryKey: qk.memories() }) // persona may change
+      qc.invalidateQueries({ queryKey: qk.memoriesRoot() }) // persona may change
     },
   })
 }

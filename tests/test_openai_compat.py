@@ -106,6 +106,23 @@ def test_chat_completion_can_redact_sensitive_memory():
         shutil.rmtree(d, ignore_errors=True)
 
 
+def test_chat_completion_uses_session_scoped_working_memory():
+    d = tempfile.mkdtemp(prefix="engram_oc_")
+    try:
+        svc = MemoryService(data_dir=d, embedder_name="hashing", llm_name="")
+        svc.add_working("u", "today I am checking release notes", session_id="agent-thread-1")
+        seen = {}
+        svc.llm = FakeLLM(handler=lambda p, s: seen.setdefault("system", s) and "" or "ok")
+        body = {"model": "engram", "messages": [{"role": "user", "content": "what am I doing?"}]}
+
+        resp = oc.chat_completion(svc, "u", body, session_id="agent-thread-1")
+
+        assert resp["engram"]["session_id"] == "agent-thread-1"
+        assert "release notes" in (seen["system"] or "")
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
 def test_chat_completion_without_llm_raises():
     d = tempfile.mkdtemp(prefix="engram_oc_")
     try:
@@ -195,6 +212,26 @@ def test_chat_completions_endpoint_supports_sensitive_redaction(client_with_llm)
     system = appmod._svc.llm.calls[-1]["system"] or ""
     assert "Acme" in system
     assert "diabetes" not in system.lower()
+
+
+def test_chat_completions_endpoint_remembers_with_session_and_scope(client_with_llm):
+    c, _ = client_with_llm
+    h = {"Authorization": "Bearer chat_session"}
+
+    r = c.post("/v1/chat/completions", json={
+        "model": "engram",
+        "messages": [{"role": "user", "content": "I work at Acme."}],
+        "memory": {"session_id": "codex:repo:thread-1", "scope": "long"},
+    }, headers=h)
+
+    assert r.status_code == 200
+    data = r.json()
+    assert data["engram"]["session_id"] == "codex:repo:thread-1"
+    assert data["engram"]["remembered"] is True
+    assert data["engram"]["remember_scope"] == "long"
+
+    memories = c.get("/v1/memories", headers=h).json()
+    assert any(e["session"] == "codex:repo:thread-1" for e in memories["episodes"])
 
 
 def test_chat_completions_streaming(client_with_llm):

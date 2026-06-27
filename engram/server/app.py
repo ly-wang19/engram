@@ -13,7 +13,7 @@ Then a client (curl / SDK / the MCP bridge) calls it with `Authorization: Bearer
     POST /v1/remember  {"content": "...", "session_id": "..."}   -> store + consolidate
     POST /v1/recall    {"query": "...", "lean": true}            -> a small retrieved context to answer from
     GET  /v1/profile                                             -> the user's synthesized profile
-    POST /v1/forget                                              -> wipe this user's memory
+    POST /v1/forget {"confirm": true}                            -> wipe this user's memory
 
 This is the foundation of a hosted product (like Hy-Memory). It is single-node + file-backed by default —
 swap the in-memory stores for pgvector/Qdrant + Kuzu (already pluggable behind the store interfaces) and
@@ -26,7 +26,7 @@ from contextlib import asynccontextmanager
 from typing import Optional
 
 try:
-    from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException
+    from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Request
     from pydantic import BaseModel, ConfigDict
 except Exception as exc:  # noqa: BLE001
     raise SystemExit("the server needs FastAPI — `pip install \"engram-memory[server]\"`") from exc
@@ -87,6 +87,17 @@ app = FastAPI(
 )
 
 
+@app.middleware("http")
+async def cache_headers(request: Request, call_next):
+    response = await call_next(request)
+    path = request.url.path
+    if path.startswith("/ui/assets/"):
+        response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+    elif path == "/ui" or path.startswith("/ui/") or path == "/":
+        response.headers["Cache-Control"] = "no-cache"
+    return response
+
+
 def auth(authorization: str = Header(default="")) -> str:
     """Resolve the caller's user_id from the Bearer key. Dev open mode uses the key text itself as the
     namespace, so anyone can try it without pre-provisioned keys while still avoiding shared anonymous
@@ -123,6 +134,12 @@ class RecallReq(BaseModel):
     session_id: Optional[str] = None  # when set, recall also surfaces this session's working memory
     as_of: Optional[float] = None  # epoch seconds: point-in-time memory view
     redact_sensitive: bool = False  # hide facts tagged sensitive from the returned context/fact list
+
+
+class CloseSessionReq(BaseModel):
+    session_id: str = "default"
+    summarize: bool = True
+    clear_working: bool = True
 
 
 @app.get("/health")
@@ -162,6 +179,19 @@ def root():
     if _spa_built():
         return RedirectResponse(url="/ui/")
     return HTMLResponse(_VIEWER_HTML)
+
+
+@app.get("/robots.txt")
+def robots_txt():
+    from fastapi.responses import PlainTextResponse
+
+    return PlainTextResponse(
+        "User-agent: *\n"
+        "Disallow: /ui\n"
+        "Disallow: /ui/\n"
+        "Disallow: /v1/\n"
+        "Disallow: /health\n"
+    )
 
 
 _VIEWER_HTML = """<!DOCTYPE html><html lang=zh-CN><head><meta charset=utf-8>
@@ -254,6 +284,50 @@ def recall(req: RecallReq, user: str = Depends(auth)):
                         redact_sensitive=req.redact_sensitive, answer=True)
 
 
+@app.post("/v1/sessions/close")
+def close_session(req: CloseSessionReq, user: str = Depends(auth)):
+    """End a client session: drain pending consolidation, index summaries, clear ephemeral working state.
+
+    Raw episodes remain stored for provenance and future as-of reads; this is a lifecycle/grooming hook
+    for agent clients, not a transcript deletion endpoint.
+    """
+    return svc().close_session(
+        user,
+        req.session_id,
+        summarize=req.summarize,
+        clear_working=req.clear_working,
+    )
+
+
+@app.get("/v1/sessions")
+def sessions(
+    limit: Optional[int] = None,
+    offset: int = 0,
+    q: str = "",
+    user: str = Depends(auth),
+):
+    """Content-free session index: session ids, counts, timestamps, and backlog state.
+
+    Use this to show a user which Codex/Claude/app sessions touched their memory before drilling into a
+    specific `/v1/sessions/report`.
+    """
+    return svc().sessions(user, limit=limit, offset=offset, q=q)
+
+
+@app.get("/v1/sessions/report")
+def session_report(
+    session_id: str,
+    include_sensitive: bool = False,
+    user: str = Depends(auth),
+):
+    """Audit what a specific session contributed to durable memory.
+
+    Sensitive fact text is redacted by default. Pass include_sensitive=true only for explicit user-owned
+    audits where showing private fact text is intended.
+    """
+    return svc().session_report(user, session_id, include_sensitive=include_sensitive)
+
+
 @app.get("/v1/profile")
 def profile(user: str = Depends(auth)):
     return svc().profile(user)
@@ -267,10 +341,28 @@ def structured_profile(user: str = Depends(auth)):
 
 
 @app.get("/v1/memories")
-def memories(user: str = Depends(auth)):
+def memories(
+    facts_limit: Optional[int] = None,
+    facts_offset: int = 0,
+    episodes_limit: Optional[int] = None,
+    episodes_offset: int = 0,
+    status: Optional[str] = None,
+    q: str = "",
+    include_sensitive: bool = True,
+    user: str = Depends(auth),
+):
     """See EVERYTHING stored for this user — the raw episodes, the extracted bi-temporal facts (live and
     superseded, with provenance), and the L2 session summaries. This is the 'look inside my memory' view."""
-    return svc().memories(user)
+    return svc().memories(
+        user,
+        facts_limit=facts_limit,
+        facts_offset=facts_offset,
+        episodes_limit=episodes_limit,
+        episodes_offset=episodes_offset,
+        status=status,
+        q=q,
+        include_sensitive=include_sensitive,
+    )
 
 
 @app.get("/v1/stats")
@@ -280,8 +372,26 @@ def stats(user: str = Depends(auth)):
     return svc().stats(user)
 
 
+@app.get("/v1/agent/status")
+def agent_status(session_id: Optional[str] = None, user: str = Depends(auth)):
+    """Content-free status for agent clients before they decide whether to recall/remember/close.
+
+    This returns namespace/session counts, focus policy, and recommended tool calls without exposing
+    fact text, profile prose, raw episodes, summaries, or storage paths.
+    """
+    return svc().agent_status(user, session_id=session_id)
+
+
+class ForgetReq(BaseModel):
+    confirm: bool = False
+
+
 @app.post("/v1/forget")
-def forget(user: str = Depends(auth)):
+def forget(req: Optional[ForgetReq] = None, confirm: bool = False, user: str = Depends(auth)):
+    if user in {"anonymous", "1"}:
+        raise HTTPException(403, "the public demo/anonymous namespace cannot be wiped")
+    if not confirm and not (req and req.confirm):
+        raise HTTPException(400, "forget requires explicit confirm=true because it permanently erases this namespace")
     return svc().forget(user)
 
 
@@ -312,20 +422,23 @@ class ChatCompletionReq(BaseModel):
     model: str = "engram"
     messages: list[dict] = []
     stream: bool = False
-    memory: Optional[dict] = None  # Engram extension: {"recall": bool, "remember": bool, "n_chunks": int, "as_of": float, "redact_sensitive": bool}
+    # Engram extension: recall/remember/session_id/scope/n_chunks/as_of/redact_sensitive.
+    memory: Optional[dict] = None
 
 
 @app.post("/v1/chat/completions")
 def chat_completions(req: ChatCompletionReq, background: BackgroundTasks, user: str = Depends(auth)):
     """OpenAI-compatible chat completions, augmented with long-term memory: recall a relevant slice for
     the latest user turn, inject it, generate with the configured LLM, then remember the turn off the
-    critical path. Set body.memory={"recall":false}, {"remember":false}, {"as_of":...}, or
-    {"redact_sensitive":true} to control the memory layer."""
+    critical path. Set body.memory={"recall":false}, {"remember":false}, {"session_id":"..."},
+    {"scope":"working"}, {"as_of":...}, or {"redact_sensitive":true} to control the memory layer."""
     from . import openai_compat as oc
 
     if not req.messages:
         raise HTTPException(400, "messages must be a non-empty list")
     opts = req.memory or {}
+    session_id = str(opts.get("session_id") or "default")
+    scope = str(opts.get("scope") or "auto")
     body = req.model_dump()
     try:
         resp = oc.chat_completion(
@@ -336,14 +449,22 @@ def chat_completions(req: ChatCompletionReq, background: BackgroundTasks, user: 
             do_recall=opts.get("recall", True),
             as_of=opts.get("as_of"),
             redact_sensitive=bool(opts.get("redact_sensitive", False)),
+            session_id=session_id,
         )
     except oc.NoLLMConfigured as exc:
         raise HTTPException(503, str(exc))
 
     user_text = oc.latest_user_text(body.get("messages", []))
     if opts.get("remember", True) and user_text:
-        background.add_task(svc().remember, user, user_text)  # write off the response path (System-2)
+        background.add_task(
+            svc().remember,
+            user,
+            user_text,
+            session_id=session_id,
+            scope=scope,
+        )  # write off the response path (System-2)
         resp["engram"]["remembered"] = True
+        resp["engram"]["remember_scope"] = scope
 
     if req.stream:
         from fastapi.responses import StreamingResponse
@@ -356,6 +477,8 @@ class FactReq(BaseModel):
     subject: str = "user"
     predicate: str
     object: str
+    sensitive: Optional[bool] = None
+    category: Optional[str] = None
 
 
 class FactEdit(BaseModel):
@@ -369,7 +492,14 @@ class FactEdit(BaseModel):
 @app.post("/v1/facts")
 def add_fact(req: FactReq, user: str = Depends(auth)):
     """Manually add a fact you assert — it's authoritative and won't be auto-overwritten."""
-    return svc().add_fact(user, req.subject, req.predicate, req.object)
+    return svc().add_fact(
+        user,
+        req.subject,
+        req.predicate,
+        req.object,
+        sensitive=req.sensitive,
+        category=req.category,
+    )
 
 
 @app.patch("/v1/facts/{fact_id}")
@@ -474,10 +604,24 @@ def resolve_conflict(conflict_id: str, req: ResolveReq, user: str = Depends(auth
 
 # --- ② semantic graph for the 关系图谱 visualization ---
 @app.get("/v1/graph")
-def graph(as_of: float | None = None, include_sensitive: bool = True, user: str = Depends(auth)):
+def graph(
+    as_of: float | None = None,
+    include_sensitive: bool = True,
+    q: str = "",
+    live_only: bool = False,
+    limit: Optional[int] = None,
+    user: str = Depends(auth),
+):
     """Nodes (entities) + edges (bi-temporal relations) of this user's semantic graph.
     `include_sensitive=false` omits edges backed by facts tagged sensitive."""
-    return svc().graph(user, as_of=as_of, include_sensitive=include_sensitive)
+    return svc().graph(
+        user,
+        as_of=as_of,
+        include_sensitive=include_sensitive,
+        q=q,
+        live_only=live_only,
+        limit=limit,
+    )
 
 
 # --- ④ privacy: full data export (GDPR-style portability); erase is POST /v1/forget ---
@@ -503,6 +647,8 @@ if _spa_built():
 
     app.mount("/ui/assets", StaticFiles(directory=os.path.join(_DIST, "assets")), name="assets")
 
+    @app.head("/ui")
+    @app.head("/ui/{path:path}")
     @app.get("/ui")
     @app.get("/ui/{path:path}")
     def spa(path: str = ""):

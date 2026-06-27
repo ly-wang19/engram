@@ -15,7 +15,9 @@ export default function Privacy() {
   const t = useT()
   const [exporting, setExporting] = useState(false)
   const [confirm, setConfirm] = useState(false)
-  const [excludeSensitive, setExcludeSensitive] = useState(false)
+  const [confirmText, setConfirmText] = useState('')
+  const [excludeSensitive, setExcludeSensitive] = useState(true)
+  const protectedNamespace = user === '1' || user === 'anonymous'
 
   const onExport = async () => {
     setExporting(true)
@@ -57,7 +59,12 @@ export default function Privacy() {
             </span>
           </CardTitle>
           <p className="text-sm leading-relaxed text-ghost">{t.privacy.forgetDesc}</p>
-          <Button variant="danger" className="mt-4" onClick={() => setConfirm(true)}>
+          {protectedNamespace && (
+            <p className="mt-3 rounded-lg border border-brand-amber/30 bg-brand-amber/10 px-3 py-2 text-sm text-brand-amber">
+              {t.privacy.protectedDemo}
+            </p>
+          )}
+          <Button variant="danger" className="mt-4" disabled={protectedNamespace} onClick={() => setConfirm(true)}>
             <Trash2 className="h-4 w-4" /> {t.privacy.forgetBtn}
           </Button>
         </Card>
@@ -79,19 +86,35 @@ export default function Privacy() {
         danger
         confirmLabel={t.privacy.confirmLabel}
         loading={forget.isPending}
+        confirmDisabled={confirmText !== user}
         body={
-          <>
-            {t.privacy.confirmBodyPre}
-            <strong className="text-brand-rose">{t.privacy.confirmBodyEmph}</strong>
-            {t.privacy.confirmBodyPost}
-          </>
+          <div className="space-y-4">
+            <p>
+              {t.privacy.confirmBodyPre}
+              <strong className="text-brand-rose">{t.privacy.confirmBodyEmph}</strong>
+              {t.privacy.confirmBodyPost}
+            </p>
+            <label className="block">
+              <span className="label">{t.privacy.confirmTypeLabel}</span>
+              <input
+                className="input mt-1.5"
+                value={confirmText}
+                onChange={(e) => setConfirmText(e.target.value)}
+                placeholder={t.privacy.confirmTypePlaceholder}
+              />
+            </label>
+          </div>
         }
-        onClose={() => setConfirm(false)}
+        onClose={() => {
+          setConfirm(false)
+          setConfirmText('')
+        }}
         onConfirm={() =>
           forget.mutate(undefined, {
             onSuccess: () => {
               toast.success(t.privacy.forgotten)
               setConfirm(false)
+              setConfirmText('')
             },
             onError: (e) => toast.error(String((e as Error).message)),
           })

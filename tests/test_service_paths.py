@@ -1,10 +1,22 @@
 from __future__ import annotations
 
+import multiprocessing
+import queue
+
 from engram import Memory
 from engram.embed import HashingEmbedder
 from engram.llm.providers import make_embedder
 from engram.service import MemoryService
 from engram.types import Entity, Relation
+
+
+def _remember_in_process(data_dir: str, user: str, session_id: str, content: str, out) -> None:
+    try:
+        svc = MemoryService(data_dir=data_dir, embedder_name="hashing", llm_name="")
+        result = svc.remember(user, content, session_id=session_id, scope="long")
+        out.put({"ok": result.get("ok"), "extracted": result.get("extracted", 0)})
+    except BaseException as exc:  # noqa: BLE001 - surfaced in the parent test process.
+        out.put({"error": repr(exc)})
 
 
 def test_make_embedder_defaults_to_offline_hashing():
@@ -69,6 +81,213 @@ def test_service_stats_reports_consolidation_backlog_without_content(tmp_path):
     assert after["counts"]["episodes_pending"] == 0
     assert after["counts"]["episodes_consolidated"] == 2
     assert after["consolidation_backlog"] is False
+
+
+def test_service_close_session_grooms_one_session_and_clears_working(tmp_path):
+    svc = MemoryService(data_dir=str(tmp_path), embedder_name="hashing")
+    mem = svc.get("u")
+    mem.add("I work at Acme.", user_id="u", session_id="s1")
+    svc.add_working("u", "today I am focused on testing", session_id="s1")
+
+    out = svc.close_session("u", "s1")
+
+    assert out["ok"] is True
+    assert out["session_id"] == "s1"
+    assert out["episodes"] == 1
+    assert out["pending_consolidated"] == 1
+    assert out["facts_added"] >= 1
+    assert out["summaries"] == 1
+    assert out["working_cleared"] == 1
+    assert svc.working_memory("u", session_id="s1")["items"] == []
+
+    stats = svc.stats("u")
+    assert stats["counts"]["episodes_pending"] == 0
+    dump = svc.memories("u")
+    assert dump["counts"]["summaries"] == 1
+    assert dump["episodes"][0]["summary"]
+
+    reloaded = MemoryService(data_dir=str(tmp_path), embedder_name="hashing")
+    assert reloaded.memories("u")["counts"]["summaries"] == 1
+
+
+def test_service_handoffs_memory_across_agent_sessions(tmp_path):
+    svc = MemoryService(data_dir=str(tmp_path), embedder_name="hashing")
+    user = "shared-user"
+    codex_session = "codex:super-memory:thread-a"
+    claude_session = "claude-code:super-memory:thread-b"
+
+    written = svc.remember(
+        user,
+        "Project decision: the launch checklist must include committed eval logs.",
+        session_id=codex_session,
+        scope="long",
+    )
+    assert written["ok"] is True
+    assert written["extracted"] >= 1
+    assert svc.close_session(user, codex_session)["ok"] is True
+
+    recalled = svc.recall(
+        user,
+        "What launch checklist decision did Codex record?",
+        session_id=claude_session,
+        n_chunks=3,
+    )
+
+    assert "committed eval logs" in recalled["context"]
+    assert codex_session in recalled["context"]
+    assert svc.working_memory(user, session_id=claude_session)["items"] == []
+
+    reloaded = MemoryService(data_dir=str(tmp_path), embedder_name="hashing")
+    after_reload = reloaded.recall(
+        user,
+        "What should the launch checklist include?",
+        session_id=claude_session,
+        n_chunks=3,
+    )
+    assert "committed eval logs" in after_reload["context"]
+
+
+def test_service_refreshes_cached_namespace_after_external_process_write(tmp_path):
+    codex = MemoryService(data_dir=str(tmp_path), embedder_name="hashing")
+    claude = MemoryService(data_dir=str(tmp_path), embedder_name="hashing")
+    user = "shared-user"
+    codex_session = "codex:super-memory:external-writer"
+    claude_session = "claude-code:super-memory:stale-reader"
+
+    # Claude Code has already opened and cached this namespace before Codex writes anything.
+    before = claude.agent_status(user, session_id=claude_session)
+    assert before["session"]["episodes"] == 0
+
+    written = codex.remember(
+        user,
+        "Project decision: local MCP agents must refresh disk snapshots before recall.",
+        session_id=codex_session,
+        scope="long",
+    )
+    assert written["ok"] is True
+    assert codex.close_session(user, codex_session)["ok"] is True
+
+    recalled = claude.recall(
+        user,
+        "What did Codex decide about local MCP agents?",
+        session_id=claude_session,
+        n_chunks=3,
+    )
+
+    assert "refresh disk snapshots" in recalled["context"]
+    assert codex_session in recalled["context"]
+
+
+def test_service_write_lock_preserves_external_process_writes(tmp_path):
+    ctx = multiprocessing.get_context("spawn")
+    child_result = ctx.Queue()
+    parent = MemoryService(data_dir=str(tmp_path), embedder_name="hashing", llm_name="")
+    user = "shared-user"
+    parent_session = "codex:super-memory:concurrent-parent"
+    child_session = "claude-code:super-memory:concurrent-child"
+
+    with parent.write_lock(user):
+        child = ctx.Process(
+            target=_remember_in_process,
+            args=(
+                str(tmp_path),
+                user,
+                child_session,
+                "Project decision: child-write-beta must survive concurrent local MCP writes.",
+                child_result,
+            ),
+        )
+        child.start()
+        try:
+            early = child_result.get(timeout=0.3)
+        except queue.Empty:
+            early = None
+        assert early is None, "child write finished while the parent still held the service write lock"
+
+        mem = parent.get(user)
+        parent_fact = mem.add_fact(
+            "project",
+            "concurrent_parent_write",
+            "parent-write-alpha must survive concurrent local MCP writes",
+            user_id=user,
+        )
+        mem.remember_working("parent temporary state", user_id=user, session_id=parent_session)
+        assert parent_fact.object.startswith("parent-write-alpha")
+        parent._save(user, mem)
+
+    child_msg = child_result.get(timeout=45)
+    child.join(timeout=5)
+    assert child.exitcode == 0
+    assert child_msg == {"ok": True, "extracted": 1}
+
+    reloaded = MemoryService(data_dir=str(tmp_path), embedder_name="hashing", llm_name="")
+    rendered = str(reloaded.memories(user))
+    assert "parent-write-alpha" in rendered
+    assert "child-write-beta" in rendered
+    assert reloaded.working_memory(user, session_id=parent_session)["items"][0]["content"] == "parent temporary state"
+
+
+def test_service_agent_status_is_content_free_and_session_aware(tmp_path):
+    svc = MemoryService(data_dir=str(tmp_path), embedder_name="hashing")
+    user = "status-user"
+    session = "codex:super-memory:thread"
+    svc.remember(
+        user,
+        "My private diagnosis is diabetes and I work at Acme.",
+        session_id=session,
+        scope="long",
+    )
+    svc.add_working(user, "today I am preparing a private launch note", session_id=session)
+    svc.set_focus(user, track=["project decisions"], mute=["health details"])
+
+    status = svc.agent_status(user, session_id=session)
+
+    assert status["ok"] is True
+    assert status["user"] == user
+    assert status["session_id"] == session
+    assert status["session"]["episodes"] == 1
+    assert status["session"]["working_live"] == 1
+    assert status["focus"] == {"track": ["project decisions"], "mute": ["health details"]}
+    assert status["counts"]["facts_live"] >= 1
+    assert "engram_recall" in status["tools"]["read_context"]
+    assert any("engram_close_session" in item for item in status["recommended_next_actions"])
+
+    rendered = str(status).lower()
+    assert "diabetes" not in rendered
+    assert "acme" not in rendered
+    assert "private launch note" not in rendered
+
+
+def test_service_session_report_audits_saved_facts_with_sensitive_redaction(tmp_path):
+    svc = MemoryService(data_dir=str(tmp_path), embedder_name="hashing")
+    user = "report-user"
+    session = "codex:super-memory:thread"
+    svc.remember(
+        user,
+        "Project decision: the launch checklist must include committed eval logs.",
+        session_id=session,
+        scope="long",
+    )
+    svc.add_fact(user, "user", "has_disease", "diabetes", sensitive=True)
+    sensitive = svc.get(user).fact_store.values()[-1]
+    sensitive.provenance.append(svc.get(user).episodes_doc.values()[0].id)
+    svc.get(user).save()
+
+    report = svc.session_report(user, session)
+
+    assert report["ok"] is True
+    assert report["session_id"] == session
+    assert report["episodes"] == 1
+    assert report["facts_added"] >= 2
+    assert report["facts_redacted"] == 1
+    rendered = str(report).lower()
+    assert "committed eval logs" in rendered
+    assert "diabetes" not in rendered
+    assert "[redacted sensitive fact]" in rendered
+
+    full = svc.session_report(user, session, include_sensitive=True)
+    assert full["facts_redacted"] == 0
+    assert "diabetes" in str(full).lower()
 
 
 def test_service_stats_reports_graph_hygiene_without_content(tmp_path):

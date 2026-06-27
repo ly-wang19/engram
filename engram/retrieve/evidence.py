@@ -32,10 +32,8 @@ class EvidenceNeed:
     subqueries: tuple[str, ...] = field(default_factory=tuple)
 
 
-_AGG_TERMS = {
-    "count", "counts", "many", "much", "total", "sum", "all", "every", "each", "list",
-    "sessions", "times", "cities", "places", "trips", "events",
-}
+_AGG_TERMS = {"count", "counts", "many", "much", "total", "sum", "all", "every", "each", "list"}
+_AGG_OBJECT_TERMS = {"sessions", "times", "cities", "places", "trips", "events"}
 _TEMPORAL_TERMS = {
     "when", "date", "day", "before", "after", "during", "between", "first", "last", "latest",
     "recent", "recently", "oldest", "newest", "previous", "timeline", "order", "duration",
@@ -198,8 +196,10 @@ def plan_evidence(query: str) -> EvidenceNeed:
     toks = set(stems(q))
     reasons: list[str] = []
 
+    wh_list_question = bool(re.search(r"\b(?:which|what)\b", q)) and _token_hit(toks, _AGG_OBJECT_TERMS)
     aggregation = (
         _token_hit(toks, _AGG_TERMS)
+        or wh_list_question
         or bool(re.search(r"\bhow\s+(many|much)\b", q))
         or _has_phrase(q, _CJK_PATTERNS["aggregation"])
     )

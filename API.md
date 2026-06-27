@@ -27,6 +27,12 @@ uvicorn engram.server.app:app --host 0.0.0.0 --port 8456
 > 想做真正的鉴权隔离：去掉 `ENGRAM_OPEN`，改设 `ENGRAM_API_KEYS="alice:sk-a,bob:sk-b"`。
 > 默认不接受无 Bearer 的匿名共享记忆；本地试玩如确实需要匿名，可额外设置 `ENGRAM_ALLOW_ANONYMOUS=1`。
 
+跨 Claude Code / Codex / Cursor / 自研 agent 的推荐生命周期见
+[`docs/cross-agent-memory.md`](docs/cross-agent-memory.md) 和
+[`docs/agent-adapters.md`](docs/agent-adapters.md)：开工先看 agent status，回答前 recall，长期事实 remember，
+线程结束 close session，再用 session report 审计这一轮保存了什么。单会话生命周期自测（本地零服务或 HTTP）见
+[`examples/cross_agent_lifecycle.py`](examples/cross_agent_lifecycle.py)。
+
 ---
 
 ## 1. 鉴权
@@ -94,10 +100,63 @@ curl -s $B/health
   "full_tokens": 81408 }     // 整段历史 token（full-context 基线）→ 省 8×
 ```
 
+### 3.2 结束会话整理 — agent 客户端收尾
+`POST /v1/sessions/close`
+```json
+{ "session_id": "codex:super-memory:thread-123",
+  "summarize": true,
+  "clear_working": true }
+```
+用于 Claude Code / Codex / Cursor 这类客户端在一个线程结束或切换任务时调用。它不会删除原始对话，
+而是补齐这个 session 的待整理 episode、生成缺失摘要、把知识更新反映到摘要层、清掉该 session 的
+临时 working memory，并保存到磁盘。
+
+如需审计这一轮到底写入了哪些长期事实：
+`GET /v1/sessions/report?session_id=codex:super-memory:thread-123`
+
+默认 `include_sensitive=false`，敏感事实正文会被替换为 `[redacted sensitive fact]`；用户明确要完整私有审计时再传
+`include_sensitive=true`。
+
+推荐生命周期：
+```text
+会话开始 / 接线自检：GET /v1/agent/status?session_id=...
+回答前：POST /v1/recall
+用户说了稳定偏好、项目约定、长期事实：POST /v1/remember
+会话结束 / 切换任务：POST /v1/sessions/close
+需要审计保存结果：GET /v1/sessions/report?session_id=...
+```
+
+### 3.3 Agent 接线状态 — 不返回记忆正文
+`GET /v1/agent/status?session_id=codex:super-memory:thread-123`
+
+返回当前 key/namespace、session 计数、working memory 数、focus 策略、长期记忆计数和建议下一步调用。
+它不返回 profile、fact 文本、原始对话或摘要，适合 agent 开工前确认自己接到了正确的记忆层。
+
+### 3.4 OpenAI-compatible chat 的 memory 扩展
+`POST /v1/chat/completions` 可在请求体里带：
+```json
+{ "model": "engram",
+  "messages": [{ "role": "user", "content": "继续上次 benchmark 的事" }],
+  "memory": {
+    "session_id": "codex:super-memory:thread-123",
+    "recall": true,
+    "remember": true,
+    "scope": "auto",
+    "n_chunks": 6,
+    "as_of": null,
+    "redact_sensitive": false
+  } }
+```
+这样已有 OpenAI SDK 应用只要换 `base_url`，就能在回答前自动召回、回答后把用户轮次写回同一个
+agent session。
+
 ## 4. 查看 / 管理
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
+| GET | `/v1/agent/status?session_id=...` | Agent 开工自检：namespace/session/focus/counts/下一步建议；不含记忆正文 |
+| GET | `/v1/sessions?limit=20&q=codex` | 跨 agent/app 会话索引：session id、时间、episode/fact/working 计数；不含正文 |
+| GET | `/v1/sessions/report?session_id=...` | 审计某个 session 写入了哪些长期事实；默认隐藏敏感事实正文 |
 | GET | `/v1/stats` | 内容无关统计：episode pending/consolidated、hot/cold facts、cold page-in/out、时间范围、敏感事实数量、pending conflicts、运行后端；适合监控 |
 | GET | `/v1/memories` | 全部事实(双时间轴/来源/分类/敏感)+ 原始对话 + 摘要 |
 | GET | `/v1/profile/structured` | 结构化用户画像(基本信息/偏好/习惯) |
@@ -107,7 +166,7 @@ curl -s $B/health
 | PATCH | `/v1/facts/{id}` | 改事实 `{"object":"...","sensitive":true}` |
 | DELETE | `/v1/facts/{id}` | 删一条 |
 | GET | `/v1/export?include_sensitive=false` | 安全结构化导出：仅非敏感 facts + graph；不含画像、摘要、原始对话 |
-| POST | `/v1/forget` | 清空该 key 的全部记忆 |
+| POST | `/v1/forget` | 需 `{"confirm":true}`；清空该 key 的全部记忆（不可逆） |
 
 ## 5. 控制台（可视化）
 浏览器开 **`<Base URL>/ui/`** → 输入你的 key → 看「画像 / 事实管理 / 时间线 / 关系图谱 / 记忆问答 / 冲突待确认」。

@@ -6,16 +6,25 @@ import { Button } from '../components/ui'
 import { LangToggle } from '../components/LangToggle'
 import { useAuth } from '../store/auth'
 import { useT } from '../i18n'
+import { useHealth } from '../hooks/queries'
 
 export default function Login() {
   const login = useAuth((s) => s.login)
   const t = useT()
+  const health = useHealth()
   const [key, setKey] = useState('1') // demo namespace: public, fully-loaded memory to explore
 
   const submit = (e: FormEvent) => {
     e.preventDefault()
     if (key.trim()) login(key)
   }
+
+  const mode =
+    health.data?.auth_mode === 'api_keys'
+      ? t.login.modeApiKeys
+      : health.data?.auth_mode === 'disabled'
+        ? t.login.modeDisabled
+        : t.login.modeOpen
 
   return (
     <div className="relative grid min-h-screen place-items-center px-4">
@@ -31,6 +40,10 @@ export default function Login() {
             {t.login.subtitlePre}
             <code className="text-brand-cyan">1</code>
             {t.login.subtitlePost}
+          </p>
+          <p className="mt-3 rounded-lg border border-line bg-white/[0.04] px-3 py-2 text-xs leading-relaxed text-ghost">
+            {mode}
+            {health.data?.anonymous_allowed ? ` ${t.login.anonymousOn}` : ''}
           </p>
 
           <label className="mt-6 block">

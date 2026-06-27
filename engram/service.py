@@ -14,6 +14,7 @@ import os
 import shutil
 import threading
 from collections import OrderedDict
+from contextlib import contextmanager
 from typing import Any, Optional
 
 from .memory import Memory
@@ -51,6 +52,36 @@ def _est_tokens(text: str) -> int:
 
 def _all_facts(mem: Memory) -> list:
     return mem.fact_store.values() + mem.cold_store.values()
+
+
+def _clamp_limit(limit: Optional[int], default: Optional[int] = None, max_value: int = 500) -> Optional[int]:
+    if limit is None:
+        return default
+    return max(0, min(int(limit), max_value))
+
+
+def _page(items: list, offset: int = 0, limit: Optional[int] = None) -> tuple[list, dict]:
+    start = max(0, int(offset or 0))
+    effective_limit = None
+    if limit is None:
+        sliced = items[start:]
+        next_offset = None
+    else:
+        effective_limit = _clamp_limit(limit, max_value=500)
+        if effective_limit == 0:
+            sliced = []
+            next_offset = None
+        else:
+            sliced = items[start:start + effective_limit]
+            end = start + effective_limit
+            next_offset = end if end < len(items) else None
+    return sliced, {
+        "total": len(items),
+        "offset": start,
+        "limit": effective_limit,
+        "has_more": next_offset is not None,
+        "next_offset": next_offset,
+    }
 
 
 class MemoryService:
@@ -91,46 +122,105 @@ class MemoryService:
         if os.environ.get("ENGRAM_CONFLICT_DETECTION") == "1" and self.llm is not None:
             self.config.conflict_detection = True
         self._hot: "OrderedDict[str, Memory]" = OrderedDict()
+        self._hot_versions: dict[str, tuple[int, int] | None] = {}
         self._locks: dict[str, threading.Lock] = {}
         self._g = threading.Lock()
 
     # --- namespace lifecycle ------------------------------------------------
+    def _safe_user(self, user: str) -> str:
+        return "".join(c for c in user if c.isalnum() or c in "-_.") or "default"
+
     def _path(self, user: str) -> str:
-        safe = "".join(c for c in user if c.isalnum() or c in "-_.") or "default"
+        safe = self._safe_user(user)
         path = os.path.join(self.data_dir, safe)
         legacy = os.path.join(self.data_dir, f"{safe}.pkl")
         return legacy if os.path.exists(legacy) and not os.path.exists(path) else path
+
+    @contextmanager
+    def _user_file_lock(self, user: str):
+        safe = self._safe_user(user)
+        path = self._path(user)
+        if path.endswith(".pkl") or (os.path.exists(path) and not os.path.isdir(path)):
+            os.makedirs(self.data_dir, exist_ok=True)
+            lock_path = os.path.join(self.data_dir, f"{safe}.service.lock")
+        else:
+            os.makedirs(path, exist_ok=True)
+            lock_path = os.path.join(path, ".service.lock")
+        with open(lock_path, "a", encoding="utf-8") as fh:
+            try:
+                import fcntl
+
+                fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+                yield
+                fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+            except ImportError:  # pragma: no cover - fcntl exists on supported Linux/macOS targets.
+                yield
+
+    @contextmanager
+    def write_lock(self, user: str):
+        """Serialize local read-modify-save transactions across threads and MCP stdio processes."""
+        with self.lock(user):
+            with self._user_file_lock(user):
+                yield
+
+    def _store_version(self, user: str) -> tuple[int, int] | None:
+        manifest = os.path.join(self._path(user), "manifest.json")
+        try:
+            st = os.stat(manifest)
+        except FileNotFoundError:
+            return None
+        return (st.st_mtime_ns, st.st_size)
+
+    def _save(self, user: str, mem: Memory) -> None:
+        mem.save()
+        with self._g:
+            if self._hot.get(user) is mem:
+                self._hot_versions[user] = self._store_version(user)
 
     def lock(self, user: str) -> threading.Lock:
         with self._g:
             return self._locks.setdefault(user, threading.Lock())
 
     def get(self, user: str) -> Memory:
-        """The hot Memory for `user`, loading its disk snapshot on first touch and evicting the coldest
-        namespace from RAM when over capacity (its snapshot stays on disk)."""
+        """The hot Memory for `user`, reloading when another local process saved a newer snapshot.
+
+        Agent clients often run as separate MCP stdio processes (Codex, Claude Code, Cursor) that share
+        one user-owned data dir. Checking the manifest fingerprint on every access keeps those processes
+        from serving stale in-RAM state after a sibling agent writes to disk.
+        """
         with self._g:
             if user in self._hot:
-                self._hot.move_to_end(user)
-                return self._hot[user]
+                current = self._store_version(user)
+                if current != self._hot_versions.get(user):
+                    self._hot.pop(user, None)
+                    self._hot_versions.pop(user, None)
+                else:
+                    self._hot.move_to_end(user)
+                    return self._hot[user]
         mem = Memory.open(self._path(user), embedder=self.embedder, llm=self.llm, config=self.config)
+        version = self._store_version(user)
         with self._g:
             self._hot[user] = mem
+            self._hot_versions[user] = version
             self._hot.move_to_end(user)
             while len(self._hot) > self.max_hot_users:
-                self._hot.popitem(last=False)
+                evicted, _ = self._hot.popitem(last=False)
+                self._hot_versions.pop(evicted, None)
         return mem
 
     def forget(self, user: str) -> dict:
-        with self._g:
-            self._hot.pop(user, None)
-        p = self._path(user)
-        safe = "".join(c for c in user if c.isalnum() or c in "-_.") or "default"
-        for p in {p, os.path.join(self.data_dir, safe), os.path.join(self.data_dir, f"{safe}.pkl")}:
-            if os.path.exists(p):
-                if os.path.isdir(p):
-                    shutil.rmtree(p)
-                else:
-                    os.remove(p)
+        with self.write_lock(user):
+            with self._g:
+                self._hot.pop(user, None)
+                self._hot_versions.pop(user, None)
+            p = self._path(user)
+            safe = self._safe_user(user)
+            for p in {p, os.path.join(self.data_dir, safe), os.path.join(self.data_dir, f"{safe}.pkl")}:
+                if os.path.exists(p):
+                    if os.path.isdir(p):
+                        shutil.rmtree(p)
+                    else:
+                        os.remove(p)
         return {"ok": True, "message": f"all memory for '{user}' erased"}
 
     @property
@@ -144,11 +234,11 @@ class MemoryService:
         outage never loses the raw episode). `scope` (auto|long|working) routes by ephemerality —
         transient state stays in dated history + working memory but is NOT promoted to a durable profile
         fact (see Memory.remember)."""
-        with self.lock(user):
+        with self.write_lock(user):
             mem = self.get(user)
             routed = mem.remember(content, user_id=user, session_id=session_id, scope=scope)
             if routed["scope"] == "working":
-                mem.save()
+                self._save(user, mem)
                 return {"ok": True, "scope": "working", "kind": routed["kind"],
                         "id": routed["working_id"], "episode_id": routed["episode_id"],
                         "note": "kept in dated history (askable later); not added to the durable profile"}
@@ -156,9 +246,9 @@ class MemoryService:
                 added = mem.consolidate().get("facts_added", 0)
                 mem.summarize_episodes(list(mem.episodes_doc.values()))
             except Exception as exc:  # noqa: BLE001 — keep the raw episode no matter what
-                mem.save()
+                self._save(user, mem)
                 return {"ok": True, "extracted": 0, "degraded": type(exc).__name__, "stored_raw": True}
-            mem.save()
+            self._save(user, mem)
             return {"ok": True, "scope": "long", "extracted": added,
                     "total_facts": len([f for f in _all_facts(mem) if f.is_live()])}
 
@@ -167,56 +257,71 @@ class MemoryService:
                 session_id: str = "imported") -> dict:
         """Bulk import: either pre-parsed `sessions` (list of ImportSession/dicts) OR raw `data` to parse
         with `format` (chatgpt/messages/records/jsonl/transcript/auto). One batched ingest + consolidation."""
-        with self.lock(user):
+        with self.write_lock(user):
             mem = self.get(user)
             if sessions is None:
                 from .connectors import parse
                 sessions = parse(data, format=format, session_id=session_id)
             stats = mem.import_messages(sessions, user_id=user, consolidate=consolidate,
                                         summarize=summarize)
-            mem.save()
+            self._save(user, mem)
             return {"ok": True, **stats}
 
-    def add_fact(self, user: str, subject: str, predicate: str, object: str) -> dict:
-        with self.lock(user):
+    def add_fact(
+        self,
+        user: str,
+        subject: str,
+        predicate: str,
+        object: str,
+        sensitive: Optional[bool] = None,
+        category: Optional[str] = None,
+    ) -> dict:
+        with self.write_lock(user):
             mem = self.get(user)
-            f = mem.add_fact(subject, predicate, object, user_id=user)
-            mem.save()
+            f = mem.add_fact(
+                subject,
+                predicate,
+                object,
+                user_id=user,
+                sensitive=sensitive,
+                category=category,
+            )
+            self._save(user, mem)
             return {"ok": True, "id": f.id, "text": f.text}
 
     def update_fact(self, user: str, fact_id: str, subject: Optional[str] = None,
                     predicate: Optional[str] = None, object: Optional[str] = None,
                     sensitive: Optional[bool] = None, category: Optional[str] = None) -> Optional[dict]:
-        with self.lock(user):
+        with self.write_lock(user):
             mem = self.get(user)
             f = mem.update_fact(fact_id, subject=subject, predicate=predicate, object=object,
                                 sensitive=sensitive, category=category)
             if f is None:
                 return None
-            mem.save()
+            self._save(user, mem)
             return {"ok": True, "id": f.id, "text": f.text}
 
     def delete_fact(self, user: str, fact_id: str) -> dict:
-        with self.lock(user):
+        with self.write_lock(user):
             mem = self.get(user)
             ok = mem.delete_fact(fact_id)
-            mem.save()
+            self._save(user, mem)
             return {"ok": ok}
 
     def set_focus(self, user: str, track: Optional[list[str]] = None,
                   mute: Optional[list[str]] = None) -> dict:
-        with self.lock(user):
+        with self.write_lock(user):
             mem = self.get(user)
             focus = mem.set_focus(track=track, mute=mute)
-            mem.save()
+            self._save(user, mem)
             return {"ok": True, "focus": focus}
 
     def set_policy(self, user: str, **fields: Optional[str]) -> dict:
-        with self.lock(user):
+        with self.write_lock(user):
             mem = self.get(user)
             clean = {k: v for k, v in fields.items() if v is not None}
             result = mem.set_policy(**clean)
-            mem.save()
+            self._save(user, mem)
             return {"ok": True, **result}
 
     # --- read path ----------------------------------------------------------
@@ -292,21 +397,21 @@ class MemoryService:
     def resolve_conflict(self, user: str, conflict_id: str, keep: str = "newer") -> dict:
         """Apply the user's decision: keep newer/older (supersede the other) or both (dismiss). The user
         is authoritative — we never silently overwrite; this is the human-confirmed end of the loop."""
-        with self.lock(user):
+        with self.write_lock(user):
             mem = self.get(user)
             ok = (mem.dismiss_conflict(conflict_id) if keep == "both"
                   else mem.resolve_conflict(conflict_id, keep=keep))
-            mem.save()
+            self._save(user, mem)
             return {"ok": ok}
 
     # --- working memory (ephemeral, session/TTL-scoped; feature ①) ----------
     def add_working(self, user: str, content: str, session_id: str = "default", kind: str = "state",
                     ttl_seconds: Optional[float] = None) -> dict:
-        with self.lock(user):
+        with self.write_lock(user):
             mem = self.get(user)
             wm = mem.remember_working(content, user_id=user, session_id=session_id, kind=kind,
                                       ttl_seconds=ttl_seconds)
-            mem.save()
+            self._save(user, mem)
             return {"ok": True, "id": wm.id, "kind": wm.kind, "expires_at": wm.expires_at}
 
     def working_memory(self, user: str, session_id: Optional[str] = None) -> dict:
@@ -319,11 +424,55 @@ class MemoryService:
         } for w in items]}
 
     def clear_working(self, user: str, session_id: str) -> dict:
-        with self.lock(user):
+        with self.write_lock(user):
             mem = self.get(user)
             n = mem.clear_session(user, session_id)
-            mem.save()
+            self._save(user, mem)
             return {"ok": True, "cleared": n}
+
+    def close_session(
+        self,
+        user: str,
+        session_id: str,
+        summarize: bool = True,
+        clear_working: bool = True,
+    ) -> dict:
+        """End-of-session grooming for agent clients.
+
+        This does not delete the raw transcript. It drains pending System-2 work for the named session,
+        optionally indexes session summaries for future lean reads, reflects knowledge updates into those
+        summaries, clears ephemeral working memory, and persists the namespace. It is the lifecycle hook
+        Claude Code / Codex / Cursor-style clients can call when a thread closes or switches tasks.
+        """
+        with self.write_lock(user):
+            mem = self.get(user)
+            canonical = mem.resolver.resolve(user)
+            episodes = [
+                ep for ep in mem.episodes_doc.values()
+                if ep.user_id == canonical and ep.session_id == session_id
+            ]
+            pending = [ep for ep in episodes if not ep.consolidated]
+            stats = (
+                mem.consolidate(pending)
+                if pending
+                else {"facts_added": 0, "duplicates": 0, "invalidated": 0}
+            )
+            summaries = mem.summarize_episodes(episodes) if summarize else 0
+            reflected = mem.reflect(user) if summarize else 0
+            working_cleared = mem.clear_session(user, session_id) if clear_working else 0
+            self._save(user, mem)
+            return {
+                "ok": True,
+                "session_id": session_id,
+                "episodes": len(episodes),
+                "pending_consolidated": len(pending),
+                "facts_added": stats.get("facts_added", 0),
+                "duplicates": stats.get("duplicates", 0),
+                "invalidated": stats.get("invalidated", 0),
+                "summaries": summaries,
+                "reflected": reflected,
+                "working_cleared": working_cleared,
+            }
 
     def profile(self, user: str) -> dict:
         mem = self.get(user)
@@ -336,24 +485,273 @@ class MemoryService:
     def get_policy(self, user: str) -> dict:
         return self.get(user).get_policy()
 
-    def graph(self, user: str, as_of: float | None = None, include_sensitive: bool = True) -> dict:
-        return self.get(user).graph_data(user, as_of=as_of, include_sensitive=include_sensitive)
+    def agent_status(self, user: str, session_id: Optional[str] = None) -> dict:
+        """Content-free state an agent can inspect before using Engram.
 
-    def memories(self, user: str) -> dict:
+        Unlike recall/profile/memories, this intentionally avoids profile prose, fact text, raw episodes,
+        summaries, and storage paths. It answers: "which namespace/session am I attached to, is there
+        working state for this session, what is the focus policy, and what should I do next?"
+        """
+        mem = self.get(user)
+        canonical = mem.resolver.resolve(user)
+        stats = self.stats(user)
+        session_episodes = [
+            ep for ep in mem.episodes_doc.values()
+            if ep.user_id == canonical and (session_id is None or ep.session_id == session_id)
+        ]
+        session_working = [
+            w for w in mem.working_mem.values()
+            if w.user_id == canonical
+            and w.is_live()
+            and (session_id is None or w.session_id == session_id)
+        ]
+        pending_session_episodes = [ep for ep in session_episodes if not ep.consolidated]
+        focus = mem.get_focus()
+        next_actions = [
+            "Call engram_recall before answering tasks that depend on prior user/project context.",
+            "Call engram_remember(scope='long' or 'auto') for durable preferences, decisions, and reusable facts.",
+            "Use scope='working' for current-task state that should be cleared when the session closes.",
+            "Call engram_close_session when this thread ends or switches tasks.",
+        ]
+        if (stats.get("counts") or {}).get("pending_conflicts", 0):
+            next_actions.append("Review pending conflicts before relying on disputed memories.")
+        return {
+            "ok": True,
+            "user": user,
+            "session_id": session_id,
+            "mode": "content_free_agent_status",
+            "focus": focus,
+            "session": {
+                "id": session_id,
+                "episodes": len(session_episodes),
+                "episodes_pending": len(pending_session_episodes),
+                "working_live": len(session_working),
+            },
+            "counts": stats.get("counts", {}),
+            "consolidation_backlog": stats.get("consolidation_backlog", False),
+            "storage": stats.get("storage"),
+            "embedder": stats.get("embedder"),
+            "llm_configured": stats.get("llm_configured"),
+            "recommended_next_actions": next_actions,
+            "tools": {
+                "read_context": "engram_recall",
+                "write_memory": "engram_remember",
+                "close_session": "engram_close_session",
+                "inspect_facts": "engram_list_facts",
+                "correct_fact": "engram_update_fact",
+                "delete_fact": "engram_delete_fact",
+                "focus": "engram_get_focus / engram_set_focus",
+            },
+        }
+
+    def session_report(
+        self,
+        user: str,
+        session_id: str,
+        include_sensitive: bool = False,
+    ) -> dict:
+        """Audit what a specific session contributed to memory.
+
+        This is an explicit inspection endpoint, unlike `agent_status`. It may return fact text, but
+        sensitive facts are redacted by default so an agent can safely show a post-session audit without
+        accidentally surfacing private health/finance/PII details.
+        """
+        from .localize import display_of
+
+        mem = self.get(user)
+        canonical = mem.resolver.resolve(user)
+        episodes = [
+            ep for ep in mem.episodes_doc.values()
+            if ep.user_id == canonical and ep.session_id == session_id
+        ]
+        episode_ids = {ep.id for ep in episodes}
+        pending = [ep for ep in episodes if not ep.consolidated]
+        session_facts = [
+            f for f in _all_facts(mem)
+            if f.user_id == canonical and episode_ids.intersection(f.provenance)
+        ]
+        session_facts.sort(key=lambda f: f.valid_at, reverse=True)
+        redacted = 0
+
+        def fact_view(f) -> dict:
+            nonlocal redacted
+            is_sensitive = bool(getattr(f, "sensitive", False))
+            hidden = is_sensitive and not include_sensitive
+            if hidden:
+                redacted += 1
+            base = {
+                "id": f.id,
+                "valid_at": fmt_datetime(f.valid_at),
+                "invalid_at": fmt_datetime(f.invalid_at) if f.invalid_at else None,
+                "status": "live" if f.is_live() else "superseded",
+                "source": f.source,
+                "category": getattr(f, "category", ""),
+                "sensitive": is_sensitive,
+                "redacted": hidden,
+                "provenance": [ep for ep in f.provenance if ep in episode_ids],
+            }
+            if hidden:
+                return {**base, "text": "[redacted sensitive fact]", "display": "[redacted sensitive fact]"}
+            return {
+                **base,
+                "text": f.text,
+                "display": display_of(f),
+                "subject": f.subject,
+                "predicate": f.predicate,
+                "object": f.object,
+            }
+
+        facts_payload = [fact_view(f) for f in session_facts]
+        working_live = [
+            w for w in mem.working_mem.values()
+            if w.user_id == canonical and w.session_id == session_id and w.is_live()
+        ]
+        return {
+            "ok": True,
+            "user": user,
+            "session_id": session_id,
+            "include_sensitive": include_sensitive,
+            "episodes": len(episodes),
+            "episodes_consolidated": len([ep for ep in episodes if ep.consolidated]),
+            "episodes_pending": len(pending),
+            "working_live": len(working_live),
+            "facts_added": len(session_facts),
+            "facts_redacted": redacted,
+            "facts": facts_payload,
+        }
+
+    def sessions(
+        self,
+        user: str,
+        limit: Optional[int] = None,
+        offset: int = 0,
+        q: str = "",
+    ) -> dict:
+        """Content-free session index for cross-agent memory management.
+
+        This intentionally returns counts and timestamps, not raw episode text, summaries, profile prose,
+        or fact text. A product can list Codex/Claude/app sessions first, then call `session_report()` only
+        when the user chooses to audit a specific session.
+        """
+        mem = self.get(user)
+        canonical = mem.resolver.resolve(user)
+        sessions: dict[str, dict] = {}
+
+        def ensure(sid: str) -> dict:
+            if sid not in sessions:
+                sessions[sid] = {
+                    "id": sid,
+                    "episodes": 0,
+                    "episodes_consolidated": 0,
+                    "episodes_pending": 0,
+                    "facts_added": 0,
+                    "facts_sensitive": 0,
+                    "working_live": 0,
+                    "summaries": 0,
+                    "first_event_at": None,
+                    "first_event_at_h": None,
+                    "last_event_at": None,
+                    "last_event_at_h": None,
+                }
+            return sessions[sid]
+
+        episode_ids_by_session: dict[str, set[str]] = {}
+        for ep in mem.episodes_doc.values():
+            if ep.user_id != canonical:
+                continue
+            row = ensure(ep.session_id)
+            row["episodes"] += 1
+            if ep.consolidated:
+                row["episodes_consolidated"] += 1
+            else:
+                row["episodes_pending"] += 1
+            if ep.summary:
+                row["summaries"] += 1
+            first = row["first_event_at"]
+            last = row["last_event_at"]
+            if first is None or ep.event_time < first:
+                row["first_event_at"] = ep.event_time
+                row["first_event_at_h"] = fmt_datetime(ep.event_time)
+            if last is None or ep.event_time > last:
+                row["last_event_at"] = ep.event_time
+                row["last_event_at_h"] = fmt_datetime(ep.event_time)
+            episode_ids_by_session.setdefault(ep.session_id, set()).add(ep.id)
+
+        for w in mem.working_mem.values():
+            if w.user_id == canonical and w.is_live():
+                ensure(w.session_id)["working_live"] += 1
+
+        if episode_ids_by_session:
+            for f in _all_facts(mem):
+                if f.user_id != canonical:
+                    continue
+                provenance = set(f.provenance)
+                if not provenance:
+                    continue
+                for sid, episode_ids in episode_ids_by_session.items():
+                    if provenance.intersection(episode_ids):
+                        row = ensure(sid)
+                        row["facts_added"] += 1
+                        if getattr(f, "sensitive", False):
+                            row["facts_sensitive"] += 1
+
+        needle = q.strip().lower()
+        rows = list(sessions.values())
+        if needle:
+            rows = [row for row in rows if needle in row["id"].lower()]
+        rows.sort(key=lambda row: row["last_event_at"] or 0, reverse=True)
+        lim = _clamp_limit(limit, default=None, max_value=500)
+        page_items, page = _page(rows, offset, lim)
+        return {
+            "ok": True,
+            "user": user,
+            "sessions": page_items,
+            "page": {**page, "items": page_items},
+            "next_offset": page["next_offset"],
+        }
+
+    def graph(
+        self,
+        user: str,
+        as_of: float | None = None,
+        include_sensitive: bool = True,
+        q: str = "",
+        live_only: bool = False,
+        limit: Optional[int] = None,
+    ) -> dict:
+        lim = _clamp_limit(limit, default=None, max_value=500)
+        return self.get(user).graph_data(
+            user,
+            as_of=as_of,
+            include_sensitive=include_sensitive,
+            q=q,
+            live_only=live_only,
+            limit=lim,
+        )
+
+    def memories(
+        self,
+        user: str,
+        facts_limit: Optional[int] = None,
+        facts_offset: int = 0,
+        episodes_limit: Optional[int] = None,
+        episodes_offset: int = 0,
+        status: Optional[str] = None,
+        q: str = "",
+        include_sensitive: bool = True,
+    ) -> dict:
         """Everything stored for this user: profile, counts, bi-temporal facts (live + superseded with
         provenance), raw episodes + L2 summaries. The 'look inside my memory' payload."""
         from .localize import display_of  # localized rendering for Chinese-recorded facts
 
         mem = self.get(user)
-        facts = sorted(_all_facts(mem), key=lambda f: f.valid_at, reverse=True)
-        return {
-            "user": user,
-            "profile": mem.build_persona(user),
-            "counts": {"episodes": len(mem.episodes_doc.values()),
-                       "facts_live": sum(1 for f in facts if f.is_live()),
-                       "facts_superseded": sum(1 for f in facts if not f.is_live()),
-                       "summaries": len(mem.summary_vec.values())},
-            "facts": [{
+        all_facts = sorted(_all_facts(mem), key=lambda f: f.valid_at, reverse=True)
+        episodes_all = sorted(mem.episodes_doc.values(), key=lambda ep: ep.event_time, reverse=True)
+
+        needle = q.strip().lower()
+
+        def fact_view(f) -> dict:
+            return {
                 "id": f.id, "text": f.text, "display": display_of(f),
                 "subject": f.subject, "predicate": f.predicate,
                 "object": f.object, "valid_at": fmt_datetime(f.valid_at),
@@ -362,10 +760,64 @@ class MemoryService:
                 "source": f.source, "supersedes": f.supersedes,
                 "category": getattr(f, "category", ""), "sensitive": getattr(f, "sensitive", False),
                 "salience": round(f.salience, 2), "provenance": f.provenance,
-            } for f in facts],
-            "episodes": [{"date": ep.metadata.get("date") or fmt_date(ep.event_time),
-                          "session": ep.session_id, "content": ep.content[:500],
-                          "summary": ep.summary} for ep in mem.episodes_doc.values()],
+            }
+
+        def episode_view(ep) -> dict:
+            return {
+                "date": ep.metadata.get("date") or fmt_date(ep.event_time),
+                "session": ep.session_id,
+                "content": ep.content[:500],
+                "summary": ep.summary,
+            }
+
+        filtered_facts = all_facts
+        if status in {"live", "current"}:
+            filtered_facts = [f for f in filtered_facts if f.is_live()]
+        elif status in {"superseded", "old", "history"}:
+            filtered_facts = [f for f in filtered_facts if not f.is_live()]
+        if not include_sensitive:
+            filtered_facts = [f for f in filtered_facts if not getattr(f, "sensitive", False)]
+        if needle:
+            def matches_fact(f) -> bool:
+                haystack = " ".join([
+                    f.text,
+                    display_of(f),
+                    f.subject,
+                    f.predicate,
+                    f.object,
+                    getattr(f, "category", ""),
+                ]).lower()
+                return needle in haystack
+            filtered_facts = [f for f in filtered_facts if matches_fact(f)]
+
+        filtered_episodes = [] if not include_sensitive else episodes_all
+        if needle and include_sensitive:
+            filtered_episodes = [
+                ep for ep in filtered_episodes
+                if needle in " ".join([ep.content or "", ep.summary or "", ep.session_id or ""]).lower()
+            ]
+
+        facts_lim = _clamp_limit(facts_limit, default=None, max_value=1000)
+        episodes_lim = _clamp_limit(episodes_limit, default=None, max_value=200)
+        facts_page_items, facts_page = _page(filtered_facts, facts_offset, facts_lim)
+        episodes_page_items, episodes_page = _page(filtered_episodes, episodes_offset, episodes_lim)
+        facts_payload = [fact_view(f) for f in facts_page_items]
+        episodes_payload = [episode_view(ep) for ep in episodes_page_items]
+        return {
+            "user": user,
+            "profile": mem.build_persona(user) if include_sensitive else "",
+            "counts": {"episodes": len(episodes_all),
+                       "facts_live": sum(1 for f in all_facts if f.is_live()),
+                       "facts_superseded": sum(1 for f in all_facts if not f.is_live()),
+                       "summaries": len(mem.summary_vec.values())},
+            "facts": facts_payload,
+            "episodes": episodes_payload,
+            "facts_page": {**facts_page, "items": facts_payload},
+            "episodes_page": {**episodes_page, "items": episodes_payload},
+            "next_offsets": {
+                "facts": facts_page["next_offset"],
+                "episodes": episodes_page["next_offset"],
+            },
         }
 
     def stats(self, user: str) -> dict:

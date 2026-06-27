@@ -74,7 +74,15 @@ function layout(data: GraphData): { nodes: Positioned[]; index: Map<string, Posi
   return { nodes, index }
 }
 
-export function ForceGraph({ data }: { data: GraphData }) {
+export function ForceGraph({
+  data,
+  selectedId,
+  onSelect,
+}: {
+  data: GraphData
+  selectedId?: string | null
+  onSelect?: (id: string) => void
+}) {
   const t = useT()
   const { nodes, index } = useMemo(() => layout(data), [data])
   const [hover, setHover] = useState<string | null>(null)
@@ -90,7 +98,8 @@ export function ForceGraph({ data }: { data: GraphData }) {
     return m
   }, [data.edges])
 
-  const isDim = (id: string) => hover !== null && hover !== id && !adjacency.get(hover)?.has(id)
+  const activeId = hover ?? selectedId ?? null
+  const isDim = (id: string) => activeId !== null && activeId !== id && !adjacency.get(activeId)?.has(id)
 
   return (
     <svg
@@ -113,7 +122,7 @@ export function ForceGraph({ data }: { data: GraphData }) {
         if (!a || !b) return null
         const mx = (a.x + b.x) / 2
         const my = (a.y + b.y) / 2
-        const dim = hover !== null && hover !== e.source && hover !== e.target
+        const dim = activeId !== null && activeId !== e.source && activeId !== e.target
         return (
           <g key={i} opacity={dim ? 0.12 : 0.8}>
             <line
@@ -139,9 +148,18 @@ export function ForceGraph({ data }: { data: GraphData }) {
           opacity={isDim(nd.id) ? 0.2 : 1}
           onMouseEnter={() => setHover(nd.id)}
           onMouseLeave={() => setHover(null)}
+          onClick={() => onSelect?.(nd.id)}
           className="cursor-pointer"
         >
-          <circle cx={nd.x} cy={nd.y} r={hover === nd.id ? 9 : 7} fill="url(#node)" stroke="#0b1220" strokeWidth={2} />
+          <circle
+            cx={nd.x}
+            cy={nd.y}
+            r={hover === nd.id || selectedId === nd.id ? 10 : 7}
+            fill="url(#node)"
+            stroke={selectedId === nd.id ? '#34d399' : '#0b1220'}
+            strokeWidth={2}
+          />
+          <title>{nd.name}</title>
           <text x={nd.x} y={nd.y - 13} textAnchor="middle" fontSize={11.5} fontWeight={600} fill="#eaf0ff">
             {truncate(nd.name, 18)}
           </text>

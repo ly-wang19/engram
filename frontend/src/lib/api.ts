@@ -1,6 +1,8 @@
 import { currentKey, useAuth } from '../store/auth'
 import { getT } from '../i18n'
 import type {
+  AgentStatus,
+  CloseSessionResult,
   Conflict,
   Focus,
   FactEdit,
@@ -11,7 +13,10 @@ import type {
   Policy,
   PolicyResponse,
   RecallResult,
+  RememberScope,
   RememberResult,
+  SessionReport,
+  SessionsIndex,
   StructuredProfile,
   WorkingItem,
 } from '../types'
@@ -58,19 +63,88 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 }
 
 const json = (body: unknown) => JSON.stringify(body)
+const qs = (params: object) => {
+  const search = new URLSearchParams()
+  for (const [key, value] of Object.entries(params as Record<string, string | number | boolean | null | undefined>)) {
+    if (value !== undefined && value !== null && value !== '') search.set(key, String(value))
+  }
+  const s = search.toString()
+  return s ? `?${s}` : ''
+}
+
+export interface MemoriesQuery {
+  facts_limit?: number
+  facts_offset?: number
+  episodes_limit?: number
+  episodes_offset?: number
+  status?: 'live' | 'superseded'
+  q?: string
+  include_sensitive?: boolean
+}
+
+export interface RecallOptions {
+  n_chunks?: number
+  as_of?: number
+  redact_sensitive?: boolean
+}
+
+export interface GraphQuery {
+  q?: string
+  live_only?: boolean
+  include_sensitive?: boolean
+  limit?: number
+}
+
+export interface SessionsQuery {
+  limit?: number
+  offset?: number
+  q?: string
+}
+
+export interface RememberOptions {
+  session_id?: string
+  scope?: RememberScope
+}
 
 export const api = {
   health: () => request<Health>('/health'),
 
-  memories: () => request<MemoryDump>('/v1/memories'),
-  graph: () => request<GraphData>('/v1/graph'),
+  memories: (params: MemoriesQuery = {}) => request<MemoryDump>(`/v1/memories${qs(params)}`),
+  sessions: (params: SessionsQuery = {}) => request<SessionsIndex>(`/v1/sessions${qs(params)}`),
+  agentStatus: (sessionId?: string) =>
+    request<AgentStatus>(`/v1/agent/status${sessionId ? `?session_id=${encodeURIComponent(sessionId)}` : ''}`),
+  sessionReport: (sessionId: string, includeSensitive = false) =>
+    request<SessionReport>(`/v1/sessions/report${qs({ session_id: sessionId, include_sensitive: includeSensitive })}`),
+  graph: (params: GraphQuery = {}) => request<GraphData>(`/v1/graph${qs(params)}`),
   focus: () => request<Focus>('/v1/focus'),
 
-  remember: (content: string, session_id = 'default') =>
-    request<RememberResult>('/v1/remember', { method: 'POST', body: json({ content, session_id }) }),
+  remember: (content: string, options: RememberOptions = {}) =>
+    request<RememberResult>('/v1/remember', {
+      method: 'POST',
+      body: json({
+        content,
+        session_id: options.session_id ?? 'default',
+        scope: options.scope ?? 'auto',
+      }),
+    }),
 
-  recall: (query: string, n_chunks = 6) =>
-    request<RecallResult>('/v1/recall', { method: 'POST', body: json({ query, lean: true, n_chunks }) }),
+  closeSession: (session_id = 'default') =>
+    request<CloseSessionResult>('/v1/sessions/close', {
+      method: 'POST',
+      body: json({ session_id, summarize: true, clear_working: true }),
+    }),
+
+  recall: (query: string, options: RecallOptions = {}) =>
+    request<RecallResult>('/v1/recall', {
+      method: 'POST',
+      body: json({
+        query,
+        lean: true,
+        n_chunks: options.n_chunks ?? 6,
+        as_of: options.as_of,
+        redact_sensitive: options.redact_sensitive ?? false,
+      }),
+    }),
 
   addFact: (fact: FactWrite) =>
     request<{ ok: boolean; id: string; text: string }>('/v1/facts', {
@@ -97,7 +171,8 @@ export const api = {
   setPolicy: (patch: Partial<Policy>) =>
     request<{ ok: boolean } & PolicyResponse>('/v1/policy', { method: 'PUT', body: json(patch) }),
 
-  forget: () => request<{ ok: boolean; message: string }>('/v1/forget', { method: 'POST', body: json({}) }),
+  forget: () =>
+    request<{ ok: boolean; message: string }>('/v1/forget', { method: 'POST', body: json({ confirm: true }) }),
 
   working: (sessionId?: string) =>
     request<{ items: WorkingItem[] }>(`/v1/working${sessionId ? `?session_id=${encodeURIComponent(sessionId)}` : ''}`),
@@ -118,10 +193,10 @@ export const api = {
   resolveConflict: (id: string, keep: 'newer' | 'older' | 'both') =>
     request<{ ok: boolean }>(`/v1/conflicts/${id}/resolve`, { method: 'POST', body: json({ keep }) }),
 
-  /** Trigger a browser download of the full data export (keeps the Bearer header). */
-  async exportDownload(filenameHint = 'me', includeSensitive = true): Promise<void> {
+  /** Trigger a browser download of the memory export (safe by default; keeps the Bearer header). */
+  async exportDownload(filenameHint = 'me', includeSensitive = false): Promise<void> {
     const key = currentKey()
-    const qs = includeSensitive ? '' : '?include_sensitive=false'
+    const qs = `?include_sensitive=${includeSensitive ? 'true' : 'false'}`
     const res = await fetch(`${BASE}/v1/export${qs}`, {
       headers: key ? { Authorization: `Bearer ${key}` } : undefined,
     })

@@ -23,7 +23,14 @@ from .consolidate.summarizer import (
 from .embed import Embedder, HashingEmbedder
 from .ingest import IdentityResolver, Ingestor
 from .llm import LLM
-from .retrieve import HybridRetriever, MultiHopPlanner, history, plan_evidence
+from .retrieve import (
+    HybridRetriever,
+    MultiHopPlanner,
+    extract_aggregation_candidates,
+    history,
+    plan_evidence,
+    render_aggregation_candidates,
+)
 from .retrieve.lexical import bm25_scores, overlap_terms
 from .store import (
     GraphStore,
@@ -439,7 +446,8 @@ class Memory:
 
     # --- user-authored memory management (the editable layer the management UI drives) ---
     def add_fact(self, subject: str, predicate: str, object: str, user_id: str = "default",
-                 valid_at: Optional[float] = None) -> Fact:
+                 valid_at: Optional[float] = None, sensitive: Optional[bool] = None,
+                 category: Optional[str] = None) -> Fact:
         """Manually assert a fact. It is marked source='user' (authoritative): conflict resolution lets it
         supersede any extracted value on the same slot, and it is then protected from future auto-overrides."""
         user = self.resolver.resolve(user_id)
@@ -448,6 +456,10 @@ class Memory:
         f.embedding = self.embedder.embed(f.text)
         from .consolidate.classify import classify_fact
         classify_fact(f)  # tag category + sensitivity (feature ⑤)
+        if category is not None:
+            f.category = category
+        if sensitive is not None:
+            f.sensitive = sensitive
         live = [x for x in self._all_facts() if x.user_id == user and x.is_live()]
         action, invalidated = self.engine.conflict.reconcile(f, live)
         for old in invalidated:
@@ -550,6 +562,9 @@ class Memory:
         user_id: str = "default",
         as_of: Optional[float] = None,
         include_sensitive: bool = True,
+        q: str = "",
+        live_only: bool = False,
+        limit: Optional[int] = None,
     ) -> dict:
         """Export the semantic graph as nodes + edges for the 关系图谱 visualization. Entities are nodes;
         relations are edges carrying their predicate and bi-temporal (live/superseded) status. Orphan
@@ -564,6 +579,7 @@ class Memory:
             r.fact_id for r in relations
             if r.invalid_at is None
         }
+        needle = q.strip().lower()
         edges, touched = [], set()
         for r in relations:
             if r.subject_id not in ents or r.object_id not in ents:
@@ -573,6 +589,8 @@ class Memory:
                 if as_of is None
                 else r.valid_at <= as_of and (r.invalid_at is None or r.invalid_at > as_of)
             )
+            if live_only and not live:
+                continue
             if as_of is None and not live and r.fact_id in live_relation_fact_ids:
                 continue
             if as_of is not None and not live:
@@ -581,6 +599,18 @@ class Memory:
             if fact is None:
                 continue
             if not include_sensitive and getattr(fact, "sensitive", False):
+                continue
+            subject_name = ents[r.subject_id].name
+            object_name = ents[r.object_id].name
+            haystack = " ".join([
+                subject_name,
+                object_name,
+                r.predicate,
+                getattr(fact, "text", ""),
+                getattr(fact, "object", ""),
+                getattr(fact, "category", ""),
+            ]).lower()
+            if needle and needle not in haystack:
                 continue
             edges.append({
                 "source": r.subject_id,
@@ -597,6 +627,8 @@ class Memory:
             })
             touched.add(r.subject_id)
             touched.add(r.object_id)
+            if limit is not None and limit > 0 and len(edges) >= limit:
+                break
         nodes = [{"id": eid, "name": ents[eid].name, "type": ents[eid].type} for eid in touched]
         return {"nodes": nodes, "edges": edges}
 
@@ -1028,6 +1060,8 @@ class Memory:
                 return
             seen.add(key)
             score = len(overlap_terms(query, text)) if query else 0
+            if query and score == 0:
+                return
             if source == "fact":
                 score += 2
             elif source == "conversation":
@@ -1046,10 +1080,14 @@ class Memory:
         lines = ["date | source | evidence", "--- | --- | ---"]
         for _, t, source, evidence in rows[:limit]:
             lines.append(f"{fmt_date(t)} | {source} | {evidence}")
-        return (
+        evidence = (
             "AGGREGATION EVIDENCE (dedupe before counting/listing; include candidate names and key "
             "attributes in the answer):\n" + "\n".join(lines)
         )
+        candidates = render_aggregation_candidates(
+            extract_aggregation_candidates(query, facts, summaries + detail_eps, llm=self.llm)
+        )
+        return f"{candidates}\n\n{evidence}" if candidates else evidence
 
     def _duration_block(
         self,
@@ -1352,7 +1390,8 @@ class Memory:
 
         if detail_eps:
             chunks = "\n\n".join(
-                f"[{e.metadata.get('date') or fmt_date(e.event_time)}]\n{e.content}" for e in detail_eps
+                f"[{e.metadata.get('date') or fmt_date(e.event_time)}] "
+                f"(session: {e.session_id})\n{e.content}" for e in detail_eps
             )
             blocks.append(f"RELEVANT CONVERSATIONS (full detail):\n{chunks}")
 
@@ -1397,7 +1436,9 @@ class Memory:
         if char_budget == 60_000:
             full_chars = sum(len(ep.content) for ep in self.episodes_doc.values() if ep.user_id == user)
             if full_chars:
-                char_budget = min(char_budget, max(512, full_chars * 3 - 1))
+                # Tiny histories still need enough room for profile + facts + one chunk; otherwise the
+                # even block fitter can cut short durable project rules exactly where the constraint lives.
+                char_budget = min(char_budget, max(2048, full_chars * 3 - 1))
             if len(assembled) > char_budget:
                 return fit_blocks(blocks, char_budget)
         return assembled[:char_budget]

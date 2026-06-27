@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { GitMerge, Lock, Pencil, Plus, Search, ShieldAlert, Trash2 } from 'lucide-react'
 
 import { Badge, Button, Card, CardTitle, EmptyState, ErrorState, Field, PageHeader, Spinner } from '../components/ui'
@@ -17,7 +17,6 @@ import { splitStamp } from '../lib/format'
 import type { MemoryFact } from '../types'
 
 export default function Facts() {
-  const { data, isLoading, isError, error } = useMemories()
   const addFact = useAddFact()
   const editFact = useEditFact()
   const deleteFact = useDeleteFact()
@@ -26,20 +25,25 @@ export default function Facts() {
   const [q, setQ] = useState('')
   const [showOld, setShowOld] = useState(true)
   const [hideSensitive, setHideSensitive] = useState(false)
+  const [limit, setLimit] = useState(40)
   const [editing, setEditing] = useState<MemoryFact | null>(null)
   const [adding, setAdding] = useState(false)
-  const [confirmId, setConfirmId] = useState<string | null>(null)
+  const [confirmFact, setConfirmFact] = useState<MemoryFact | null>(null)
 
-  const facts = useMemo(() => {
-    let list = data?.facts ?? []
-    if (!showOld) list = list.filter((f) => f.status === 'live')
-    if (hideSensitive) list = list.filter((f) => !f.sensitive)
-    const needle = q.trim().toLowerCase()
-    if (needle) list = list.filter((f) => f.text.toLowerCase().includes(needle))
-    return list
-  }, [data, q, showOld, hideSensitive])
+  useEffect(() => {
+    setLimit(40)
+  }, [q, showOld, hideSensitive])
 
-  const sensitiveCount = (data?.facts ?? []).filter((f) => f.sensitive).length
+  const { data, isLoading, isError, error } = useMemories({
+    facts_limit: limit,
+    episodes_limit: 0,
+    q,
+    status: showOld ? undefined : 'live',
+    include_sensitive: !hideSensitive,
+  })
+  const facts = data?.facts ?? []
+  const factsPage = data?.facts_page
+  const hasMore = factsPage?.has_more ?? false
 
   if (isLoading) return <Spinner label={t.facts.loading} />
   if (isError) return <ErrorState message={(error as Error).message} />
@@ -64,6 +68,7 @@ export default function Facts() {
           <div className="flex flex-1 items-center gap-2 rounded-xl border border-line bg-white/[0.05] px-3">
             <Search className="h-4 w-4 text-ghost" />
             <input
+              aria-label={t.facts.searchPlaceholder}
               className="w-full bg-transparent py-2 text-sm outline-none placeholder:text-ghost/70"
               placeholder={t.facts.searchPlaceholder}
               value={q}
@@ -77,29 +82,31 @@ export default function Facts() {
           <label className="flex select-none items-center gap-2 px-1 text-sm text-ghost">
             <input type="checkbox" checked={hideSensitive} onChange={(e) => setHideSensitive(e.target.checked)} className="accent-brand-rose" />
             {t.facts.hideSensitive}
-            {sensitiveCount > 0 && <span className="text-brand-rose">({sensitiveCount})</span>}
           </label>
         </div>
       </Card>
 
       <Card>
         {facts.length ? (
+          <>
           <ul className="divide-y divide-line">
             {facts.map((f) => {
               const { date, time } = splitStamp(f.valid_at)
               return (
-              <li key={f.id} className="group flex items-center gap-3 py-3">
-                <Badge tone={f.status === 'live' ? 'live' : 'old'}>{f.status === 'live' ? t.facts.statusLive : t.facts.statusOld}</Badge>
-                <time className="w-[78px] shrink-0 tabular-nums leading-tight text-brand-cyan">
-                  <span className="block text-[11px]">{date}</span>
-                  {time && <span className="block text-[10px] text-brand-cyan/55">{time}</span>}
-                </time>
-                <div className="min-w-0 flex-1">
+              <li key={f.id} className="group flex flex-col gap-2 py-3 sm:flex-row sm:items-center sm:gap-3">
+                <div className="flex shrink-0 items-center gap-2 sm:w-[148px]">
+                  <Badge tone={f.status === 'live' ? 'live' : 'old'}>{f.status === 'live' ? t.facts.statusLive : t.facts.statusOld}</Badge>
+                  <time className="shrink-0 tabular-nums leading-tight text-brand-cyan">
+                    <span className="block text-[11px]">{date}</span>
+                    {time && <span className="block text-[10px] text-brand-cyan/55">{time}</span>}
+                  </time>
+                </div>
+                <div className="min-w-0 flex-1 break-words">
                   <div className={f.status === 'live' ? 'text-sm text-slate-100' : 'text-sm text-ghost line-through'}>
                     {f.display || f.text}
                   </div>
-                  <div className="mt-0.5 flex flex-wrap items-center gap-2 text-[11px] text-ghost">
-                    <span className="rounded bg-white/5 px-1.5 py-px font-mono">{f.predicate}</span>
+                  <div className="mt-0.5 flex min-w-0 flex-wrap items-center gap-2 text-[11px] text-ghost">
+                    <span className="inline-flex min-w-0 max-w-full whitespace-normal break-all rounded bg-white/5 px-1.5 py-px font-mono">{f.predicate}</span>
                     {f.category && f.category !== '其他' && (
                       <span className="rounded bg-brand-violet/15 px-1.5 py-px text-brand-violet">{f.category}</span>
                     )}
@@ -116,17 +123,19 @@ export default function Facts() {
                     {f.invalid_at && <span>{t.facts.invalidAt(f.invalid_at)}</span>}
                   </div>
                 </div>
-                <div className="flex shrink-0 items-center gap-1 opacity-0 transition group-hover:opacity-100">
+                <div className="flex shrink-0 items-center gap-1 sm:opacity-80 sm:transition sm:group-hover:opacity-100">
                   <button
                     onClick={() => setEditing(f)}
                     className="rounded-lg border border-line p-2 text-ghost transition hover:border-brand-cyan/50 hover:text-brand-cyan"
+                    aria-label={t.common.edit}
                     title={t.common.edit}
                   >
                     <Pencil className="h-4 w-4" />
                   </button>
                   <button
-                    onClick={() => setConfirmId(f.id)}
+                    onClick={() => setConfirmFact(f)}
                     className="rounded-lg border border-line p-2 text-ghost transition hover:border-brand-rose/50 hover:text-brand-rose"
+                    aria-label={t.common.delete}
                     title={t.common.delete}
                   >
                     <Trash2 className="h-4 w-4" />
@@ -136,6 +145,14 @@ export default function Facts() {
               )
             })}
           </ul>
+          {hasMore && (
+            <div className="mt-4 flex justify-center">
+              <Button variant="ghost" onClick={() => setLimit((n) => n + 40)}>
+                {t.facts.loadMore}
+              </Button>
+            </div>
+          )}
+          </>
         ) : (
           <EmptyState title={t.facts.emptyTitle} hint={t.facts.emptyHint} />
         )}
@@ -171,7 +188,13 @@ export default function Facts() {
         onClose={() => setAdding(false)}
         onSubmit={(vals) => {
           addFact.mutate(
-            { subject: vals.subject || 'user', predicate: vals.predicate!, object: vals.object! },
+            {
+              subject: vals.subject || 'user',
+              predicate: vals.predicate!,
+              object: vals.object!,
+              sensitive: vals.sensitive,
+              category: vals.category,
+            },
             {
               onSuccess: () => {
                 toast.success(t.facts.added)
@@ -185,19 +208,28 @@ export default function Facts() {
 
       {/* delete */}
       <ConfirmDialog
-        open={!!confirmId}
+        open={!!confirmFact}
         title={t.facts.deleteTitle}
         danger
         confirmLabel={t.common.delete}
         loading={deleteFact.isPending}
-        body={t.facts.deleteBody}
-        onClose={() => setConfirmId(null)}
+        body={
+          <div className="space-y-3">
+            <p>{t.facts.deleteBody}</p>
+            {confirmFact && (
+              <p className="rounded-lg border border-brand-rose/25 bg-brand-rose/10 px-3 py-2 text-brand-rose">
+                {t.facts.deleteTarget(confirmFact.display || confirmFact.text)}
+              </p>
+            )}
+          </div>
+        }
+        onClose={() => setConfirmFact(null)}
         onConfirm={() => {
-          if (!confirmId) return
-          deleteFact.mutate(confirmId, {
+          if (!confirmFact) return
+          deleteFact.mutate(confirmFact.id, {
             onSuccess: () => {
               toast.success(t.facts.deleted)
-              setConfirmId(null)
+              setConfirmFact(null)
             },
             onError: (e) => toast.error(String((e as Error).message)),
           })
@@ -269,7 +301,7 @@ function FactModal({
   initial?: MemoryFact
   loading: boolean
   onClose: () => void
-  onSubmit: (vals: { subject?: string; predicate?: string; object?: string; sensitive?: boolean }) => void
+  onSubmit: (vals: { subject?: string; predicate?: string; object?: string; sensitive?: boolean; category?: string }) => void
 }) {
   const t = useT()
   const [subject, setSubject] = useState('user')

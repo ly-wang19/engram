@@ -33,11 +33,20 @@ INSTRUCTIONS = (
     "Engram is the user's long-term memory. Use `engram_recall` BEFORE answering anything that may "
     "depend on what you've learned about the user in past sessions (their preferences, projects, "
     "people, decisions) — it returns a small, dated, relevant context to ground your answer. Use "
-    "`engram_remember` whenever the user states a durable fact, preference, or decision worth keeping. "
-    "`engram_search` gives a single direct answer; `engram_stats` checks content-free memory health; "
+    "`engram_remember` whenever the user states a durable fact, preference, or decision worth keeping "
+    "(use scope='long' or the default scope='auto'); use scope='working' for temporary current-session "
+    "state that should not become a long-term profile fact. "
+    "Use `engram_close_session` when a thread/task ends to finish consolidation and clear ephemeral "
+    "working state for that session; use `engram_session_report` when the user asks what that session "
+    "saved; use `engram_list_sessions` when the user asks which agent/app sessions touched memory. "
+    "`engram_search` gives a single direct answer; `engram_agent_status` checks the current namespace, "
+    "session, focus, and next memory actions without exposing memory contents; `engram_stats` checks "
+    "content-free memory health; "
     "`engram_list_facts` / `engram_profile` browse what's stored; `engram_add_fact` records an "
-    "authoritative fact; `engram_import` bulk-loads an exported history; `engram_forget` erases "
-    "everything (irreversible)."
+    "authoritative fact; `engram_update_fact` corrects a specific fact; `engram_delete_fact` deletes "
+    "one specific fact; `engram_get_focus` / `engram_set_focus` inspect and update the user's tracked "
+    "or muted memory topics; `engram_import` bulk-loads an exported history; `engram_export` gives the "
+    "user a portable memory export; `engram_forget` erases everything (irreversible)."
 )
 
 mcp = FastMCP("engram_mcp", instructions=INSTRUCTIONS)
@@ -63,6 +72,12 @@ def set_backend(b: Optional[Backend]) -> None:
 class ResponseFormat(str, Enum):
     MARKDOWN = "markdown"
     JSON = "json"
+
+
+class RememberScope(str, Enum):
+    AUTO = "auto"
+    LONG = "long"
+    WORKING = "working"
 
 
 def _json(obj) -> str:
@@ -92,6 +107,14 @@ def _err(e: Exception) -> str:
     return f"Error: {type(e).__name__}: {e}"
 
 
+def _format_focus(focus: dict) -> str:
+    track = focus.get("track") or []
+    mute = focus.get("mute") or []
+    track_s = ", ".join(track) if track else "(none)"
+    mute_s = ", ".join(mute) if mute else "(none)"
+    return f"- Track: {track_s}\n- Mute: {mute_s}"
+
+
 # annotation presets
 _READ = dict(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False)
 _WRITE = dict(readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=False)
@@ -108,6 +131,8 @@ async def engram_recall(
                                 min_length=1)],
     max_chunks: Annotated[int, Field(description="How many full past conversations to include for detail "
                                      "(0 = facts/summaries only). Default 6.", ge=0, le=20)] = 6,
+    session_id: Annotated[Optional[str], Field(description="Optional conversation/thread id; when set, "
+                                           "session-scoped working memory is included.")] = None,
     as_of: Annotated[Optional[float], Field(description="Optional epoch seconds for a point-in-time memory "
                                            "view, e.g. what was believed before a later update.")] = None,
     redact_sensitive: Annotated[bool, Field(description="When true, omit facts tagged sensitive from the "
@@ -129,6 +154,7 @@ async def engram_recall(
             query,
             n_chunks=max_chunks,
             lean=True,
+            session_id=session_id,
             as_of=as_of,
             redact_sensitive=redact_sensitive,
         )
@@ -180,24 +206,173 @@ async def engram_remember(
                                   "language. e.g. 'I just moved to Berlin and started a new job at Acme.'",
                                   min_length=1)],
     session_id: Annotated[str, Field(description="Optional conversation id to group related turns.")] = "default",
+    scope: Annotated[RememberScope, Field(description="auto = route by ephemerality; long = force durable "
+                                           "fact extraction; working = current-session state that should not "
+                                           "be promoted to long-term profile facts.")] = RememberScope.AUTO,
 ) -> str:
     """Store something in the user's long-term memory and consolidate it (extract atomic bi-temporal
     facts, resolve contradictions against what's already known, update the knowledge graph).
 
     Call this whenever the user states a durable fact, preference, plan, or decision worth remembering
-    across sessions. Storing a value that contradicts an older one does NOT delete history — the old
-    fact is invalidated and kept (ask-as-of still works). Best-effort: the raw memory is saved even if
-    consolidation degrades.
+    across sessions. Use `scope=working` for temporary current-session state. Storing a value that
+    contradicts an older one does NOT delete history — the old fact is invalidated and kept (ask-as-of
+    still works). Best-effort: the raw memory is saved even if consolidation degrades.
     """
     try:
-        data = await backend().remember(content, session_id=session_id)
+        data = await backend().remember(content, session_id=session_id, scope=scope.value)
     except Exception as e:  # noqa: BLE001
         return _err(e)
     if data.get("degraded"):
         return (f"Stored the raw memory, but consolidation degraded ({data['degraded']}). It is still "
                 "recallable.")
+    if data.get("scope") == "working":
+        return (
+            "Stored as working memory for this session. It remains in dated history, but will not be "
+            "promoted to durable profile facts."
+        )
     return (f"Remembered. Extracted {data.get('extracted', 0)} new fact(s); "
             f"{data.get('total_facts', '?')} live facts total.")
+
+
+@mcp.tool(
+    name="engram_close_session",
+    annotations=ToolAnnotations(title="Close a memory session", **_WRITE),
+)
+async def engram_close_session(
+    session_id: Annotated[str, Field(description="Conversation/thread id to close.")] = "default",
+    summarize: Annotated[
+        bool,
+        Field(description="Create missing session summaries for future lean recall."),
+    ] = True,
+    clear_working: Annotated[
+        bool,
+        Field(description="Clear ephemeral working memory for this session."),
+    ] = True,
+    response_format: ResponseFormat = ResponseFormat.MARKDOWN,
+) -> str:
+    """Finish the memory lifecycle for a client thread without deleting the raw transcript.
+
+    Call this when Claude Code / Codex / Cursor is done with a task or is switching sessions. It
+    drains pending consolidation for this session, creates missing summaries, reflects knowledge
+    updates into summaries, clears short-lived working memory, and persists the namespace.
+
+    Returns (json): {"ok","session_id","episodes","pending_consolidated","facts_added",
+    "summaries","working_cleared",...}.
+    """
+    try:
+        data = await backend().close_session(
+            session_id=session_id,
+            summarize=summarize,
+            clear_working=clear_working,
+        )
+    except Exception as e:  # noqa: BLE001
+        return _err(e)
+    if response_format == ResponseFormat.JSON:
+        return _json(data)
+    return (
+        f"Closed session `{data.get('session_id', session_id)}`. "
+        f"Processed {data.get('episodes', 0)} episode(s), "
+        f"consolidated {data.get('pending_consolidated', 0)} pending episode(s), "
+        f"added {data.get('facts_added', 0)} fact(s), "
+        f"created {data.get('summaries', 0)} summary(ies), "
+        f"cleared {data.get('working_cleared', 0)} working item(s)."
+    )
+
+
+@mcp.tool(name="engram_session_report", annotations=ToolAnnotations(title="Audit a memory session", **_READ))
+async def engram_session_report(
+    session_id: Annotated[str, Field(description="Conversation/thread id to audit.", min_length=1)],
+    include_sensitive: Annotated[
+        bool,
+        Field(description="When false (default), redact sensitive fact text from the report."),
+    ] = False,
+    response_format: ResponseFormat = ResponseFormat.MARKDOWN,
+) -> str:
+    """Show what durable facts a specific session contributed to memory.
+
+    Use this when the user asks "what did you save from this session?" or after closing a session for a
+    visible audit. Sensitive facts are redacted by default; set include_sensitive=true only when the user
+    explicitly wants a full private audit.
+
+    Returns (json): {"ok","session_id","episodes","facts_added","facts_redacted","facts":[...]}.
+    """
+    try:
+        data = await backend().session_report(
+            session_id=session_id,
+            include_sensitive=include_sensitive,
+        )
+    except Exception as e:  # noqa: BLE001
+        return _err(e)
+    if response_format == ResponseFormat.JSON:
+        return _json(data)
+    facts = data.get("facts") or []
+    lines = [
+        "# Engram session report",
+        "",
+        f"- Session: `{data.get('session_id', session_id)}`",
+        f"- Episodes: {data.get('episodes', 0)} "
+        f"({data.get('episodes_pending', 0)} pending consolidation)",
+        f"- Working memory still live: {data.get('working_live', 0)} item(s)",
+        f"- Durable facts linked to this session: {data.get('facts_added', 0)}",
+        f"- Sensitive facts redacted: {data.get('facts_redacted', 0)}",
+    ]
+    if not facts:
+        lines += ["", "No durable facts are linked to this session yet."]
+        return "\n".join(lines)
+    lines += ["", "Facts:"]
+    for f in facts:
+        tag = " _(superseded)_" if f.get("status") != "live" else ""
+        redacted = " 🔒 redacted" if f.get("redacted") else ""
+        lines.append(f"- `{f.get('id', '?')}` [{f.get('valid_at', '?')}] {f.get('text', '')}{tag}{redacted}")
+    return "\n".join(lines)
+
+
+@mcp.tool(name="engram_list_sessions", annotations=ToolAnnotations(title="List memory sessions", **_READ))
+async def engram_list_sessions(
+    limit: Annotated[int, Field(description="Max sessions to return. Default 20.", ge=1, le=100)] = 20,
+    offset: Annotated[int, Field(description="Sessions to skip (pagination).", ge=0)] = 0,
+    q: Annotated[str, Field(description="Optional substring filter over session ids, e.g. 'codex'.")] = "",
+    response_format: ResponseFormat = ResponseFormat.MARKDOWN,
+) -> str:
+    """List the content-free cross-agent/app session index.
+
+    Use this when the user asks which Codex / Claude Code / app sessions have touched their memory.
+    This returns session ids, timestamps, and counts only — no raw episode text, summaries, profile prose,
+    or fact text. Call `engram_session_report(session_id)` to audit one session's durable facts.
+
+    Returns (json): {"ok","sessions":[...],"page":...}.
+    """
+    try:
+        data = await backend().sessions(limit=limit, offset=offset, q=q)
+    except Exception as e:  # noqa: BLE001
+        return _err(e)
+    if response_format == ResponseFormat.JSON:
+        return _json(data)
+    sessions = data.get("sessions") or []
+    page = data.get("page") or {}
+    total = page.get("total", len(sessions))
+    if not sessions:
+        return "No memory sessions found." if not q else f"No memory sessions found matching `{q}`."
+    start = offset + 1
+    lines = [f"# Memory sessions ({start}–{offset + len(sessions)} of {total})", ""]
+    for row in sessions:
+        sid = row.get("id", "?")
+        parts = [
+            f"{row.get('episodes', 0)} episode(s)",
+            f"{row.get('facts_added', 0)} fact(s)",
+            f"{row.get('working_live', 0)} working",
+        ]
+        if row.get("episodes_pending", 0):
+            parts.append(f"{row.get('episodes_pending')} pending")
+        if row.get("facts_sensitive", 0):
+            parts.append(f"{row.get('facts_sensitive')} sensitive")
+        last = row.get("last_event_at_h") or "no timestamp"
+        lines.append(f"- `{sid}` — {', '.join(parts)}; last: {last}")
+    nxt = page.get("next_offset")
+    if nxt is not None:
+        lines += ["", f"…more sessions — call again with offset={nxt}."]
+    lines += ["", "Use `engram_session_report(session_id=...)` to audit one session."]
+    return "\n".join(lines)
 
 
 @mcp.tool(name="engram_list_facts", annotations=ToolAnnotations(title="List stored facts", **_READ))
@@ -234,7 +409,7 @@ async def engram_list_facts(
     for f in page:
         tag = "" if f.get("status") == "live" else " _(superseded)_"
         lock = " 🔒" if f.get("source") == "user" else ""
-        lines.append(f"- [{f.get('valid_at', '?')}] {f.get('text', '')}{tag}{lock}")
+        lines.append(f"- `{f.get('id', '?')}` [{f.get('valid_at', '?')}] {f.get('text', '')}{tag}{lock}")
     if nxt is not None:
         lines += ["", f"…{total - nxt} more — call again with offset={nxt}."]
     return "\n".join(lines)
@@ -259,6 +434,95 @@ async def engram_profile(response_format: ResponseFormat = ResponseFormat.MARKDO
     if facts:
         out += ["", "Key facts:"] + [f"- {t}" for t in facts[:20]]
     return "\n".join(out)
+
+
+@mcp.tool(name="engram_get_focus", annotations=ToolAnnotations(title="Get memory focus", **_READ))
+async def engram_get_focus(response_format: ResponseFormat = ResponseFormat.MARKDOWN) -> str:
+    """Inspect the user's focus policy: tracked topics are boosted in retrieval/salience, and muted
+    topics are suppressed from recall/profile contexts.
+
+    Returns (json): {"track": [str, ...], "mute": [str, ...]}.
+    """
+    try:
+        focus = await backend().get_focus()
+    except Exception as e:  # noqa: BLE001
+        return _err(e)
+    if response_format == ResponseFormat.JSON:
+        return _json(focus)
+    return "# Memory focus\n\n" + _format_focus(focus)
+
+
+@mcp.tool(name="engram_set_focus", annotations=ToolAnnotations(title="Set memory focus", **_WRITE))
+async def engram_set_focus(
+    track: Annotated[Optional[list[str]], Field(description="Topics Engram should emphasize. Omit to leave "
+                                                 "unchanged; pass [] to clear tracked topics.")] = None,
+    mute: Annotated[Optional[list[str]], Field(description="Topics Engram should suppress from recall/profile. "
+                                                "Omit to leave unchanged; pass [] to clear muted topics.")] = None,
+    response_format: ResponseFormat = ResponseFormat.MARKDOWN,
+) -> str:
+    """Update the user's memory focus policy.
+
+    Use this when the user says things like "pay more attention to my project decisions" or "stop
+    surfacing health details unless I ask." `track` topics get a salience boost; `mute` topics are
+    hidden from assembled recall/profile context. Passing None leaves that list unchanged; passing []
+    clears it.
+
+    Returns (json): {"ok": true, "focus": {"track": [...], "mute": [...]}}.
+    """
+    if track is None and mute is None:
+        return "Error: provide `track` or `mute`. Pass [] to clear a list."
+    try:
+        data = await backend().set_focus(track=track, mute=mute)
+    except Exception as e:  # noqa: BLE001
+        return _err(e)
+    if response_format == ResponseFormat.JSON:
+        return _json(data)
+    focus = data.get("focus") or {}
+    return "# Updated memory focus\n\n" + _format_focus(focus)
+
+
+@mcp.tool(name="engram_agent_status", annotations=ToolAnnotations(title="Get agent memory status", **_READ))
+async def engram_agent_status(
+    session_id: Annotated[Optional[str], Field(description="Optional current conversation/thread id. "
+                                           "When set, session-specific counts are included.")] = None,
+    response_format: ResponseFormat = ResponseFormat.MARKDOWN,
+) -> str:
+    """Inspect the content-free memory contract for this agent session.
+
+    Use this at startup or when debugging whether Engram is attached correctly. It does not return
+    profile text, fact text, summaries, or raw episodes; it only returns namespace/session counts, focus
+    policy, and recommended next tool calls.
+
+    Returns (json): {"ok","user","session_id","focus","session","counts","recommended_next_actions",...}.
+    """
+    try:
+        data = await backend().agent_status(session_id=session_id)
+    except Exception as e:  # noqa: BLE001
+        return _err(e)
+    if response_format == ResponseFormat.JSON:
+        return _json(data)
+    c = data.get("counts") or {}
+    s = data.get("session") or {}
+    focus = data.get("focus") or {}
+    lines = [
+        "# Engram agent status",
+        "",
+        f"- Namespace: `{data.get('user', '?')}`",
+        f"- Session: `{s.get('id') or '(none supplied)'}`",
+        f"- Session episodes: {s.get('episodes', 0)} "
+        f"({s.get('episodes_pending', 0)} pending consolidation)",
+        f"- Session working memory: {s.get('working_live', 0)} live item(s)",
+        f"- Long-term memory: {c.get('facts_live', 0)} live fact(s), "
+        f"{c.get('summaries', 0)} summary(ies), {c.get('pending_conflicts', 0)} pending conflict(s)",
+        f"- Overall working memory: {c.get('working_live', 0)} live item(s)",
+        f"- Consolidation backlog: {'yes' if data.get('consolidation_backlog') else 'no'}",
+        "- Focus:",
+        _format_focus(focus),
+        "",
+        "Recommended next actions:",
+    ]
+    lines += [f"- {item}" for item in data.get("recommended_next_actions", [])]
+    return "\n".join(lines)
 
 
 @mcp.tool(name="engram_stats", annotations=ToolAnnotations(title="Get memory stats", **_READ))
@@ -308,6 +572,8 @@ async def engram_add_fact(
     object: Annotated[str, Field(description="The value, e.g. 'Acme Corp', 'Berlin', 'dark mode'.",
                                  min_length=1)],
     subject: Annotated[str, Field(description="Who/what the fact is about. Default 'user'.")] = "user",
+    sensitive: Annotated[Optional[bool], Field(description="Optional user override for sensitivity.")] = None,
+    category: Annotated[Optional[str], Field(description="Optional user-visible category label.")] = None,
 ) -> str:
     """Assert a single authoritative (subject, predicate, object) fact.
 
@@ -316,10 +582,74 @@ async def engram_add_fact(
     never silently overwrite it, and it supersedes any conflicting extracted value on the same slot.
     """
     try:
-        data = await backend().add_fact(subject, predicate, object)
+        data = await backend().add_fact(subject, predicate, object, sensitive=sensitive, category=category)
     except Exception as e:  # noqa: BLE001
         return _err(e)
     return f"Stored authoritative fact: {data.get('text', f'{subject} {predicate} {object}')}"
+
+
+@mcp.tool(name="engram_update_fact", annotations=ToolAnnotations(title="Correct a stored fact", **_WRITE))
+async def engram_update_fact(
+    fact_id: Annotated[str, Field(description="Fact id from engram_list_facts.", min_length=1)],
+    subject: Annotated[Optional[str], Field(description="Optional replacement subject.")] = None,
+    predicate: Annotated[Optional[str], Field(description="Optional replacement predicate.")] = None,
+    object: Annotated[Optional[str], Field(description="Optional replacement object/value.")] = None,
+    sensitive: Annotated[Optional[bool], Field(description="Optional sensitivity override.")] = None,
+    category: Annotated[Optional[str], Field(description="Optional category override.")] = None,
+    response_format: ResponseFormat = ResponseFormat.MARKDOWN,
+) -> str:
+    """Correct one stored fact by id.
+
+    Use this when the user says a specific remembered fact is wrong. The edit becomes user-authored and
+    authoritative, so later automatic extraction will not silently overwrite it.
+
+    Returns (json): {"ok": true, "id": str, "text": str} or an error string if not found.
+    """
+    if all(v is None for v in (subject, predicate, object, sensitive, category)):
+        return "Error: provide at least one field to update."
+    try:
+        data = await backend().update_fact(
+            fact_id,
+            subject=subject,
+            predicate=predicate,
+            object=object,
+            sensitive=sensitive,
+            category=category,
+        )
+    except Exception as e:  # noqa: BLE001
+        return _err(e)
+    if data is None:
+        return f"Error: fact `{fact_id}` was not found."
+    if response_format == ResponseFormat.JSON:
+        return _json(data)
+    return f"Updated fact `{data.get('id', fact_id)}`: {data.get('text', '')}"
+
+
+@mcp.tool(name="engram_delete_fact", annotations=ToolAnnotations(title="Delete one stored fact", **_DESTRUCTIVE))
+async def engram_delete_fact(
+    fact_id: Annotated[str, Field(description="Fact id from engram_list_facts.", min_length=1)],
+    confirm: Annotated[bool, Field(description="Must be true to permanently delete this fact.")] = False,
+    response_format: ResponseFormat = ResponseFormat.MARKDOWN,
+) -> str:
+    """Permanently delete one stored fact by id.
+
+    This is for precise correction/right-to-forget requests. It does not erase the whole namespace; use
+    `engram_forget(confirm=true)` only when the user explicitly asks to wipe everything.
+
+    Returns (json): {"ok": bool}.
+    """
+    if not confirm:
+        return (
+            f"This permanently deletes fact `{fact_id}` and cannot be undone. Re-call with confirm=true "
+            "only if the user explicitly asked to delete that fact."
+        )
+    try:
+        data = await backend().delete_fact(fact_id)
+    except Exception as e:  # noqa: BLE001
+        return _err(e)
+    if response_format == ResponseFormat.JSON:
+        return _json(data)
+    return f"Deleted fact `{fact_id}`." if data.get("ok") else f"Fact `{fact_id}` was not found."
 
 
 @mcp.tool(name="engram_import", annotations=ToolAnnotations(title="Bulk-import a history", **_WRITE))
@@ -342,6 +672,51 @@ async def engram_import(
         return _err(e)
     return (f"Imported {data.get('sessions', 0)} session(s) / {data.get('episodes', 0)} episode(s); "
             f"extracted {data.get('facts_added', 0)} fact(s), {data.get('summaries', 0)} summary(ies).")
+
+
+@mcp.tool(name="engram_export", annotations=ToolAnnotations(title="Export memory data", **_READ))
+async def engram_export(
+    include_sensitive: Annotated[
+        bool,
+        Field(description="When false (default), return a share-safe structured export: non-sensitive "
+              "facts + graph only. Set true only when the user explicitly wants a full private export."),
+    ] = False,
+    response_format: ResponseFormat = ResponseFormat.MARKDOWN,
+) -> str:
+    """Export the user's memory for portability or audit.
+
+    Default is share-safe: sensitive facts and free-text layers (profile, raw episodes, summaries) are
+    omitted. Set include_sensitive=true only for an explicit user-owned private export.
+
+    Returns (json): the `/v1/export` payload.
+    """
+    try:
+        data = await backend().export(include_sensitive=include_sensitive)
+    except Exception as e:  # noqa: BLE001
+        return _err(e)
+    if response_format == ResponseFormat.JSON:
+        return _json(data)
+    facts = data.get("facts") or []
+    graph = data.get("graph") or {}
+    nodes = graph.get("nodes") or []
+    edges = graph.get("edges") or []
+    lines = [
+        "# Engram export",
+        "",
+        f"- Version: {data.get('engram_export_version', '?')}",
+        f"- Namespace: `{data.get('user', '?')}`",
+        f"- Include sensitive: {bool(data.get('include_sensitive'))}",
+        f"- Redacted sensitive: {bool(data.get('redacted_sensitive'))}",
+        f"- Facts: {len(facts)}",
+        f"- Graph: {len(nodes)} node(s), {len(edges)} edge(s)",
+    ]
+    if data.get("redaction_note"):
+        lines += ["", data["redaction_note"]]
+    lines += [
+        "",
+        "Call again with `response_format=\"json\"` to get the portable JSON payload.",
+    ]
+    return "\n".join(lines)
 
 
 @mcp.tool(name="engram_forget", annotations=ToolAnnotations(title="Erase all memory", **_DESTRUCTIVE))

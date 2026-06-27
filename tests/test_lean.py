@@ -6,6 +6,7 @@ with dedup + a hard size cap."""
 from __future__ import annotations
 
 from engram import Memory
+from engram.types import Episode
 from engram.util import DAY
 
 BASE = 1_700_000_000.0
@@ -258,6 +259,9 @@ def test_evidence_planner_is_query_based_not_benchmark_based():
     assert agg.aggregation and agg.use_cascade and agg.n_summaries > 0
     assert agg.subqueries
 
+    topic = plan_evidence("trips")
+    assert not topic.aggregation
+
     pref = plan_evidence("What food do I prefer or dislike?")
     assert pref.preference and pref.n_chunks > 0
 
@@ -323,6 +327,58 @@ def test_aggregation_evidence_keeps_raw_candidates_when_summaries_drop_details()
     assert "Spitfire" in agg
 
 
+def test_structured_aggregation_candidates_filter_furniture_accessories():
+    from engram.retrieve.aggregate import extract_aggregation_candidates, render_aggregation_candidates
+
+    eps = [
+        Episode("I bought scratch guards from IKEA to protect the furniture.", event_time=BASE),
+        Episode("I just got a new coffee table from West Elm.", event_time=BASE + DAY),
+        Episode("I finally assembled that IKEA bookshelf for my home office.", event_time=BASE + 2 * DAY),
+        Episode("I got around to fixing the wobbly leg on my kitchen table.", event_time=BASE + 3 * DAY),
+        Episode("I needed a new mattress, and ordered one from Casper.", event_time=BASE + 4 * DAY),
+        Episode("I bought organic dog food with vegetables for Max and washed his old bed.", event_time=BASE + 5 * DAY),
+    ]
+
+    candidates = extract_aggregation_candidates(
+        "How many pieces of furniture did I buy, assemble, sell, or fix?",
+        [],
+        eps,
+    )
+    included = {c.canonical_item for c in candidates if c.include}
+    excluded = {c.canonical_item for c in candidates if not c.include}
+
+    assert {"coffee table", "bookshelf", "kitchen table", "mattress"} <= included
+    assert "scratch guard" in excluded
+    assert "bed" in excluded
+    assert "table" not in included
+    rendered = render_aggregation_candidates(candidates)
+    assert "AGGREGATION CANDIDATES" in rendered
+    assert sum(1 for c in candidates if c.include) == 4
+
+
+def test_lean_context_renders_structured_aggregation_candidates():
+    mem = Memory()
+    mem.add("I bought scratch guards from IKEA to protect the furniture.", user_id="u1", event_time=BASE)
+    mem.add("I just got a new coffee table from West Elm.", user_id="u1", event_time=BASE + DAY)
+    mem.add("I finally assembled that IKEA bookshelf for my home office.", user_id="u1", event_time=BASE + 2 * DAY)
+    mem.add("I got around to fixing the wobbly leg on my kitchen table.", user_id="u1", event_time=BASE + 3 * DAY)
+    mem.add("I needed a new mattress, and ordered one from Casper.", user_id="u1", event_time=BASE + 4 * DAY)
+
+    ctx = mem.lean_context(
+        "How many pieces of furniture did I buy, assemble, sell, or fix?",
+        user_id="u1",
+        persona=False,
+        n_facts=0,
+        n_summaries=0,
+        n_chunks=0,
+        char_budget=20_000,
+    )
+
+    assert "AGGREGATION CANDIDATES" in ctx
+    assert "INCLUDE" in ctx and "coffee table" in ctx and "mattress" in ctx
+    assert "EXCLUDE" in ctx and "scratch guards" in ctx
+
+
 def test_lean_context_auto_adds_duration_evidence_for_time_totals():
     mem = Memory()
     mem.add("I started reading 'The Nightingale' today.", user_id="u1", session_id="s1", event_time=BASE)
@@ -354,7 +410,8 @@ def test_aggregation_evidence_prioritizes_query_overlap():
         query="How many trips to Kyoto?",
     )
     body = block.split("--- | --- | ---", 1)[1].lower()
-    assert body.find("kyoto") < body.find("cat named luna")
+    assert "kyoto" in body
+    assert "cat named luna" not in body
 
 
 def test_lean_context_auto_adds_current_state_for_now_queries():

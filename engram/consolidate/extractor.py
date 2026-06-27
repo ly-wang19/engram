@@ -86,6 +86,18 @@ class RuleExtractor:
     def _clause(self, clause: str, ep: Episode) -> list[Fact]:
         out: list[Fact] = []
 
+        # 0. Agent/project memory conventions used by Codex / Claude Code adapters.
+        # These turn deliberate memory notes into structured facts even in zero-setup offline mode.
+        m = re.match(r"\s*(?:project|repo|repository)\s+(rule|preference|decision|note)\s*:\s*(.+)", clause, re.I)
+        if m:
+            out.append(self._mk("project", m.group(1).lower(), _clean_obj(m.group(2)), ep))
+            return out
+
+        m = re.match(r"\s*(codex|claude code|cursor|agent)\s+should\s+(.+)", clause, re.I)
+        if m:
+            out.append(self._mk(m.group(1), "agent_instruction", _clean_obj("should " + m.group(2)), ep))
+            return out
+
         # 1. name -> just register identity, emit no SPO fact
         m = (
             re.search(r"\bmy name is (\w[\w'-]*)", clause, re.I)

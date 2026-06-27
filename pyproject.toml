@@ -41,6 +41,9 @@ all = ["engram-memory[server,mcp,embeddings,backends,llm,eval,dev]"]
 engram-mcp = "engram.mcp.__main__:main"            # run the MCP server
 engram-import = "engram.connectors.__main__:main"  # import a chat/history export
 engram-migrate-pickle = "engram.store.migrate:main" # migrate trusted legacy pickle snapshots
+engram-agent-setup = "engram.agent_setup:main"     # print cross-agent memory config snippets
+engram-agent-bootstrap = "engram.agent_setup:bootstrap_main" # install + verify common agent configs
+engram-agent-doctor = "engram.agent_doctor:main"   # verify an agent's Python/MCP memory runtime
 
 [project.urls]
 Homepage = "https://github.com/your-org/engram"

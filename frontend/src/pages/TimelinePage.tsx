@@ -1,10 +1,14 @@
+import { useState } from 'react'
+
 import { Card, EmptyState, ErrorState, PageHeader, Spinner } from '../components/ui'
+import { Button } from '../components/ui'
 import { Timeline } from '../components/Timeline'
 import { useMemories } from '../hooks/queries'
 import { useT } from '../i18n'
 
 export default function TimelinePage() {
-  const { data, isLoading, isError, error } = useMemories()
+  const [limit, setLimit] = useState(60)
+  const { data, isLoading, isError, error } = useMemories({ facts_limit: limit, episodes_limit: 0 })
   const t = useT()
 
   if (isLoading) return <Spinner label={t.timeline.loading} />
@@ -30,7 +34,16 @@ export default function TimelinePage() {
 
       <Card>
         {data.facts.length ? (
-          <Timeline facts={data.facts} />
+          <>
+            <Timeline facts={data.facts} />
+            {data.facts_page?.has_more && (
+              <div className="mt-4 flex justify-center">
+                <Button variant="ghost" onClick={() => setLimit((n) => n + 60)}>
+                  {t.common.loadMore}
+                </Button>
+              </div>
+            )}
+          </>
         ) : (
           <EmptyState title={t.timeline.emptyTitle} hint={t.timeline.emptyHint} />
         )}

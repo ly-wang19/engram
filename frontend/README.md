@@ -45,8 +45,31 @@ use it via `const t = useT()` → `t.<section>.<key>`. Values can be functions f
 - **时间线 Timeline** — chronological evolution with supersession (live vs. replaced).
 - **关系图谱 Graph** — entities + relations; solid = current, dashed = invalidated.
 - **关注点 Focus** — track (salience boost) / mute (hide) topics. Real wiring, not cosmetic.
-- **原始对话 Conversations** — raw episodes + L2 summaries.
-- **隐私与数据 Privacy** — full JSON export (data portability) + erase (right to be forgotten).
+- **原始对话 Conversations** — the cross-agent lifecycle surface: choose a `session_id`, see
+  content-free `agent_status`, write with `scope=auto|long|working`, close the session, and audit what
+  durable facts that session saved. It also includes a content-free session index so users can see which
+  Codex/Claude/app sessions touched their memory.
+- **隐私与数据 Privacy** — safe export by default (non-sensitive facts + graph), explicit private export,
+  and confirmed erase (right to be forgotten).
+
+## Product Lifecycle
+
+For a C-end product or an agent console, the first-class workflow is:
+
+```text
+Open a conversation/thread
+  -> call agent_status(session_id) to confirm namespace + session wiring
+  -> list /v1/sessions when the user needs a cross-agent session index
+  -> recall before answering user/project-history-dependent tasks
+  -> remember durable facts with scope="auto" or scope="long"
+  -> remember temporary task state with scope="working"
+  -> close_session(session_id) when the thread ends or switches tasks
+  -> show session_report(session_id) so the user can audit what was saved
+```
+
+The API key is the user's memory namespace. `session_id` is provenance and lifecycle scope, not a
+separate memory silo; Codex, Claude Code, Cursor, and your app should reuse the same namespace when the
+user expects one shared memory layer.
 
 ## Develop
 

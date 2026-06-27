@@ -56,6 +56,9 @@ MULTI_VALUED = {
     "parent", "child", "spouse", "wife", "husband", "partner",
     # goals / aspirations (one can hold several at once)
     "goal", "goals", "hopes", "wishes", "aspires", "working_on", "works_on", "work_on",
+    # project / agent memory notes (a repo can have many durable rules and decisions)
+    "rule", "preference", "decision", "note",
+    "project_rule", "project_preference", "project_decision", "project_note", "agent_instruction",
     # discrete events / activity log (each is its own occurrence, not a replaceable state)
     "made", "makes", "ordered", "booked", "accepted", "inherited", "received", "sent", "gave",
     "asked", "discussed", "did", "attended", "used_service", "celebrated", "experienced",
