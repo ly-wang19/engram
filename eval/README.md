@@ -35,7 +35,8 @@ python eval/validate_results.py --expected-rows 500 --require-complete results/<
 
 Only logs that pass validation should be marked `DONE` in paper notes or used in README/RESULTS copy.
 Partial logs, smoke slices, failed competitor runs, and exploratory ablations can stay local until they
-are completed or explicitly documented as exploratory.
+are completed or explicitly documented as exploratory. See [`../results/README.md`](../results/README.md)
+for the commit policy for raw logs.
 
 ## Next Experiments
 
