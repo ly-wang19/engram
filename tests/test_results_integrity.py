@@ -7,6 +7,8 @@ import sys
 from collections import Counter
 from pathlib import Path
 
+from eval.validate_results import validate_bench_log
+
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -73,36 +75,8 @@ def test_paper_done_result_logs_are_complete_and_scored():
             links.update(re.findall(r"results/[A-Za-z0-9_.-]+\.jsonl", line))
     assert links
     for link in links:
-        path = ROOT / link
-        assert path.exists(), link
-        rows = _rows(path)
-        qids = [row["qid"] for row in rows]
-        assert len(rows) == 500, link
-        assert len(qids) == len(set(qids)), f"{link} contains duplicate qids"
-        systems = sorted({system for row in rows for system in row.get("sys", {})})
-        assert systems, link
-        for system in systems:
-            scored = []
-            errors = 0
-            for i, row in enumerate(rows, start=1):
-                assert isinstance(row.get("cat"), str) and row["cat"], f"{link}:{i} missing cat"
-                result = row.get("sys", {}).get(system)
-                assert isinstance(result, dict), f"{link}:{i} missing {system}"
-                assert {"ok", "tok", "lat", "err"} <= set(result), (
-                    f"{link}:{i} {system} missing required result keys"
-                )
-                assert isinstance(result["tok"], int) and result["tok"] >= 0, f"{link}:{i} {system} bad tok"
-                assert isinstance(result["lat"], (int, float)) and result["lat"] >= 0, (
-                    f"{link}:{i} {system} bad lat"
-                )
-                if result["err"]:
-                    errors += 1
-                elif result["ok"] is not None:
-                    assert isinstance(result["ok"], bool), f"{link}:{i} {system} bad ok"
-                    assert {"pred", "gold"} <= set(result), f"{link}:{i} {system} missing pred/gold"
-                    scored.append(result)
-            assert errors == 0, f"{link}:{system} has errors"
-            assert len(scored) == len(rows), f"{link}:{system} is not fully scored"
+        errors = validate_bench_log(ROOT / link, expected_rows=500, require_complete=True)
+        assert errors == []
 
 
 def test_results_md_raw_logs_have_required_schema():

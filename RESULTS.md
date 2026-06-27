@@ -81,6 +81,7 @@ HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 python eval/bench.py \
     --out data/run.jsonl
 
 python eval/report.py data/run.jsonl     # prints the per-category table above
+python eval/validate_results.py --expected-rows 500 --require-complete data/run.jsonl
 ```
 
 The harness applies the **same answerer and judge to every `--systems` entry**, so any comparison *within*
@@ -91,7 +92,9 @@ a run (e.g. `engram_lean` vs `full_context`) is apples-to-apples by construction
 - `engram_lean` headline (83.6%, 9.6k tokens): [`results/longmemeval_s_engram_lean_v2_final.jsonl`](results/longmemeval_s_engram_lean_v2_final.jsonl) — 500 lines.
 - full-context baseline (73.2%, 500/500 scored) + the `engram_full` variant (83.4%, 499/500 scored, 1 error), same 500-question run, same answerer + judge: [`results/longmemeval_s_volcano_doubao_deepseekjudge.jsonl`](results/longmemeval_s_volcano_doubao_deepseekjudge.jsonl).
 
-Recompute any table yourself: `python eval/report.py <file.jsonl>`.
+Recompute any table yourself: `python eval/report.py <file.jsonl>`. Before a log is used as published
+evidence, check it with
+`python eval/validate_results.py --expected-rows 500 --require-complete <file.jsonl>`.
 
 ### Provider setup
 
