@@ -19,6 +19,7 @@ import { toast } from '../components/Toast'
 import { useAgentStatus, useHealth, usePolicy, useSessions, useSetPolicy } from '../hooks/queries'
 import { useT } from '../i18n'
 import { apiBaseUrl } from '../lib/api'
+import { copyText } from '../lib/clipboard'
 import { useAuth } from '../store/auth'
 import type { Policy } from '../types'
 
@@ -367,19 +368,7 @@ function PromptCopy({ label, text }: { label: string; text: string }) {
 
 async function copy(text: string, successMessage: string, errorMessage: string) {
   try {
-    if (navigator.clipboard?.writeText && window.isSecureContext) {
-      await navigator.clipboard.writeText(text)
-    } else {
-      const textarea = document.createElement('textarea')
-      textarea.value = text
-      textarea.setAttribute('readonly', '')
-      textarea.style.position = 'fixed'
-      textarea.style.left = '-9999px'
-      document.body.appendChild(textarea)
-      textarea.select()
-      document.execCommand('copy')
-      textarea.remove()
-    }
+    await copyText(text)
     toast.success(successMessage)
   } catch {
     toast.error(errorMessage)
