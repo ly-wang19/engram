@@ -199,7 +199,7 @@
         <li><span class="i18n-en">Distills structured memory; <b>retrieves precisely</b> at query time</span><span class="i18n-zh">提炼成结构化记忆,提问时<b>精准检索</b></span></li>
         <li><span class="i18n-en">Only <b>~9.6k tokens</b> (<b style="color:var(--teal)">8× leaner</b>)</span><span class="i18n-zh">只用 <b>~9.6k token</b>(<b style="color:var(--teal)">省 8 倍</b>)</span></li>
         <li><span class="i18n-en">Drops the noise, keeps the signal → more focused</span><span class="i18n-zh">去掉噪声、只留精华 → 更聚焦</span></li>
-        <li><span class="i18n-en"><b style="color:var(--teal)">83.6%</b> accurate, and it holds up as history grows</span><span class="i18n-zh">准确率 <b style="color:var(--teal)">83.6%</b>,且历史再长也不崩</span></li>
+        <li><span class="i18n-en"><b style="color:var(--teal)">83.6%</b> accurate in this 500-question run</span><span class="i18n-zh">这次 500 题运行准确率 <b style="color:var(--teal)">83.6%</b></span></li>
       </ul>
     </div>
   </div>
@@ -209,16 +209,16 @@
 <section id="how" style="background:linear-gradient(180deg,transparent,rgba(34,211,238,.04),transparent)"><div class="wrap">
   <div class="eyebrow rv"><span class="i18n-en">How it works · dual-process, brain-inspired</span><span class="i18n-zh">它怎么工作 · 双过程,仿人脑</span></div>
   <h2 class="rv d1"><span class="i18n-en">Writes never block; <span class="hl">structuring happens in the background</span></span><span class="i18n-zh">写入不挡路,<span class="hl">整理在后台</span></span></h2>
-  <p class="lead rv d2"><span class="i18n-en">Two paths, like the brain: <b>System-1</b> jots things down as you chat (&lt;50ms, never blocks you); <b>System-2</b>, like sleep, distills memory, builds the graph, and resolves contradictions in the background.</span><span class="i18n-zh">和人脑一样分两条路:<b>System-1</b> 边聊边快速记下(&lt;50ms,不卡你);<b>System-2</b> 像睡觉时一样,在后台把记忆提炼、建图、解决矛盾。</span></p>
+  <p class="lead rv d2"><span class="i18n-en">Two paths, like the brain: <b>System-1</b> jots things down as you chat; <b>System-2</b>, like sleep, distills memory, builds the graph, and resolves contradictions in the background.</span><span class="i18n-zh">和人脑一样分两条路:<b>System-1</b> 边聊边记下;<b>System-2</b> 像睡觉时一样,在后台把记忆提炼、建图、解决矛盾。</span></p>
 
   <div class="flow">
-    <div class="fstep rv d2"><div class="ms">&lt;50ms</div><div class="ic">💬</div><div class="t"><span class="i18n-en">You chat</span><span class="i18n-zh">你聊天</span></div><div class="s"><span class="i18n-en">raw turn stored losslessly (timestamped)</span><span class="i18n-zh">原始对话无损存下(带时间)</span></div></div>
+    <div class="fstep rv d2"><div class="ms">hot</div><div class="ic">💬</div><div class="t"><span class="i18n-en">You chat</span><span class="i18n-zh">你聊天</span></div><div class="s"><span class="i18n-en">raw turn stored losslessly (timestamped)</span><span class="i18n-zh">原始对话无损存下(带时间)</span></div></div>
     <div class="farrow rv d2">→</div>
     <div class="fstep rv d3"><div class="ic">⚗️</div><div class="t"><span class="i18n-en">Distill facts</span><span class="i18n-zh">提炼事实</span></div><div class="s"><span class="i18n-en">atomic facts<br>(subject·predicate·object)</span><span class="i18n-zh">抽出原子事实<br>(主语·谓语·宾语)</span></div></div>
     <div class="farrow rv d3">→</div>
     <div class="fstep rv d3"><div class="ic">🕸️</div><div class="t"><span class="i18n-en">Bi-temporal graph</span><span class="i18n-zh">双时间轴图谱</span></div><div class="s"><span class="i18n-en">entities + relations;<br>resolve conflicts, never overwrite</span><span class="i18n-zh">建实体关系图<br>解决矛盾不覆盖</span></div></div>
     <div class="farrow rv d4">→</div>
-    <div class="fstep rv d4"><div class="ms">&lt;100ms</div><div class="ic">🎯</div><div class="t"><span class="i18n-en">Precise recall</span><span class="i18n-zh">精准检索</span></div><div class="s"><span class="i18n-en">question → relevant slice → answer</span><span class="i18n-zh">提问 → 取相关一小片 → 作答</span></div></div>
+    <div class="fstep rv d4"><div class="ms">lean</div><div class="ic">🎯</div><div class="t"><span class="i18n-en">Precise recall</span><span class="i18n-zh">精准检索</span></div><div class="s"><span class="i18n-en">question → relevant slice → answer</span><span class="i18n-zh">提问 → 取相关一小片 → 作答</span></div></div>
   </div>
 
   <h3 class="rv d3" style="text-align:center;margin-top:54px;font-size:20px;color:var(--dim)"><span class="i18n-en">Five memory types, each its own job (like brain regions)</span><span class="i18n-zh">五类记忆,各管一摊(就像大脑的不同区域)</span></h3>
@@ -297,7 +297,7 @@ python eval/bench.py --data s --limit 500 --systems engram_lean,full_context ...
   <h2 class="rv d1"><span class="i18n-en">Not a single trick — <span class="hl">a whole memory engine</span></span><span class="i18n-zh">不是单点技巧,是<span class="hl">一整套记忆引擎</span></span></h2>
   <p class="lead rv d2"><span class="i18n-en">From write to consolidation to retrieval — layered, reproducible, and built to avoid full-history replay; every capability has code and unit tests behind it.</span><span class="i18n-zh">从写入、固化到检索,逐层设计、可复现,目标是避免每次重读全部历史 —— 每个能力都有对应的代码和单元测试。</span></p>
   <div class="chips">
-    <div class="chip rv d2"><span class="i18n-en"><b>Dual-process write / consolidate</b> · System-1 hot write (no LLM, &lt;50ms) + System-2 async extract & graph</span><span class="i18n-zh"><b>双过程写入 / 固化</b> · System-1 热写入(不调 LLM、&lt;50ms)+ System-2 异步抽取建图</span></div>
+    <div class="chip rv d2"><span class="i18n-en"><b>Dual-process write / consolidate</b> · System-1 hot write (no LLM) + System-2 async extract & graph</span><span class="i18n-zh"><b>双过程写入 / 固化</b> · System-1 热写入(不调 LLM)+ System-2 异步抽取建图</span></div>
     <div class="chip rv d2"><span class="i18n-en"><b>Bi-temporal facts</b> · valid-time + transaction-time, <b>as-of queries</b>, knowledge-updates first-class</span><span class="i18n-zh"><b>双时间轴事实</b> · 有效时间 + 事务时间,<b>as-of 时点查询</b>、知识更新一等公民</span></div>
     <div class="chip rv d3"><span class="i18n-en"><b>Non-destructive conflict resolution</b> · slot + semantic + subsumption, LLM only when ambiguous; <b>invalidate (not delete), full provenance</b></span><span class="i18n-zh"><b>非破坏式冲突解决</b> · 精确槽 + 语义 + 子集,仅模糊时 LLM 裁决;<b>失效不删除、全溯源</b></span></div>
     <div class="chip rv d3"><span class="i18n-en"><b>Hybrid retrieval</b> · semantic + BM25 lexical + graph n-hop + recency/salience, fused with <b>RRF</b> (optional rerank)</span><span class="i18n-zh"><b>混合检索</b> · 语义 + 词法 BM25 + 图 n 跳 + 时近/显著度,<b>RRF 融合</b>(可选重排)</span></div>

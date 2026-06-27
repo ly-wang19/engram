@@ -248,7 +248,7 @@ def test_public_copy_avoids_unmeasured_scale_or_latency_claims():
         "under 50ms",
         "~50ms",
     )
-    for rel in ("README.md", "README.zh-CN.md", "RESULTS.md", "docs/index.html"):
+    for rel in ("README.md", "README.zh-CN.md", "RESULTS.md", "docs/index.html", "demo/index.html"):
         text = (ROOT / rel).read_text(encoding="utf-8")
         lowered = text.lower()
         for phrase in forbidden:
