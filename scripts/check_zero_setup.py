@@ -30,6 +30,12 @@ CONSOLE_HELP_MODULES = (
     "engram.mcp",
     "engram.store.migrate",
 )
+CONSOLE_HELP_CALLABLES = (
+    (
+        "engram-agent-bootstrap",
+        "from engram.agent_setup import bootstrap_main; bootstrap_main(['--help'])",
+    ),
+)
 
 
 def _rel(path: Path) -> str:
@@ -89,6 +95,8 @@ def main(argv: list[str] | None = None) -> int:
         run_step("installed-module quickstart", [py, "-m", "engram.quickstart"])
         for module in CONSOLE_HELP_MODULES:
             run_step(f"console help: {module}", [py, "-m", module, "--help"])
+        for label, snippet in CONSOLE_HELP_CALLABLES:
+            run_step(f"console help: {label}", [py, "-c", snippet])
         run_step("offline synthetic eval", [py, "eval/harness.py"])
         run_step(
             "durable smoke eval",

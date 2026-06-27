@@ -38,6 +38,8 @@ def test_package_metadata_links_to_real_repository():
         "engram.store.migrate",
     ):
         assert f'"{module}"' in zero_setup
+    assert '"engram-agent-bootstrap"' in zero_setup
+    assert "bootstrap_main(['--help'])" in zero_setup
     assert ts_package["repository"]["url"] == "https://github.com/ly-wang19/engram"
     assert ts_package["repository"]["directory"] == "clients/typescript"
     assert ts_package["homepage"] == "https://github.com/ly-wang19/engram/tree/main/clients/typescript"

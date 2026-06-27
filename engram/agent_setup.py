@@ -814,9 +814,9 @@ def render_markdown(
     return "\n".join(out).rstrip() + "\n"
 
 
-def main(argv: list[str] | None = None) -> None:
+def main(argv: list[str] | None = None, *, prog: str = "engram-agent-setup") -> None:
     ap = argparse.ArgumentParser(
-        prog="engram-agent-setup",
+        prog=prog,
         description="Print or explicitly install config snippets for using Engram as cross-agent memory.",
     )
     ap.add_argument("--client", choices=CLIENTS, default="all", help="which adapter recipe to print")
@@ -1089,7 +1089,7 @@ def main(argv: list[str] | None = None) -> None:
 def bootstrap_main(argv: list[str] | None = None) -> None:
     import sys
 
-    main(["--bootstrap", *(sys.argv[1:] if argv is None else argv)])
+    main(["--bootstrap", *(sys.argv[1:] if argv is None else argv)], prog="engram-agent-bootstrap")
 
 
 if __name__ == "__main__":

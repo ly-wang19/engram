@@ -875,6 +875,14 @@ def test_bootstrap_main_adds_bootstrap_flag(tmp_path, monkeypatch, capsys):
     assert "# Engram Agent Bootstrap" in capsys.readouterr().out
 
 
+def test_bootstrap_main_help_uses_bootstrap_program_name(capsys):
+    with pytest.raises(SystemExit) as exc:
+        bootstrap_main(["--help"])
+
+    assert exc.value.code == 0
+    assert "usage: engram-agent-bootstrap" in capsys.readouterr().out
+
+
 def test_uninstall_codex_config_removes_only_engram_table_and_backs_up(tmp_path):
     config = tmp_path / "config.toml"
     block = codex_toml_block(
