@@ -15,6 +15,10 @@ def test_engram_config_applies_algorithm_ablation_flags():
     assert relation_cfg.graph_proximity is True
     assert relation_cfg.graph_relation_awareness is False
 
+    reinforcement_cfg = engram_config(ablations=("graph_reinforcement",))
+    assert reinforcement_cfg.graph_proximity is True
+    assert reinforcement_cfg.graph_path_reinforcement is False
+
 
 def test_bench_exposes_named_lean_ablation_systems():
     names = {
@@ -22,6 +26,7 @@ def test_bench_exposes_named_lean_ablation_systems():
         "engram_lean_no_raw",
         "engram_lean_no_graph",
         "engram_lean_no_graph_relation",
+        "engram_lean_no_graph_reinforcement",
         "engram_lean_core",
     }
 
@@ -30,18 +35,20 @@ def test_bench_exposes_named_lean_ablation_systems():
     assert SYSTEMS["engram_lean_no_raw"].ablations == ("raw",)
     assert SYSTEMS["engram_lean_no_graph"].ablations == ("graph",)
     assert SYSTEMS["engram_lean_no_graph_relation"].ablations == ("graph_relation",)
+    assert SYSTEMS["engram_lean_no_graph_reinforcement"].ablations == ("graph_reinforcement",)
     assert SYSTEMS["engram_lean_core"].ablations == ("chain", "raw", "graph")
 
 
 def test_offline_feature_ablation_proves_each_enabled_feature_adds_evidence():
     rows, summary = run_ablation()
 
-    assert summary["n"] == 4
-    assert summary["improved"] == 4
+    assert summary["n"] == 5
+    assert summary["improved"] == 5
     assert {row.feature for row in rows} == {
         "chain_evidence",
         "provenance_evidence",
         "graph_proximity",
         "graph_relation_awareness",
+        "graph_path_reinforcement",
     }
     assert all(row.enabled_hit and not row.disabled_hit and row.improved for row in rows)

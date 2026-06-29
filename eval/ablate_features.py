@@ -105,6 +105,18 @@ def _graph_relation_context(enabled: bool) -> str:
     return mem.context_for("Where is Wei's colleague's company based?", user_id="u1", k_chunks=0, graph=True)
 
 
+def _graph_reinforcement_context(enabled: bool) -> str:
+    mem = Memory(config=Config(graph_path_reinforcement=enabled))
+    mem.add_fact("Wei", "colleague", "Lin", user_id="u1", valid_at=BASE)
+    mem.add_fact("Wei", "mentor", "Maya", user_id="u1", valid_at=BASE + DAY)
+    mem.add_fact("Lin", "works_on", "Atlas", user_id="u1", valid_at=BASE + 2 * DAY)
+    mem.add_fact("Maya", "works_on", "Atlas", user_id="u1", valid_at=BASE + 3 * DAY)
+    mem.add_fact("Lin", "works_on", "Zephyr", user_id="u1", valid_at=BASE + 4 * DAY)
+    mem.add_fact("Atlas", "based_in", "Reykjavik", user_id="u1", valid_at=BASE + 5 * DAY)
+    mem.add_fact("Zephyr", "based_in", "Lisbon", user_id="u1", valid_at=BASE + 6 * DAY)
+    return mem.context_for("Where is Wei's project based?", user_id="u1", k_chunks=0, graph=True)
+
+
 def _contains(marker: str, target: str):
     return lambda ctx: marker in ctx and target in ctx
 
@@ -142,6 +154,12 @@ def run_ablation() -> tuple[list[AblationResult], dict]:
             _graph_relation_context,
             _before("Moonshot AI based in Beijing", "Lin likes jazz"),
             "target relation before same-node distractor",
+        ),
+        (
+            "graph_path_reinforcement",
+            _graph_reinforcement_context,
+            _before("Atlas based in Reykjavik", "Zephyr based in Lisbon"),
+            "multi-path target before single-path distractor",
         ),
     ]
     rows: list[AblationResult] = []

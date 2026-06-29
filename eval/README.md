@@ -34,8 +34,9 @@ python eval/ablate_features.py
 This command toggles the newest evidence features one at a time and checks whether the enabled path
 surfaces evidence that the disabled path cannot: supersedes-chain context, provenance-backed raw snippets,
 n-hop graph proximity, and query-conditioned graph relation weighting that ranks the target relation
-ahead of same-node distractors. It is a local improvement proof for the target behavior, not a public
-accuracy claim. Publishable claims still require `eval/bench.py` plus committed raw logs.
+ahead of same-node distractors, plus PPR-style graph path reinforcement that ranks a multi-path-supported
+target ahead of a single-path distractor. It is a local improvement proof for the target behavior, not a
+public accuracy claim. Publishable claims still require `eval/bench.py` plus committed raw logs.
 
 ## Real Benchmarks
 

@@ -42,6 +42,7 @@ class Config:
     provenance_evidence: bool = True  # include compact raw source episodes for retrieved fact provenance
     graph_proximity: bool = True  # n-hop graph proximity scoring / traversal ablation switch
     graph_relation_awareness: bool = True  # query-conditioned predicate weighting inside graph proximity
+    graph_path_reinforcement: bool = True  # PPR-style boost when multiple paths support the same graph node
 
     # --- consolidation ---
     salience_decay_per_day: float = 0.02

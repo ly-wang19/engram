@@ -46,6 +46,8 @@ _GRAPH_PREDICATE_ALIASES: dict[str, tuple[str, ...]] = {
     "lives_in": ("live", "lives", "living", "reside", "resides", "city", "home", "location", "where"),
     "based_in": ("based", "base", "located", "location", "headquarter", "headquarters", "hq", "city", "where"),
     "located_in": ("located", "location", "based", "headquarter", "headquarters", "hq", "city", "where"),
+    "works_on": ("project", "work", "works", "working", "built", "building"),
+    "project": ("project", "initiative", "work"),
     "colleague": ("colleague", "coworker", "co-worker", "workmate"),
     "sister": ("sister", "sibling"),
     "brother": ("brother", "sibling"),
@@ -141,24 +143,32 @@ class HybridRetriever:
             return {f.id: 0.0 for f in live}, qids
         live_fact_ids = {f.id for f in live}
         node_scores: dict[str, float] = {eid: 1.0 for eid in qids}
-        frontier = set(qids)
+        frontier: dict[str, float] = {eid: 1.0 for eid in qids}
 
         for depth in range(1, max(0, self.config.max_hops) + 1):
-            hop_score = _GRAPH_HOP_DECAY ** depth
-            next_frontier: set[str] = set()
-            for eid in frontier:
+            next_frontier: dict[str, float] = {}
+            for eid, parent_score in frontier.items():
                 for direction in ("out", "in"):
                     for rel in self.graph.neighbors(eid, as_of, direction):
                         if rel.fact_id not in live_fact_ids:
                             continue
                         neighbor_id = rel.object_id if direction == "out" else rel.subject_id
-                        if node_scores.get(neighbor_id, 0.0) >= hop_score:
+                        if neighbor_id in qids:
                             continue
-                        node_scores[neighbor_id] = hop_score
-                        next_frontier.add(neighbor_id)
+                        contribution = parent_score * _GRAPH_HOP_DECAY
+                        if self.config.graph_path_reinforcement:
+                            old_score = node_scores.get(neighbor_id, 0.0)
+                            node_scores[neighbor_id] = min(1.0, old_score + contribution)
+                            next_frontier[neighbor_id] = next_frontier.get(neighbor_id, 0.0) + contribution
+                        else:
+                            old_score = node_scores.get(neighbor_id, 0.0)
+                            if old_score >= contribution:
+                                continue
+                            node_scores[neighbor_id] = contribution
+                            next_frontier[neighbor_id] = max(next_frontier.get(neighbor_id, 0.0), contribution)
             if not next_frontier:
                 break
-            frontier = next_frontier
+            frontier = {eid: min(score, 1.0) for eid, score in next_frontier.items()}
 
         scores: dict[str, float] = {}
         q_terms = set(stems(query)) | {stem(t) for t in tokenize(query)}

@@ -936,6 +936,42 @@ def test_graph_relation_awareness_can_be_disabled_for_ablation():
     assert scores[target.id] < scores[distractor.id]
 
 
+def test_graph_path_reinforcement_boosts_multi_path_targets():
+    from engram.config import Config
+
+    def build_mem(enabled: bool):
+        mem = Memory(config=Config(graph_path_reinforcement=enabled))
+        mem.add_fact("Wei", "colleague", "Lin", user_id="u1", valid_at=BASE)
+        mem.add_fact("Wei", "mentor", "Maya", user_id="u1", valid_at=BASE + DAY)
+        mem.add_fact("Lin", "works_on", "Atlas", user_id="u1", valid_at=BASE + 2 * DAY)
+        mem.add_fact("Maya", "works_on", "Atlas", user_id="u1", valid_at=BASE + 3 * DAY)
+        mem.add_fact("Lin", "works_on", "Zephyr", user_id="u1", valid_at=BASE + 4 * DAY)
+        target = mem.add_fact("Atlas", "based_in", "Reykjavik", user_id="u1", valid_at=BASE + 5 * DAY)
+        distractor = mem.add_fact("Zephyr", "based_in", "Lisbon", user_id="u1", valid_at=BASE + 6 * DAY)
+        return mem, target, distractor
+
+    enabled_mem, enabled_target, enabled_distractor = build_mem(True)
+    enabled_live = [f for f in enabled_mem.fact_store.values() if f.user_id == enabled_mem.resolver.resolve("u1")]
+    enabled_scores, _ = enabled_mem.retriever._graph_scores(
+        "Where is Wei's project based?",
+        enabled_mem.resolver.resolve("u1"),
+        enabled_live,
+        None,
+    )
+
+    disabled_mem, disabled_target, disabled_distractor = build_mem(False)
+    disabled_live = [f for f in disabled_mem.fact_store.values() if f.user_id == disabled_mem.resolver.resolve("u1")]
+    disabled_scores, _ = disabled_mem.retriever._graph_scores(
+        "Where is Wei's project based?",
+        disabled_mem.resolver.resolve("u1"),
+        disabled_live,
+        None,
+    )
+
+    assert enabled_scores[enabled_target.id] > enabled_scores[enabled_distractor.id]
+    assert disabled_scores[disabled_target.id] <= disabled_scores[disabled_distractor.id]
+
+
 def test_bench_preconsolidation_uses_multi_hop_subqueries():
     from engram.types import Episode
     from eval.bench import retrieve_evidence_episodes
