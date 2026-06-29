@@ -530,6 +530,45 @@ def test_lean_context_adds_history_for_previous_value_queries():
     assert "superseded" in ctx and "current" in ctx
 
 
+def test_search_answers_previous_value_from_supersession_history():
+    mem = Memory()
+    mem.add_fact("Wei", "works_at", "Tencent", user_id="u1", valid_at=BASE)
+    mem.add_fact("Wei", "works_at", "Moonshot AI", user_id="u1", valid_at=BASE + 30 * DAY)
+
+    before = mem.search("Where did Wei work before Moonshot AI?", user_id="u1")
+    previous = mem.search("Where did Wei previously work?", user_id="u1")
+    current = mem.search("Where does Wei work now?", user_id="u1")
+
+    assert before.via == "history"
+    assert "tencent" in before.answer().lower()
+    assert [f.object for f in before.facts] == ["Tencent", "Moonshot AI"]
+    assert previous.via == "history"
+    assert "tencent" in previous.answer().lower()
+    assert current.via == "hybrid"
+    assert "moonshot" in current.answer().lower()
+
+
+def test_temporal_history_query_can_be_disabled_for_ablation():
+    from engram.config import Config
+
+    mem = Memory(config=Config(temporal_history_queries=False))
+    mem.add_fact("Wei", "works_at", "Tencent", user_id="u1", valid_at=BASE)
+    mem.add_fact("Wei", "works_at", "Moonshot AI", user_id="u1", valid_at=BASE + 30 * DAY)
+
+    res = mem.search("Where did Wei work before Moonshot AI?", user_id="u1")
+    ctx = mem.lean_context(
+        "Where did Wei work before Moonshot AI?",
+        user_id="u1",
+        persona=False,
+        n_chunks=0,
+        char_budget=10_000,
+    )
+
+    assert res.via == "hybrid"
+    assert "moonshot" in res.answer().lower()
+    assert "FACT HISTORY (supersession chain" not in ctx
+
+
 def test_lean_context_adds_evolution_chain_for_current_lookup():
     mem = Memory()
     old = mem.add_fact("Wei", "works_at", "Tencent", user_id="u1", valid_at=BASE)

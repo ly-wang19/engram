@@ -31,7 +31,7 @@ from .retrieve import (
     plan_evidence,
     render_aggregation_candidates,
 )
-from .retrieve.lexical import bm25_scores, overlap_terms
+from .retrieve.lexical import bm25_scores, overlap_terms, stems
 from .store import (
     GraphStore,
     InMemoryDocStore,
@@ -79,6 +79,11 @@ _ANSWER_TYPE_MATCH = {
     "date": lambda o: bool(re.search(r"\b\d{4}\b|\d{1,2}[-/]\d{1,2}|年|月|jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec", o.lower())),
     "number": lambda o: bool(re.search(r"\d", o)),  # lenient: any digit (counts/durations/ages)
 }
+_TEMPORAL_HISTORY_RE = re.compile(
+    r"\b(before|previous|previously|former|formerly|used\s+to|past|old(?:er)?|prior)\b|"
+    r"以前|之前|曾经|过去|原来|从前|上一",
+    re.IGNORECASE,
+)
 
 
 def _expected_answer_type(query: str):
@@ -1127,6 +1132,69 @@ class Memory:
             )
         return "FACT HISTORY (supersession chain for update/previous-value questions):\n" + "\n".join(lines)
 
+    @staticmethod
+    def _mentions_value(query: str, value: str) -> bool:
+        q = query.lower()
+        v = value.lower().strip()
+        if not v:
+            return False
+        if v in q:
+            return True
+        value_terms = set(stems(value))
+        return bool(value_terms) and value_terms <= set(stems(query))
+
+    def _temporal_history_result(
+        self,
+        query: str,
+        user: str,
+        as_of: Optional[float],
+    ) -> Optional[SearchResult]:
+        """Direct-answer path for natural-language history queries.
+
+        `as_of()` already answers point-in-time questions when the caller supplies a timestamp. Users also
+        ask in language: "Where did Wei work before Moonshot AI?" or "Where did Wei previously work?".
+        Hybrid retrieval intentionally sees only live facts, so this resolver reads the non-destructive
+        supersession chain before the live-only retriever gets a chance to answer with the current value.
+        """
+        if not self.config.temporal_history_queries or not _TEMPORAL_HISTORY_RE.search(query):
+            return None
+        view_time = now() if as_of is None else as_of
+        facts = [f for f in self._all_facts() if f.user_id == user and f.valid_at <= view_time]
+        if not facts:
+            return None
+        by_id = {f.id: f for f in facts}
+        replacements: dict[str, list[Fact]] = {}
+        for f in facts:
+            if f.supersedes and f.supersedes in by_id:
+                replacements.setdefault(f.supersedes, []).append(f)
+
+        candidates: list[tuple[int, float, Fact, Fact]] = []
+        for old, newers in ((by_id[old_id], ns) for old_id, ns in replacements.items()):
+            visible_newers = [n for n in newers if n.valid_at <= view_time]
+            if not visible_newers:
+                continue
+            newer = max(visible_newers, key=lambda f: (f.valid_at, f.created_at, f.id))
+            if old.is_live(as_of):
+                continue
+            old_terms = self._chain_terms(old)
+            newer_terms = self._chain_terms(newer)
+            overlap = overlap_terms(query, old_terms) | overlap_terms(query, newer_terms)
+            score = len(overlap)
+            if self._mentions_value(query, newer.object):
+                score += 6
+            if self._mentions_value(query, old.subject):
+                score += 2
+            if overlap_terms(query, old.predicate.replace("_", " ")):
+                score += 3
+            if score <= 0:
+                continue
+            candidates.append((score, old.valid_at, old, newer))
+        if not candidates:
+            return None
+        _, _, old, newer = max(candidates, key=lambda row: (row[0], row[1], row[2].created_at, row[2].id))
+        reinforce(old, self.config.access_boost)
+        return SearchResult(query=query, facts=[old, newer], scores=[1.0, 1.0], via="history", _answer=old.object)
+
     def _chain_facts_for_seeds(
         self,
         seeds: list[Fact],
@@ -1773,7 +1841,7 @@ class Memory:
                 if evo:
                     blocks.append(evo)
 
-        if need is not None and need.history:
+        if need is not None and need.history and self.config.temporal_history_queries:
             hist = self._history_block(user, query, as_of, redact_sensitive=redact_sensitive)
             if hist:
                 blocks.append(hist)
@@ -1913,7 +1981,12 @@ class Memory:
                 reinforce(f, self.config.access_boost)
             return SearchResult(query=query, facts=plan.facts, via="multi-hop", _answer=plan.answer)
 
-        # 2. hybrid retrieval
+        # 2. natural-language history queries over the supersession chain
+        hist = self._temporal_history_result(query, user, as_of)
+        if hist is not None:
+            return hist
+
+        # 3. hybrid retrieval
         ranked, diag = self.retriever.retrieve(query, user, as_of, top_k)
         via = "hybrid"
         if not ranked:

@@ -61,6 +61,14 @@ def _chain_context(enabled: bool) -> str:
     )
 
 
+def _temporal_history_context(enabled: bool) -> str:
+    mem = Memory(config=Config(temporal_history_queries=enabled))
+    mem.add_fact("Wei", "works_at", "Tencent", user_id="u1", valid_at=BASE)
+    mem.add_fact("Wei", "works_at", "Moonshot AI", user_id="u1", valid_at=BASE + 30 * DAY)
+    res = mem.search("Where did Wei work before Moonshot AI?", user_id="u1")
+    return res.answer()
+
+
 def _raw_context(enabled: bool) -> str:
     mem = Memory(config=Config(evidence_planner=False, provenance_evidence=enabled))
     ep = mem.add(
@@ -211,6 +219,12 @@ def run_ablation() -> tuple[list[AblationResult], dict]:
             _chain_context,
             _contains("FACT EVOLUTION (retrieved supersession chain):", "Tencent"),
             "Tencent",
+        ),
+        (
+            "temporal_history_queries",
+            _temporal_history_context,
+            lambda answer: "Tencent" in answer,
+            "natural-language previous-value query reads supersession history",
         ),
         (
             "provenance_evidence",

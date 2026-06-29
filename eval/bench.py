@@ -139,6 +139,11 @@ def engram_config(evidence_planner: bool = True, ablations: tuple[str, ...] = ()
         evidence_planner=evidence_planner,
         evidence_budgeting="evidence_budget" not in disabled and "evidence_budgeting" not in disabled,
         chain_evidence="chain" not in disabled,
+        temporal_history_queries=(
+            "temporal_history" not in disabled
+            and "history_queries" not in disabled
+            and "temporal_history_queries" not in disabled
+        ),
         provenance_evidence="raw" not in disabled and "provenance" not in disabled,
         graph_proximity="graph" not in disabled and "graph_proximity" not in disabled,
         graph_relation_awareness=(
@@ -480,6 +485,13 @@ class EngramLeanNoEvidenceBudgetSystem(EngramLeanSystem):
     ablations = ("evidence_budget",)
 
 
+class EngramLeanNoTemporalHistorySystem(EngramLeanSystem):
+    """A/B baseline: lean system without natural-language history/supersession queries."""
+
+    name = "engram_lean_no_temporal_history"
+    ablations = ("temporal_history",)
+
+
 class EngramLeanNoGraphSystem(EngramLeanSystem):
     """A/B baseline: lean system without n-hop graph proximity scoring/traversal."""
 
@@ -550,6 +562,7 @@ SYSTEMS = {"engram": EngramSystem, "full_context": FullContextSystem, "rag": RAG
            "engram_lean_no_chain": EngramLeanNoChainSystem,
            "engram_lean_no_raw": EngramLeanNoRawSystem,
            "engram_lean_no_evidence_budget": EngramLeanNoEvidenceBudgetSystem,
+           "engram_lean_no_temporal_history": EngramLeanNoTemporalHistorySystem,
            "engram_lean_no_graph": EngramLeanNoGraphSystem,
            "engram_lean_no_graph_relation": EngramLeanNoGraphRelationSystem,
            "engram_lean_no_graph_reinforcement": EngramLeanNoGraphReinforcementSystem,
@@ -700,7 +713,7 @@ def main():
     ap.add_argument("--intent", action="store_true", help="engram: L6 intent hint (benchmark-neutral)")
     ap.add_argument("--ablate", default="",
                     help="comma-separated Engram algorithm switches to disable for all Engram systems in this run: "
-                         "evidence_budget, chain, raw/provenance, graph/graph_proximity, graph_relation, "
+                         "evidence_budget, chain, temporal_history, raw/provenance, graph/graph_proximity, graph_relation, "
                          "graph_reinforcement, graph_self_anchor, graph_entity_alias, graph_negative, "
                          "planner_location, planner_project")
     ap.add_argument("--full", action="store_true",
