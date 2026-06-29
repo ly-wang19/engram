@@ -140,6 +140,11 @@ def engram_config(evidence_planner: bool = True, ablations: tuple[str, ...] = ()
         chain_evidence="chain" not in disabled,
         provenance_evidence="raw" not in disabled and "provenance" not in disabled,
         graph_proximity="graph" not in disabled and "graph_proximity" not in disabled,
+        graph_relation_awareness=(
+            "graph_relation" not in disabled
+            and "relation_graph" not in disabled
+            and "graph_relation_awareness" not in disabled
+        ),
     )
 
 
@@ -442,6 +447,13 @@ class EngramLeanNoGraphSystem(EngramLeanSystem):
     ablations = ("graph",)
 
 
+class EngramLeanNoGraphRelationSystem(EngramLeanSystem):
+    """A/B baseline: lean system without query-conditioned relation weighting inside graph proximity."""
+
+    name = "engram_lean_no_graph_relation"
+    ablations = ("graph_relation",)
+
+
 class EngramLeanCoreSystem(EngramLeanSystem):
     """A/B baseline: lean system with the newest evidence enrichments disabled together."""
 
@@ -456,6 +468,7 @@ SYSTEMS = {"engram": EngramSystem, "full_context": FullContextSystem, "rag": RAG
            "engram_lean_no_chain": EngramLeanNoChainSystem,
            "engram_lean_no_raw": EngramLeanNoRawSystem,
            "engram_lean_no_graph": EngramLeanNoGraphSystem,
+           "engram_lean_no_graph_relation": EngramLeanNoGraphRelationSystem,
            "engram_lean_core": EngramLeanCoreSystem}
 
 
@@ -598,7 +611,7 @@ def main():
     ap.add_argument("--intent", action="store_true", help="engram: L6 intent hint (benchmark-neutral)")
     ap.add_argument("--ablate", default="",
                     help="comma-separated Engram algorithm switches to disable for all Engram systems in this run: "
-                         "chain, raw/provenance, graph/graph_proximity")
+                         "chain, raw/provenance, graph/graph_proximity, graph_relation")
     ap.add_argument("--full", action="store_true",
                     help="engram: turn ON ALL differentiators (agentic+timeline+hyde+graph+wiki+summary+verify+intent)")
     ap.add_argument("--workers", type=int, default=4)

@@ -40,6 +40,28 @@ _IDENTITY_PREDS = frozenset({
     "name", "works_at", "lives_in", "born_in", "married_to", "occupation", "age",
     "studied_at", "owns", "has", "speaks",
 })
+_GRAPH_PREDICATE_ALIASES: dict[str, tuple[str, ...]] = {
+    "works_at": ("work", "works", "working", "employer", "employed", "employment", "company", "job"),
+    "occupation": ("profession", "role", "title", "job", "career"),
+    "lives_in": ("live", "lives", "living", "reside", "resides", "city", "home", "location", "where"),
+    "based_in": ("based", "base", "located", "location", "headquarter", "headquarters", "hq", "city", "where"),
+    "located_in": ("located", "location", "based", "headquarter", "headquarters", "hq", "city", "where"),
+    "colleague": ("colleague", "coworker", "co-worker", "workmate"),
+    "sister": ("sister", "sibling"),
+    "brother": ("brother", "sibling"),
+    "spouse": ("spouse", "wife", "husband", "partner"),
+    "wife": ("spouse", "wife", "partner"),
+    "husband": ("spouse", "husband", "partner"),
+    "manager": ("manager", "boss", "lead"),
+    "likes": ("like", "likes", "favorite", "interest"),
+    "favorite": ("favorite", "favourite", "likes", "prefers"),
+}
+_GRAPH_QUERY_CUE_WORDS = frozenset(
+    word
+    for words in _GRAPH_PREDICATE_ALIASES.values()
+    for alias in words
+    for word in stems(alias)
+) | frozenset({"where", "who", "whose", "which"})
 
 
 def order_positive(scores: dict[str, float]) -> list[str]:
@@ -61,6 +83,31 @@ def fact_type_weight(fact: Fact, config: Config) -> float:
     if p in _IDENTITY_PREDS:
         return config.w_type_identity
     return 1.0
+
+
+def _graph_predicate_terms(predicate: str) -> set[str]:
+    pred = predicate.lower()
+    terms = set(stems(pred.replace("_", " ")))
+    for alias in _GRAPH_PREDICATE_ALIASES.get(pred, ()):
+        terms.update(stems(alias))
+    return terms
+
+
+def graph_relation_relevance(query: str, fact: Fact) -> float:
+    """How well this fact's relation matches the query's relation intent.
+
+    Graph proximity finds *nearby* facts; this score makes it query-conditioned, so a company/location
+    question prefers works_at/based_in edges over same-node distractors such as likes/owns. If the query
+    contains no relation cue ("tell me about Wei"), callers should skip relation weighting entirely.
+    """
+    q_terms = set(stems(query)) | {stem(t) for t in tokenize(query)}
+    pred_terms = _graph_predicate_terms(fact.predicate)
+    if q_terms & pred_terms:
+        return 1.0
+    text_terms = set(stems(f"{fact.subject} {fact.object} {fact.text}"))
+    if q_terms & text_terms:
+        return 0.75
+    return 0.0
 
 
 class HybridRetriever:
@@ -114,12 +161,17 @@ class HybridRetriever:
             frontier = next_frontier
 
         scores: dict[str, float] = {}
+        q_terms = set(stems(query)) | {stem(t) for t in tokenize(query)}
+        use_relation_weight = self.config.graph_relation_awareness and bool(q_terms & _GRAPH_QUERY_CUE_WORDS)
         for f in live:
             subj = self.graph.get_entity(f.user_id, f.subject)
             obj = self.graph.get_entity(f.user_id, f.object)
             sid = subj.id if subj else None
             oid = obj.id if obj else None
-            scores[f.id] = max(node_scores.get(sid, 0.0), node_scores.get(oid, 0.0))
+            score = max(node_scores.get(sid, 0.0), node_scores.get(oid, 0.0))
+            if use_relation_weight and score > 0.0:
+                score *= 0.55 + 0.45 * graph_relation_relevance(query, f)
+            scores[f.id] = score
         return scores, qids
 
     def _current_slot_heads(self, facts: list[Fact]) -> list[Fact]:

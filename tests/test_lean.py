@@ -896,6 +896,46 @@ def test_graph_proximity_can_be_disabled_for_ablation():
     assert paths == ""
 
 
+def test_graph_relation_awareness_prioritizes_query_relevant_edges():
+    from engram.config import Config
+
+    mem = Memory(config=Config(graph_relation_awareness=True))
+    mem.add_fact("Wei", "colleague", "Lin", user_id="u1", valid_at=BASE)
+    mem.add_fact("Lin", "works_at", "Moonshot AI", user_id="u1", valid_at=BASE + DAY)
+    distractor = mem.add_fact("Lin", "likes", "jazz", user_id="u1", valid_at=BASE + 2 * DAY)
+    target = mem.add_fact("Moonshot AI", "based_in", "Beijing", user_id="u1", valid_at=BASE + 3 * DAY)
+    live = [f for f in mem.fact_store.values() if f.user_id == mem.resolver.resolve("u1")]
+
+    scores, _ = mem.retriever._graph_scores(
+        "Where is Wei's colleague's company based?",
+        mem.resolver.resolve("u1"),
+        live,
+        None,
+    )
+
+    assert scores[target.id] > scores[distractor.id]
+
+
+def test_graph_relation_awareness_can_be_disabled_for_ablation():
+    from engram.config import Config
+
+    mem = Memory(config=Config(graph_relation_awareness=False))
+    mem.add_fact("Wei", "colleague", "Lin", user_id="u1", valid_at=BASE)
+    mem.add_fact("Lin", "works_at", "Moonshot AI", user_id="u1", valid_at=BASE + DAY)
+    distractor = mem.add_fact("Lin", "likes", "jazz", user_id="u1", valid_at=BASE + 2 * DAY)
+    target = mem.add_fact("Moonshot AI", "based_in", "Beijing", user_id="u1", valid_at=BASE + 3 * DAY)
+    live = [f for f in mem.fact_store.values() if f.user_id == mem.resolver.resolve("u1")]
+
+    scores, _ = mem.retriever._graph_scores(
+        "Where is Wei's colleague's company based?",
+        mem.resolver.resolve("u1"),
+        live,
+        None,
+    )
+
+    assert scores[target.id] < scores[distractor.id]
+
+
 def test_bench_preconsolidation_uses_multi_hop_subqueries():
     from engram.types import Episode
     from eval.bench import retrieve_evidence_episodes

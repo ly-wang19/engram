@@ -96,33 +96,60 @@ def _graph_context(enabled: bool) -> str:
     return mem.context_for("Tell me about Wei", user_id="u1", k_chunks=0, graph=True)
 
 
+def _graph_relation_context(enabled: bool) -> str:
+    mem = Memory(config=Config(graph_relation_awareness=enabled))
+    mem.add_fact("Wei", "colleague", "Lin", user_id="u1", valid_at=BASE)
+    mem.add_fact("Lin", "works_at", "Moonshot AI", user_id="u1", valid_at=BASE + DAY)
+    mem.add_fact("Lin", "likes", "jazz", user_id="u1", valid_at=BASE + 2 * DAY)
+    mem.add_fact("Moonshot AI", "based_in", "Beijing", user_id="u1", valid_at=BASE + 3 * DAY)
+    return mem.context_for("Where is Wei's colleague's company based?", user_id="u1", k_chunks=0, graph=True)
+
+
+def _contains(marker: str, target: str):
+    return lambda ctx: marker in ctx and target in ctx
+
+
+def _before(target: str, distractor: str):
+    def judge(ctx: str) -> bool:
+        scope = ctx.split("RELATED FACTS (graph traversal):", 1)[-1]
+        return target in scope and distractor in scope and scope.index(target) < scope.index(distractor)
+
+    return judge
+
+
 def run_ablation() -> tuple[list[AblationResult], dict]:
     cases = [
         (
             "chain_evidence",
             _chain_context,
-            "FACT EVOLUTION (retrieved supersession chain):",
+            _contains("FACT EVOLUTION (retrieved supersession chain):", "Tencent"),
             "Tencent",
         ),
         (
             "provenance_evidence",
             _raw_context,
-            "PROVENANCE RAW EVIDENCE (source episodes for retrieved facts):",
+            _contains("PROVENANCE RAW EVIDENCE (source episodes for retrieved facts):", "blue binder"),
             "blue binder",
         ),
         (
             "graph_proximity",
             _graph_context,
-            "RELATED FACTS (graph traversal):",
+            _contains("RELATED FACTS (graph traversal):", "Moonshot AI based in Beijing"),
             "Moonshot AI based in Beijing",
+        ),
+        (
+            "graph_relation_awareness",
+            _graph_relation_context,
+            _before("Moonshot AI based in Beijing", "Lin likes jazz"),
+            "target relation before same-node distractor",
         ),
     ]
     rows: list[AblationResult] = []
-    for name, builder, marker, target in cases:
+    for name, builder, judge, target in cases:
         enabled_ctx, enabled_lat = _timed(lambda b=builder: b(True))
         disabled_ctx, disabled_lat = _timed(lambda b=builder: b(False))
-        enabled_hit = marker in enabled_ctx and target in enabled_ctx
-        disabled_hit = marker in disabled_ctx and target in disabled_ctx
+        enabled_hit = judge(enabled_ctx)
+        disabled_hit = judge(disabled_ctx)
         rows.append(
             AblationResult(
                 feature=name,

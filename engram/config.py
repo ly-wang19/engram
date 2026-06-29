@@ -41,6 +41,7 @@ class Config:
     chain_evidence: bool = True  # include bounded supersedes/evolution chains for retrieved facts
     provenance_evidence: bool = True  # include compact raw source episodes for retrieved fact provenance
     graph_proximity: bool = True  # n-hop graph proximity scoring / traversal ablation switch
+    graph_relation_awareness: bool = True  # query-conditioned predicate weighting inside graph proximity
 
     # --- consolidation ---
     salience_decay_per_day: float = 0.02
