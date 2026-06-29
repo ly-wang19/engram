@@ -51,8 +51,16 @@ def tokenize(text: str) -> list[str]:
 
 
 def stem(token: str) -> str:
-    """Crude singular-ization so work/works and colleague/colleagues align. Shared by the lexical
-    scorer AND the offline embedder so semantic and lexical signals agree offline."""
+    """Crude singular-ization so work/works, study/studies, and colleague/colleagues align. Shared by
+    the lexical scorer AND the offline embedder so semantic and lexical signals agree offline.
+
+    Two rules, both length-gated to spare short base forms (dies/lies/ties stay 'die'/'lie'/'tie' after
+    the -s strip, since their base isn't a -y word):
+      - length > 4 and ends with 'ies' -> 'y'  (studies -> study, cities -> city, carries -> carry)
+      - length > 3 and ends with 's'   -> ''    (works -> work, colleagues -> colleague)
+    """
+    if len(token) > 4 and token.endswith("ies"):
+        return token[:-3] + "y"
     return token[:-1] if len(token) > 3 and token.endswith("s") else token
 
 

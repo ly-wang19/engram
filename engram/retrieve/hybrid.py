@@ -99,16 +99,19 @@ class HybridRetriever:
                 scores[f.id] = 0.0
         return scores, qids
 
-    def _current_identity_heads(self, facts: list[Fact]) -> list[Fact]:
-        """For current-state identity slots, retrieve only the slot head.
+    def _current_slot_heads(self, facts: list[Fact]) -> list[Fact]:
+        """For single-valued (current-state) slots, retrieve only the slot head.
 
         Conflict resolution should normally invalidate stale slot values before retrieval. This is a
-        defensive read-path guard for duplicate live payloads from partial backends or manual imports:
-        "works_at Tencent" and "works_at Moonshot AI" must not compete in fusion as two current facts.
+        defensive read-path guard for duplicate live payloads from partial backends or manual imports.
+        The cardinality test is `is_single_valued` (the same predicate classifier conflict resolution
+        uses): any non-accumulating predicate — works_at, lives_in, studies, salary, attends_yoga — has
+        one current value per slot, so two live facts in the same slot must not compete in fusion.
+        Accumulating predicates (likes, owns, visited, ...) are multi-valued and exempt.
         """
         heads: dict[tuple[str, str, str], Fact] = {}
         for fact in facts:
-            if fact.predicate.lower() not in _IDENTITY_PREDS or not is_single_valued(fact.predicate):
+            if not is_single_valued(fact.predicate):
                 continue
             cur = heads.get(fact.slot)
             # Manual facts are authoritative; otherwise the latest valid/current observation is the head.
@@ -127,11 +130,7 @@ class HybridRetriever:
         return [
             fact
             for fact in facts
-            if (
-                fact.predicate.lower() not in _IDENTITY_PREDS
-                or not is_single_valued(fact.predicate)
-                or heads.get(fact.slot) is fact
-            )
+            if not is_single_valued(fact.predicate) or heads.get(fact.slot) is fact
         ]
 
     def retrieve(
@@ -139,7 +138,7 @@ class HybridRetriever:
     ) -> tuple[list[tuple[Fact, float]], dict]:
         top_k = top_k or self.config.top_k
         live = [f for f in self.fact_store.values() if f.user_id == user_id and f.is_live(as_of)]
-        live = self._current_identity_heads(live)
+        live = self._current_slot_heads(live)
         if not live:
             return [], {"sem": {}, "lex": {}, "qids": set()}
 

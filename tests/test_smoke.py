@@ -96,6 +96,41 @@ def test_duplicate_live_identity_slot_reads_current_head():
     assert "moonshot" in mem.search("Where does Wei work?", user_id="u1").answer().lower()
 
 
+def test_duplicate_live_slot_for_non_identity_single_valued_predicate_reads_current_head():
+    """The slot-head dedup covers ALL single-valued predicates, not just the small _IDENTITY_PREDS list.
+    A predicate like `major` is single-valued (state) but not in the identity set — two live payloads
+    for the same slot must still collapse to the current head instead of competing in fusion."""
+    mem = Memory(config=Config(w_sem=0.0, w_lex=0.0, w_graph=0.0, w_rec=0.0, w_sal=1.0))
+    old = Fact(
+        "Wei",
+        "major",
+        "physics",
+        user_id="u1",
+        valid_at=BASE,
+        salience=100.0,
+        embedding=mem.embedder.embed("Wei major physics"),
+    )
+    new = Fact(
+        "Wei",
+        "major",
+        "computer science",
+        user_id="u1",
+        valid_at=BASE + DAY,
+        salience=1.0,
+        supersedes=old.id,
+        embedding=mem.embedder.embed("Wei major computer science"),
+    )
+    mem.fact_store.upsert(old.id, old.embedding or [], old)
+    mem.fact_store.upsert(new.id, new.embedding or [], new)
+
+    ranked, _ = mem.retriever.retrieve(
+        "What is Wei's major?", mem.resolver.resolve("u1"), top_k=5
+    )
+    objs = {f.object for f, _ in ranked}
+    assert "computer science" in objs
+    assert "physics" not in objs
+
+
 def test_multi_valued_identity_facts_are_not_slot_deduped():
     mem = Memory()
     mem.add_fact("Wei", "owns", "a bike", user_id="u1")
@@ -302,3 +337,27 @@ def test_assistant_small_talk_is_not_profile_occupation():
     facts = {(f.subject, f.predicate, f.object) for f in mem.fact_store.values()}
     assert ("Berlin", "occupation", "great") not in facts
     assert "occupation" not in {p for _, p, _ in facts}
+
+
+def test_stemmer_aligns_inflections_for_lexical_retrieval():
+    """The BM25 lexical scorer and offline HashingEmbedder both build on stem(). Plurals and -y/-ies
+    inflections must reduce to a shared stem or lexical retrieval silently misses matches."""
+    from engram.util import stem, stems
+
+    assert stem("works") == stem("work")
+    assert stem("colleagues") == stem("colleague")
+    assert stem("studies") == stem("study")
+    assert stem("cities") == stem("city")
+    assert stem("salaries") == stem("salary")
+    assert stem("companies") == stem("company")
+    assert stem("carries") == stem("carry")
+
+    # Short base forms ending in -ies are NOT -y inflections (tie/lies/dies/pies) — the bare -s strip
+    # keeps them aligned with their singular, never collapsed to a -y stem.
+    assert stem("ties") == stem("tie")
+    assert stem("lies") == stem("lie")
+    assert stem("dies") == stem("die")
+
+    # Sanity: stems() runs the rule across a free-form query
+    q_stems = set(stems("Which cities did Wei study in?"))
+    assert "city" in q_stems and "studi" not in q_stems  # studi only if -ies rule failed

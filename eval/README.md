@@ -51,6 +51,12 @@ python eval/validate_results.py --expected-rows 500 --require-complete \
 
 - `audit_results.py` scans a messy local `results/` directory and labels each log `complete`,
   `incomplete`, or `invalid` so exploratory logs do not get mistaken for evidence.
+- `compare.py` compares two or more validated logs on their shared scored qids for one system, reporting
+  per-log accuracy, disagreements, and the oracle upper bound for multi-backbone complementarity:
+
+```bash
+python eval/compare.py results/backbone_a.jsonl results/backbone_b.jsonl --system engram_lean --per-category
+```
 
 Only logs that pass validation should be marked `DONE` in paper notes or used in README/RESULTS copy.
 Partial logs, smoke slices, failed competitor runs, and exploratory ablations can stay local until they

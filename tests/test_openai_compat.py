@@ -230,7 +230,7 @@ def test_chat_completions_endpoint_remembers_with_session_and_scope(client_with_
     assert data["engram"]["remembered"] is True
     assert data["engram"]["remember_scope"] == "long"
 
-    memories = c.get("/v1/memories", headers=h).json()
+    memories = c.get("/v1/memories?include_sensitive=true", headers=h).json()
     assert any(e["session"] == "codex:repo:thread-1" for e in memories["episodes"])
 
 
