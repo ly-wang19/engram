@@ -73,6 +73,16 @@ _ENTITY_ANCHOR_STOP = frozenset({
     "the", "and", "for", "with", "from", "inc", "ltd", "llc", "corp", "co", "company", "project",
     "user", "assistant", "team", "group", "system", "ai",
 })
+_EXCLUSION_BEFORE_RE = re.compile(
+    r"(?:\bnot\b(?:\s+\w+){0,5}|\bexcept\b(?:\s+\w+){0,4}|\bexcluding\b(?:\s+\w+){0,4}|"
+    r"\bexclude\b(?:\s+\w+){0,4}|\bother\s+than\b(?:\s+\w+){0,4}|"
+    r"\brather\s+than\b(?:\s+\w+){0,4}|\bbesides\b(?:\s+\w+){0,4}|不是|不在|排除|除了)\s*$",
+    re.IGNORECASE,
+)
+_EXCLUSION_VALUE_PREDS = frozenset({
+    "based_in", "located_in", "headquartered_in", "lives_in", "works_at", "occupation",
+    "likes", "dislikes", "prefers", "favorite", "owns", "has", "diet", "allergic_to",
+})
 
 
 def order_positive(scores: dict[str, float]) -> list[str]:
@@ -131,6 +141,25 @@ def _entity_anchor_terms(name: str, aliases: list[str]) -> set[str]:
     return terms
 
 
+def _entity_name_mentions(text: str, name: str) -> list[re.Match]:
+    if not name.strip():
+        return []
+    escaped = re.escape(name.lower())
+    if name.isascii():
+        pattern = re.compile(r"(?<![a-z0-9])" + escaped + r"(?![a-z0-9])", re.IGNORECASE)
+    else:
+        pattern = re.compile(escaped, re.IGNORECASE)
+    return list(pattern.finditer(text))
+
+
+def _is_excluded_mention(query_l: str, name: str) -> bool:
+    for match in _entity_name_mentions(query_l, name):
+        before = query_l[max(0, match.start() - 72):match.start()]
+        if _EXCLUSION_BEFORE_RE.search(before):
+            return True
+    return False
+
+
 class HybridRetriever:
     def __init__(self, fact_store: VectorStore, graph: GraphStore, embedder: Embedder, config: Config) -> None:
         self.fact_store = fact_store
@@ -165,7 +194,60 @@ class HybridRetriever:
                 ent = self.graph.get_entity(user_id, name)
                 if ent is not None:
                     ids.add(ent.id)
+        ids -= self.graph_excluded_entity_ids(query, user_id)
         return ids
+
+    def graph_excluded_entity_ids(self, query: str, user_id: str) -> set[str]:
+        """Entities explicitly ruled out by the query ("not in Lisbon", "except Zephyr", "不是上海").
+
+        Negative constraints are applied before scoring so excluded values do not get boosted merely
+        because the query names them. This keeps graph expansion useful for constrained multi-hop
+        questions instead of surfacing the distractor path the user asked us to avoid.
+        """
+        if not (self.config.graph_proximity and self.config.graph_negative_constraints):
+            return set()
+        query_l = query.lower()
+        direct: set[str] = set()
+        entities = [ent for ent in self.graph.entities.values() if ent.user_id == user_id]
+        for ent in entities:
+            for name in (ent.name, *ent.aliases):
+                if _is_excluded_mention(query_l, name):
+                    direct.add(ent.id)
+                    break
+        term_to_ids: dict[str, set[str]] = {}
+        for ent in entities:
+            for term in _entity_anchor_terms(ent.name, ent.aliases):
+                term_to_ids.setdefault(term, set()).add(ent.id)
+        for term, hits in term_to_ids.items():
+            if len(hits) == 1 and _is_excluded_mention(query_l, term):
+                direct.update(hits)
+        return direct
+
+    def graph_exclusion_zone(self, query: str, user_id: str, as_of: Optional[float]) -> set[str]:
+        """Directly excluded entities plus entities whose attribute value is excluded.
+
+        Example: if the query says "project not in Lisbon", `Lisbon` is directly excluded and a
+        `Zephyr --based_in--> Lisbon` edge excludes Zephyr from the candidate path. Relationship edges
+        such as `Wei --colleague--> Lin` are not used for expansion, so "except Lin" does not erase Wei.
+        """
+        direct = self.graph_excluded_entity_ids(query, user_id)
+        if not direct:
+            return set()
+        out = set(direct)
+        for rel in self.graph.relations():
+            if rel.predicate.lower() not in _EXCLUSION_VALUE_PREDS:
+                continue
+            live = as_of is None or (rel.valid_at <= as_of and (rel.invalid_at is None or rel.invalid_at > as_of))
+            if live and rel.object_id in direct:
+                out.add(rel.subject_id)
+        return out
+
+    def _fact_touches_entities(self, fact: Fact, entity_ids: set[str]) -> bool:
+        if not entity_ids:
+            return False
+        subj = self.graph.get_entity(fact.user_id, fact.subject)
+        obj = self.graph.get_entity(fact.user_id, fact.object)
+        return (subj is not None and subj.id in entity_ids) or (obj is not None and obj.id in entity_ids)
 
     def _graph_scores(
         self, query: str, user_id: str, live: list[Fact], as_of: Optional[float]
@@ -173,6 +255,8 @@ class HybridRetriever:
         qids = self.query_entity_ids(query, user_id)
         if not self.config.graph_proximity:
             return {f.id: 0.0 for f in live}, qids
+        excluded = self.graph_exclusion_zone(query, user_id, as_of)
+        qids -= excluded
         live_fact_ids = {f.id for f in live}
         node_scores: dict[str, float] = {eid: 1.0 for eid in qids}
         frontier: dict[str, float] = {eid: 1.0 for eid in qids}
@@ -183,6 +267,8 @@ class HybridRetriever:
                 for direction in ("out", "in"):
                     for rel in self.graph.neighbors(eid, as_of, direction):
                         if rel.fact_id not in live_fact_ids:
+                            continue
+                        if rel.subject_id in excluded or rel.object_id in excluded:
                             continue
                         neighbor_id = rel.object_id if direction == "out" else rel.subject_id
                         if neighbor_id in qids:
@@ -210,6 +296,9 @@ class HybridRetriever:
             obj = self.graph.get_entity(f.user_id, f.object)
             sid = subj.id if subj else None
             oid = obj.id if obj else None
+            if (sid is not None and sid in excluded) or (oid is not None and oid in excluded):
+                scores[f.id] = 0.0
+                continue
             score = max(node_scores.get(sid, 0.0), node_scores.get(oid, 0.0))
             if use_relation_weight and score > 0.0:
                 score *= 0.55 + 0.45 * graph_relation_relevance(query, f)
@@ -256,6 +345,9 @@ class HybridRetriever:
         top_k = top_k or self.config.top_k
         live = [f for f in self.fact_store.values() if f.user_id == user_id and f.is_live(as_of)]
         live = self._current_slot_heads(live)
+        excluded = self.graph_exclusion_zone(query, user_id, as_of)
+        if excluded:
+            live = [f for f in live if not self._fact_touches_entities(f, excluded)]
         if not live:
             return [], {"sem": {}, "lex": {}, "qids": set()}
 

@@ -130,6 +130,15 @@ def _graph_entity_alias_context(enabled: bool) -> str:
     return mem.context_for("Where is Moonshot based?", user_id="u1", k_chunks=0, graph=True)
 
 
+def _graph_negative_context(enabled: bool) -> str:
+    mem = Memory(config=Config(graph_negative_constraints=enabled))
+    mem.add_fact("Wei", "works_on", "Atlas", user_id="u1", valid_at=BASE)
+    mem.add_fact("Wei", "works_on", "Zephyr", user_id="u1", valid_at=BASE + DAY)
+    mem.add_fact("Atlas", "based_in", "Reykjavik", user_id="u1", valid_at=BASE + 2 * DAY)
+    mem.add_fact("Zephyr", "based_in", "Lisbon", user_id="u1", valid_at=BASE + 3 * DAY)
+    return mem.context_for("Where is Wei's project not in Lisbon based?", user_id="u1", k_chunks=0, graph=True)
+
+
 def _planner_location_context(enabled: bool) -> str:
     mem = Memory(config=Config(planner_location_chains=enabled))
     mem.add_fact("Wei", "colleague", "Lin", user_id="u1", valid_at=BASE)
@@ -194,6 +203,12 @@ def run_ablation() -> tuple[list[AblationResult], dict]:
             _graph_entity_alias_context,
             _contains("RELATED FACTS (graph traversal):", "Moonshot AI based in Beijing"),
             "unique short name anchors to full graph entity",
+        ),
+        (
+            "graph_negative_constraints",
+            _graph_negative_context,
+            lambda ctx: "Atlas based in Reykjavik" in ctx and "Zephyr based in Lisbon" not in ctx,
+            "negative query constraint filters excluded graph path",
         ),
         (
             "planner_location_chains",

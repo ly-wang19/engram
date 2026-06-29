@@ -1068,6 +1068,40 @@ def test_graph_entity_alias_anchor_requires_unique_token():
     assert scores[second.id] == 0.0
 
 
+def test_graph_negative_constraints_filter_excluded_location_paths():
+    mem = Memory()
+    mem.add_fact("Wei", "works_on", "Atlas", user_id="u1", valid_at=BASE)
+    mem.add_fact("Wei", "works_on", "Zephyr", user_id="u1", valid_at=BASE + DAY)
+    target = mem.add_fact("Atlas", "based_in", "Reykjavik", user_id="u1", valid_at=BASE + 2 * DAY)
+    distractor = mem.add_fact("Zephyr", "based_in", "Lisbon", user_id="u1", valid_at=BASE + 3 * DAY)
+
+    query = "Where is Wei's project not in Lisbon based?"
+    res = mem.search(query, user_id="u1")
+    related = mem._graph_related_facts(query, mem.resolver.resolve("u1"), None)
+    ctx = mem.context_for(query, user_id="u1", k_chunks=0, graph=True)
+
+    assert "reykjavik" in res.answer().lower()
+    assert target.id in {f.id for f in related}
+    assert distractor.id not in {f.id for f in related}
+    assert "Atlas based in Reykjavik" in ctx
+    assert "Zephyr based in Lisbon" not in ctx
+
+
+def test_graph_negative_constraints_can_be_disabled_for_ablation():
+    from engram.config import Config
+
+    mem = Memory(config=Config(graph_negative_constraints=False))
+    mem.add_fact("Wei", "works_on", "Atlas", user_id="u1", valid_at=BASE)
+    mem.add_fact("Wei", "works_on", "Zephyr", user_id="u1", valid_at=BASE + DAY)
+    mem.add_fact("Atlas", "based_in", "Reykjavik", user_id="u1", valid_at=BASE + 2 * DAY)
+    mem.add_fact("Zephyr", "based_in", "Lisbon", user_id="u1", valid_at=BASE + 3 * DAY)
+
+    ctx = mem.context_for("Where is Wei's project not in Lisbon based?", user_id="u1", k_chunks=0, graph=True)
+
+    assert "Atlas based in Reykjavik" in ctx
+    assert "Zephyr based in Lisbon" in ctx
+
+
 def test_multihop_planner_reaches_company_location_chain():
     mem = Memory()
     mem.add_fact("Wei", "colleague", "Lin", user_id="u1", valid_at=BASE)

@@ -1434,6 +1434,7 @@ class Memory:
         if not self.config.graph_proximity:
             return ""
         qids = self.retriever.query_entity_ids(query, user)
+        excluded = self.retriever.graph_exclusion_zone(query, user, as_of)
         frontier: list[tuple[str, int]] = [(eid, 0) for eid in qids]
         seen_nodes = set(qids)
         seen_edges: set[str] = set()
@@ -1445,6 +1446,8 @@ class Memory:
             for direction in ("out", "in"):
                 for rel in self.graph.neighbors(eid, as_of, direction):
                     if rel.id in seen_edges:
+                        continue
+                    if rel.subject_id in excluded or rel.object_id in excluded:
                         continue
                     f = self.fact_store.get(rel.fact_id) or self.cold_store.get(rel.fact_id)
                     if f is None or not f.is_live(as_of):

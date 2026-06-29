@@ -9,6 +9,7 @@ def test_engram_config_applies_algorithm_ablation_flags():
     assert cfg.provenance_evidence is False
     assert cfg.graph_proximity is False
     assert cfg.graph_relation_awareness is True
+    assert cfg.graph_negative_constraints is False
     assert cfg.evidence_planner is True
 
     relation_cfg = engram_config(ablations=("graph_relation",))
@@ -27,6 +28,10 @@ def test_engram_config_applies_algorithm_ablation_flags():
     assert alias_cfg.graph_proximity is True
     assert alias_cfg.graph_entity_alias_anchor is False
 
+    negative_cfg = engram_config(ablations=("graph_negative",))
+    assert negative_cfg.graph_proximity is True
+    assert negative_cfg.graph_negative_constraints is False
+
     location_cfg = engram_config(ablations=("planner_location",))
     assert location_cfg.planner_location_chains is False
 
@@ -40,6 +45,7 @@ def test_bench_exposes_named_lean_ablation_systems():
         "engram_lean_no_graph_reinforcement",
         "engram_lean_no_graph_self_anchor",
         "engram_lean_no_graph_entity_alias",
+        "engram_lean_no_graph_negative",
         "engram_lean_no_planner_location",
         "engram_lean_core",
     }
@@ -52,6 +58,7 @@ def test_bench_exposes_named_lean_ablation_systems():
     assert SYSTEMS["engram_lean_no_graph_reinforcement"].ablations == ("graph_reinforcement",)
     assert SYSTEMS["engram_lean_no_graph_self_anchor"].ablations == ("graph_self_anchor",)
     assert SYSTEMS["engram_lean_no_graph_entity_alias"].ablations == ("graph_entity_alias",)
+    assert SYSTEMS["engram_lean_no_graph_negative"].ablations == ("graph_negative",)
     assert SYSTEMS["engram_lean_no_planner_location"].ablations == ("planner_location",)
     assert SYSTEMS["engram_lean_core"].ablations == ("chain", "raw", "graph")
 
@@ -59,8 +66,8 @@ def test_bench_exposes_named_lean_ablation_systems():
 def test_offline_feature_ablation_proves_each_enabled_feature_adds_evidence():
     rows, summary = run_ablation()
 
-    assert summary["n"] == 8
-    assert summary["improved"] == 8
+    assert summary["n"] == 9
+    assert summary["improved"] == 9
     assert {row.feature for row in rows} == {
         "chain_evidence",
         "provenance_evidence",
@@ -69,6 +76,7 @@ def test_offline_feature_ablation_proves_each_enabled_feature_adds_evidence():
         "graph_path_reinforcement",
         "graph_self_anchor",
         "graph_entity_alias_anchor",
+        "graph_negative_constraints",
         "planner_location_chains",
     }
     assert all(row.enabled_hit and not row.disabled_hit and row.improved for row in rows)
