@@ -1068,6 +1068,35 @@ def test_graph_entity_alias_anchor_requires_unique_token():
     assert scores[second.id] == 0.0
 
 
+def test_multihop_planner_reaches_company_location_chain():
+    mem = Memory()
+    mem.add_fact("Wei", "colleague", "Lin", user_id="u1", valid_at=BASE)
+    mem.add_fact("Lin", "works_at", "Moonshot AI", user_id="u1", valid_at=BASE + DAY)
+    mem.add_fact("Moonshot AI", "based_in", "Beijing", user_id="u1", valid_at=BASE + 2 * DAY)
+
+    res = mem.search("Where is Wei's colleague's company based?", user_id="u1")
+
+    assert res.via == "multi-hop"
+    assert "beijing" in res.answer().lower()
+    assert [f.predicate for f in res.facts] == ["colleague", "works_at", "based_in"]
+
+
+def test_multihop_planner_location_chain_can_be_disabled_for_ablation():
+    from engram.config import Config
+
+    mem = Memory(config=Config(planner_location_chains=False))
+    mem.add_fact("Wei", "colleague", "Lin", user_id="u1", valid_at=BASE)
+    mem.add_fact("Lin", "works_at", "Moonshot AI", user_id="u1", valid_at=BASE + DAY)
+    mem.add_fact("Moonshot AI", "based_in", "Beijing", user_id="u1", valid_at=BASE + 2 * DAY)
+
+    res = mem.search("Where is Wei's colleague's company based?", user_id="u1")
+
+    assert res.via == "multi-hop"
+    assert "moonshot" in res.answer().lower()
+    assert "beijing" not in res.answer().lower()
+    assert [f.predicate for f in res.facts] == ["colleague", "works_at"]
+
+
 def test_bench_preconsolidation_uses_multi_hop_subqueries():
     from engram.types import Episode
     from eval.bench import retrieve_evidence_episodes

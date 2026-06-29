@@ -37,7 +37,9 @@ n-hop graph proximity, and query-conditioned graph relation weighting that ranks
 ahead of same-node distractors, plus PPR-style graph path reinforcement that ranks a multi-path-supported
 target ahead of a single-path distractor, and self-anchoring for first-person graph queries. It is a local
 improvement proof for the target behavior, not a public accuracy claim. It also checks unique short-name
-entity anchoring, so "Moonshot" can safely anchor `Moonshot AI` only when that token is unambiguous.
+entity anchoring, so "Moonshot" can safely anchor `Moonshot AI` only when that token is unambiguous, and
+planner location chains, so a colleague/company question can continue from `works_at` to
+`based_in`/`located_in` answer facts.
 Publishable claims still require `eval/bench.py` plus committed raw logs.
 
 ## Real Benchmarks

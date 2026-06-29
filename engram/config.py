@@ -45,6 +45,7 @@ class Config:
     graph_path_reinforcement: bool = True  # PPR-style boost when multiple paths support the same graph node
     graph_self_anchor: bool = True  # anchor first-person/user queries to the user's own graph node
     graph_entity_alias_anchor: bool = True  # anchor unique entity-name/alias tokens (e.g. "Moonshot" -> Moonshot AI)
+    planner_location_chains: bool = True  # let multi-hop planner answer based_in/located_in/headquarters chains
 
     # --- consolidation ---
     salience_decay_per_day: float = 0.02

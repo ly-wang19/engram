@@ -130,6 +130,15 @@ def _graph_entity_alias_context(enabled: bool) -> str:
     return mem.context_for("Where is Moonshot based?", user_id="u1", k_chunks=0, graph=True)
 
 
+def _planner_location_context(enabled: bool) -> str:
+    mem = Memory(config=Config(planner_location_chains=enabled))
+    mem.add_fact("Wei", "colleague", "Lin", user_id="u1", valid_at=BASE)
+    mem.add_fact("Lin", "works_at", "Moonshot AI", user_id="u1", valid_at=BASE + DAY)
+    mem.add_fact("Moonshot AI", "based_in", "Beijing", user_id="u1", valid_at=BASE + 2 * DAY)
+    res = mem.search("Where is Wei's colleague's company based?", user_id="u1")
+    return res.answer()
+
+
 def _contains(marker: str, target: str):
     return lambda ctx: marker in ctx and target in ctx
 
@@ -185,6 +194,12 @@ def run_ablation() -> tuple[list[AblationResult], dict]:
             _graph_entity_alias_context,
             _contains("RELATED FACTS (graph traversal):", "Moonshot AI based in Beijing"),
             "unique short name anchors to full graph entity",
+        ),
+        (
+            "planner_location_chains",
+            _planner_location_context,
+            lambda answer: "Beijing" in answer,
+            "multi-hop planner reaches company location",
         ),
     ]
     rows: list[AblationResult] = []
