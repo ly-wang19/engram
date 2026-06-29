@@ -50,7 +50,8 @@ on hard multi-session, multi-hop, and knowledge-update questions.
 For a query `q`, Engram assembles context in this order:
 
 1. classify evidence need for `q`;
-2. expand multi-hop subqueries when needed;
+2. expand multi-hop subqueries when needed, including bridge-entity questions such as "my colleague's
+   company" or "where does my sister live";
 3. retrieve live facts with as-of filtering;
 4. apply slot-head filtering for single-valued predicates;
 5. fuse positive evidence signals plus priors;
@@ -73,7 +74,8 @@ For a query `q`, Engram assembles context in this order:
 
 ## Where To Improve Next
 
-- Stronger deterministic multi-hop planning for relation chains that do not name the bridge entity.
+- Broader deterministic multi-hop planning for relation chains with multiple bridge entities or nested
+  constraints.
 - Better temporal interval handling for facts that have explicit invalid_at or duration spans.
 - Learned or harness-tuned fusion weights per evidence shape, with fixed validation splits.
 - Backward-compatible richer fact predicates for constraints, goals, and procedural memory.

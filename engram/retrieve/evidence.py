@@ -55,6 +55,14 @@ _RELATION_TERMS = {
     "company", "employer", "profession", "occupation", "role", "title", "works", "work",
     "lives", "live", "moved", "relocated",
 }
+_BRIDGE_RELATIONS = (
+    "sister", "brother", "mother", "father", "parent", "child", "spouse", "wife", "husband", "partner",
+    "colleague", "coworker", "co-worker", "friend", "manager", "boss",
+)
+_ANSWER_ATTRS = {
+    "profession", "occupation", "role", "title", "job", "employer", "company", "work", "works",
+    "live", "lives", "location", "city", "home",
+}
 _EXACT_TERMS = {"id", "email", "phone", "url", "link", "address", "number", "code", "identifier"}
 
 _CJK_PATTERNS = {
@@ -155,24 +163,21 @@ def _multi_hop_subqueries(query: str) -> tuple[str, ...]:
     candidates: list[str] = []
 
     relation = ""
-    m = re.search(
-        r"\b(?:my|user's|the user's|their|his|her)\s+"
-        r"(sister|brother|mother|father|parent|child|spouse|wife|husband|partner|"
-        r"colleague|coworker|co-worker|friend|manager|boss)\b",
-        q,
-    )
+    relation_re = "|".join(re.escape(r) for r in _BRIDGE_RELATIONS)
+    m = re.search(rf"\b(?:my|user's|the user's|their|his|her)\s+({relation_re})\b", q)
     if m:
         relation = m.group(1)
         candidates.append(relation)
 
-    attrs = [
-        attr for attr in ("profession", "occupation", "role", "title", "job", "employer", "company")
-        if attr in q
-    ]
+    attrs = [attr for attr in sorted(_ANSWER_ATTRS) if attr in q]
     for attr in attrs:
         candidates.append(attr)
         if relation:
             candidates.append(f"{relation} {attr}")
+    if relation and any(attr in attrs for attr in ("work", "works", "employer", "company")):
+        candidates.extend((f"{relation} employer", f"{relation} company", f"{relation} works"))
+    if relation and any(attr in attrs for attr in ("live", "lives", "location", "city", "home")):
+        candidates.extend((f"{relation} lives", f"{relation} location", f"{relation} city"))
 
     place = ""
     m = re.search(r"\b(?:moved|relocated|lives?|living)\s+(?:to|in)\s+([a-z][a-z' -]{1,40})", q)
@@ -239,7 +244,16 @@ def plan_evidence(query: str) -> EvidenceNeed:
 
     relation_hits = _token_hit(toks, _RELATION_TERMS) or _has_phrase(q, _CJK_PATTERNS["relation"])
     possessive_chain = bool(re.search(r"\b(my|their|his|her)\s+\w+'?s\b", q)) or q.count("'s") >= 1
-    multi_hop = relation_hits and (possessive_chain or aggregation or " of " in q or " 的 " in q)
+    relation_re = "|".join(re.escape(r) for r in _BRIDGE_RELATIONS)
+    named_bridge = bool(re.search(rf"\b(?:my|user's|the user's|their|his|her)\s+(?:{relation_re})\b", q))
+    answer_attr = _token_hit(toks, _ANSWER_ATTRS)
+    multi_hop = relation_hits and (
+        possessive_chain
+        or aggregation
+        or " of " in q
+        or " 的 " in q
+        or (named_bridge and answer_attr)
+    )
     if multi_hop:
         reasons.append("multi_hop")
 

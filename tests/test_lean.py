@@ -285,6 +285,15 @@ def test_evidence_planner_is_query_based_not_benchmark_based():
     assert "sister profession" in ms.subqueries
     assert "sister moved seattle" in ms.subqueries
 
+    colleague = plan_evidence("Where does my colleague work?")
+    assert colleague.multi_hop and colleague.n_facts > 0 and colleague.n_chunks > 0
+    assert "colleague" in colleague.subqueries
+    assert "colleague employer" in colleague.subqueries
+    assert "colleague works" in colleague.subqueries
+
+    sibling = plan_evidence("Where does my sister live?")
+    assert sibling.multi_hop and "sister lives" in sibling.subqueries
+
 
 def test_lean_context_auto_adds_timeline_for_temporal_queries():
     mem = build()
