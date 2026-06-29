@@ -117,6 +117,13 @@ def _graph_reinforcement_context(enabled: bool) -> str:
     return mem.context_for("Where is Wei's project based?", user_id="u1", k_chunks=0, graph=True)
 
 
+def _graph_self_anchor_context(enabled: bool) -> str:
+    mem = Memory(config=Config(graph_self_anchor=enabled))
+    mem.add_fact("u1", "works_on", "Atlas", user_id="u1", valid_at=BASE)
+    mem.add_fact("Atlas", "based_in", "Reykjavik", user_id="u1", valid_at=BASE + DAY)
+    return mem.context_for("Where is my project based?", user_id="u1", k_chunks=0, graph=True)
+
+
 def _contains(marker: str, target: str):
     return lambda ctx: marker in ctx and target in ctx
 
@@ -160,6 +167,12 @@ def run_ablation() -> tuple[list[AblationResult], dict]:
             _graph_reinforcement_context,
             _before("Atlas based in Reykjavik", "Zephyr based in Lisbon"),
             "multi-path target before single-path distractor",
+        ),
+        (
+            "graph_self_anchor",
+            _graph_self_anchor_context,
+            _contains("RELATED FACTS (graph traversal):", "Atlas based in Reykjavik"),
+            "first-person query anchors to user graph node",
         ),
     ]
     rows: list[AblationResult] = []

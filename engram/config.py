@@ -43,6 +43,7 @@ class Config:
     graph_proximity: bool = True  # n-hop graph proximity scoring / traversal ablation switch
     graph_relation_awareness: bool = True  # query-conditioned predicate weighting inside graph proximity
     graph_path_reinforcement: bool = True  # PPR-style boost when multiple paths support the same graph node
+    graph_self_anchor: bool = True  # anchor first-person/user queries to the user's own graph node
 
     # --- consolidation ---
     salience_decay_per_day: float = 0.02

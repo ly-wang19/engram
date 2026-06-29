@@ -972,6 +972,46 @@ def test_graph_path_reinforcement_boosts_multi_path_targets():
     assert disabled_scores[disabled_target.id] <= disabled_scores[disabled_distractor.id]
 
 
+def test_graph_self_anchor_retrieves_first_person_graph_paths():
+    mem = Memory()
+    mem.add_fact("u1", "works_on", "Atlas", user_id="u1", valid_at=BASE)
+    target = mem.add_fact("Atlas", "based_in", "Reykjavik", user_id="u1", valid_at=BASE + DAY)
+    live = [f for f in mem.fact_store.values() if f.user_id == mem.resolver.resolve("u1")]
+
+    scores, qids = mem.retriever._graph_scores(
+        "Where is my project based?",
+        mem.resolver.resolve("u1"),
+        live,
+        None,
+    )
+    ctx = mem.context_for("Where is my project based?", user_id="u1", k_chunks=0, graph=True)
+
+    assert qids
+    assert scores[target.id] > 0.0
+    assert "Atlas based in Reykjavik" in ctx
+
+
+def test_graph_self_anchor_can_be_disabled_for_ablation():
+    from engram.config import Config
+
+    mem = Memory(config=Config(graph_self_anchor=False))
+    mem.add_fact("u1", "works_on", "Atlas", user_id="u1", valid_at=BASE)
+    target = mem.add_fact("Atlas", "based_in", "Reykjavik", user_id="u1", valid_at=BASE + DAY)
+    live = [f for f in mem.fact_store.values() if f.user_id == mem.resolver.resolve("u1")]
+
+    scores, qids = mem.retriever._graph_scores(
+        "Where is my project based?",
+        mem.resolver.resolve("u1"),
+        live,
+        None,
+    )
+    ctx = mem.context_for("Where is my project based?", user_id="u1", k_chunks=0, graph=True)
+
+    assert qids == set()
+    assert scores[target.id] == 0.0
+    assert "RELATED FACTS (graph traversal):" not in ctx
+
+
 def test_bench_preconsolidation_uses_multi_hop_subqueries():
     from engram.types import Episode
     from eval.bench import retrieve_evidence_episodes

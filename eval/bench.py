@@ -150,6 +150,11 @@ def engram_config(evidence_planner: bool = True, ablations: tuple[str, ...] = ()
             and "path_reinforcement" not in disabled
             and "graph_path_reinforcement" not in disabled
         ),
+        graph_self_anchor=(
+            "graph_self_anchor" not in disabled
+            and "self_anchor" not in disabled
+            and "self" not in disabled
+        ),
     )
 
 
@@ -466,6 +471,13 @@ class EngramLeanNoGraphReinforcementSystem(EngramLeanSystem):
     ablations = ("graph_reinforcement",)
 
 
+class EngramLeanNoGraphSelfAnchorSystem(EngramLeanSystem):
+    """A/B baseline: lean system without first-person/user graph anchoring."""
+
+    name = "engram_lean_no_graph_self_anchor"
+    ablations = ("graph_self_anchor",)
+
+
 class EngramLeanCoreSystem(EngramLeanSystem):
     """A/B baseline: lean system with the newest evidence enrichments disabled together."""
 
@@ -482,6 +494,7 @@ SYSTEMS = {"engram": EngramSystem, "full_context": FullContextSystem, "rag": RAG
            "engram_lean_no_graph": EngramLeanNoGraphSystem,
            "engram_lean_no_graph_relation": EngramLeanNoGraphRelationSystem,
            "engram_lean_no_graph_reinforcement": EngramLeanNoGraphReinforcementSystem,
+           "engram_lean_no_graph_self_anchor": EngramLeanNoGraphSelfAnchorSystem,
            "engram_lean_core": EngramLeanCoreSystem}
 
 
@@ -624,7 +637,8 @@ def main():
     ap.add_argument("--intent", action="store_true", help="engram: L6 intent hint (benchmark-neutral)")
     ap.add_argument("--ablate", default="",
                     help="comma-separated Engram algorithm switches to disable for all Engram systems in this run: "
-                         "chain, raw/provenance, graph/graph_proximity, graph_relation, graph_reinforcement")
+                         "chain, raw/provenance, graph/graph_proximity, graph_relation, "
+                         "graph_reinforcement, graph_self_anchor")
     ap.add_argument("--full", action="store_true",
                     help="engram: turn ON ALL differentiators (agentic+timeline+hyde+graph+wiki+summary+verify+intent)")
     ap.add_argument("--workers", type=int, default=4)

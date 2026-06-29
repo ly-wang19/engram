@@ -2,6 +2,7 @@
 salience over the live fact set, combined with weighted Reciprocal Rank Fusion."""
 from __future__ import annotations
 
+import re
 from typing import Optional
 
 from ..config import Config
@@ -64,6 +65,10 @@ _GRAPH_QUERY_CUE_WORDS = frozenset(
     for alias in words
     for word in stems(alias)
 ) | frozenset({"where", "who", "whose", "which"})
+_SELF_ANCHOR_RE = re.compile(
+    r"\b(i|me|my|mine|myself|we|our|ours|user's|the user's|their|his|her)\b|我|我的|用户|用户的",
+    re.IGNORECASE,
+)
 
 
 def order_positive(scores: dict[str, float]) -> list[str]:
@@ -133,6 +138,11 @@ class HybridRetriever:
             name_toks = [stem(t) for t in tokenize(ent.name)]
             if name_toks and all(t in q for t in name_toks):
                 ids.add(ent.id)
+        if self.config.graph_self_anchor and _SELF_ANCHOR_RE.search(query):
+            for name in (user_id, "user"):
+                ent = self.graph.get_entity(user_id, name)
+                if ent is not None:
+                    ids.add(ent.id)
         return ids
 
     def _graph_scores(
