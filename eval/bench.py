@@ -125,6 +125,22 @@ class Rig:
     verify: bool = False
     verify_retry: bool = False  # engram_lean: on "I don't know", widen the slice and retry once
     intent: bool = False
+    ablations: tuple[str, ...] = ()
+
+
+def engram_config(evidence_planner: bool = True, ablations: tuple[str, ...] = ()) -> Config:
+    """Config helper for in-rig ablations.
+
+    A/B systems must differ only by the named memory intervention, not by hidden config drift. These flags
+    default to Engram's normal behavior and let the unified harness switch off one algorithm at a time.
+    """
+    disabled = set(ablations)
+    return Config(
+        evidence_planner=evidence_planner,
+        chain_evidence="chain" not in disabled,
+        provenance_evidence="raw" not in disabled and "provenance" not in disabled,
+        graph_proximity="graph" not in disabled and "graph_proximity" not in disabled,
+    )
 
 
 # ---------------- system adapters (each: context(item) -> str) ----------------
@@ -136,7 +152,12 @@ class EngramSystem:
 
     def context(self, item: dict) -> str:
         rig, qid, q = self.rig, item["question_id"], item["question"]
-        mem = Memory(embedder=rig.embedder, llm=rig.extractor_llm, reranker=rig.reranker)
+        mem = Memory(
+            config=engram_config(ablations=rig.ablations),
+            embedder=rig.embedder,
+            llm=rig.extractor_llm,
+            reranker=rig.reranker,
+        )
         ingest(mem, item, qid)
         if rig.extract_k > 0:
             mem.engine.consolidate(mem.retrieve_episodes(q, qid, rig.extract_k))
@@ -348,6 +369,7 @@ class EngramLeanSystem:
 
     name = "engram_lean"
     evidence_planner = True
+    ablations: tuple[str, ...] = ()
 
     def __init__(self, rig: Rig):
         self.rig = rig
@@ -358,7 +380,10 @@ class EngramLeanSystem:
         if getattr(self._tl, "qid", None) == qid and getattr(self._tl, "mem", None) is not None:
             return self._tl.mem  # reuse across the verify-retry (no re-ingest / re-summarize)
         mem = Memory(
-            config=Config(evidence_planner=self.evidence_planner),
+            config=engram_config(
+                evidence_planner=self.evidence_planner,
+                ablations=tuple(self.ablations) + tuple(rig.ablations),
+            ),
             embedder=rig.embedder,
             llm=rig.extractor_llm,
             reranker=rig.reranker,
@@ -396,10 +421,42 @@ class EngramLeanNoPlannerSystem(EngramLeanSystem):
     evidence_planner = False
 
 
+class EngramLeanNoChainSystem(EngramLeanSystem):
+    """A/B baseline: lean system without retrieved supersedes/evolution-chain context."""
+
+    name = "engram_lean_no_chain"
+    ablations = ("chain",)
+
+
+class EngramLeanNoRawSystem(EngramLeanSystem):
+    """A/B baseline: lean system without provenance-backed raw source snippets."""
+
+    name = "engram_lean_no_raw"
+    ablations = ("raw",)
+
+
+class EngramLeanNoGraphSystem(EngramLeanSystem):
+    """A/B baseline: lean system without n-hop graph proximity scoring/traversal."""
+
+    name = "engram_lean_no_graph"
+    ablations = ("graph",)
+
+
+class EngramLeanCoreSystem(EngramLeanSystem):
+    """A/B baseline: lean system with the newest evidence enrichments disabled together."""
+
+    name = "engram_lean_core"
+    ablations = ("chain", "raw", "graph")
+
+
 SYSTEMS = {"engram": EngramSystem, "full_context": FullContextSystem, "rag": RAGSystem,
            "mem0": Mem0System, "zep": ZepSystem, "hipporag": HippoRAGSystem,
            "engram_full": EngramFullSystem, "engram_lean": EngramLeanSystem,
-           "engram_lean_no_planner": EngramLeanNoPlannerSystem}
+           "engram_lean_no_planner": EngramLeanNoPlannerSystem,
+           "engram_lean_no_chain": EngramLeanNoChainSystem,
+           "engram_lean_no_raw": EngramLeanNoRawSystem,
+           "engram_lean_no_graph": EngramLeanNoGraphSystem,
+           "engram_lean_core": EngramLeanCoreSystem}
 
 
 def failed_qids(path: str, system: str, limit: int = 0) -> set[str]:
@@ -539,6 +596,9 @@ def main():
     ap.add_argument("--verify-retry", action="store_true", dest="verify_retry",
                     help="engram_lean: on an 'I don't know', widen the retrieved slice + timeline and retry once")
     ap.add_argument("--intent", action="store_true", help="engram: L6 intent hint (benchmark-neutral)")
+    ap.add_argument("--ablate", default="",
+                    help="comma-separated Engram algorithm switches to disable for all Engram systems in this run: "
+                         "chain, raw/provenance, graph/graph_proximity")
     ap.add_argument("--full", action="store_true",
                     help="engram: turn ON ALL differentiators (agentic+timeline+hyde+graph+wiki+summary+verify+intent)")
     ap.add_argument("--workers", type=int, default=4)
@@ -609,6 +669,7 @@ def main():
         summ_k=args.summ_k, n_summaries=args.n_summaries,
         agentic=args.agentic, timeline=args.timeline, hyde=args.hyde, graph=args.graph, wiki=args.wiki,
         summary=args.summary, verify=args.verify, verify_retry=args.verify_retry, intent=args.intent,
+        ablations=tuple(a.strip() for a in args.ablate.split(",") if a.strip()),
     )
 
     systems = []
@@ -625,6 +686,8 @@ def main():
     print(f"UNIFIED RIG | {len(items)} items from _{args.data} | systems={sys_names}")
     print(f"  answerer={args.answerer}  judge={args.judge}  extractor={args.extractor}  embedder={args.embedder}")
     print(f"  topk={args.topk} chunks={args.chunks} extract_k={args.extract_k} workers={args.workers}\n")
+    if rig.ablations:
+        print(f"  global ablations={list(rig.ablations)}\n")
 
     if args.emit:
         files = {s: open(f"{args.emit}.{s}.jsonl", "w", encoding="utf-8") for s in sys_names}

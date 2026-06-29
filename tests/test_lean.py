@@ -483,6 +483,245 @@ def test_lean_context_adds_history_for_previous_value_queries():
     assert "superseded" in ctx and "current" in ctx
 
 
+def test_lean_context_adds_evolution_chain_for_current_lookup():
+    mem = Memory()
+    old = mem.add_fact("Wei", "works_at", "Tencent", user_id="u1", valid_at=BASE)
+    new = mem.add_fact("Wei", "works_at", "Moonshot AI", user_id="u1", valid_at=BASE + 30 * DAY)
+
+    ctx = mem.lean_context(
+        "Where does Wei work?",
+        user_id="u1",
+        persona=False,
+        n_chunks=0,
+        char_budget=10_000,
+    )
+
+    assert new.supersedes == old.id
+    assert "FACTS (current, dated):" in ctx
+    assert "FACT EVOLUTION (retrieved supersession chain):" in ctx
+    assert "Tencent" in ctx
+    assert "Moonshot AI" in ctx
+    assert "superseded" in ctx and "current" in ctx
+
+
+def test_lean_context_evolution_chain_respects_as_of_boundary():
+    mem = Memory()
+    mem.add_fact("Wei", "works_at", "Tencent", user_id="u1", valid_at=BASE)
+    mem.add_fact("Wei", "works_at", "Moonshot AI", user_id="u1", valid_at=BASE + 30 * DAY)
+
+    ctx = mem.lean_context(
+        "Where does Wei work?",
+        user_id="u1",
+        as_of=BASE + 10 * DAY,
+        persona=False,
+        n_chunks=0,
+        char_budget=10_000,
+    )
+
+    assert "Tencent" in ctx
+    assert "Moonshot AI" not in ctx
+    assert "FACT EVOLUTION (retrieved supersession chain):" not in ctx
+
+
+def test_context_for_adds_fact_evolution_chain():
+    mem = Memory()
+    mem.add_fact("Wei", "works_at", "Tencent", user_id="u1", valid_at=BASE)
+    mem.add_fact("Wei", "works_at", "Moonshot AI", user_id="u1", valid_at=BASE + 30 * DAY)
+
+    ctx = mem.context_for("Where does Wei work?", user_id="u1", k_chunks=0)
+
+    assert "FACT EVOLUTION (retrieved supersession chain):" in ctx
+    assert "Tencent" in ctx
+    assert "Moonshot AI" in ctx
+
+
+def test_chain_evidence_can_be_disabled_for_ablation():
+    from engram.config import Config
+
+    mem = Memory(config=Config(chain_evidence=False))
+    mem.add_fact("Wei", "works_at", "Tencent", user_id="u1", valid_at=BASE)
+    mem.add_fact("Wei", "works_at", "Moonshot AI", user_id="u1", valid_at=BASE + 30 * DAY)
+
+    ctx = mem.lean_context(
+        "Where does Wei work?",
+        user_id="u1",
+        persona=False,
+        n_chunks=0,
+        char_budget=10_000,
+    )
+
+    assert "Moonshot AI" in ctx
+    assert "FACT EVOLUTION (retrieved supersession chain):" not in ctx
+
+
+def test_lean_context_adds_provenance_raw_evidence_for_retrieved_fact():
+    from engram.config import Config
+    from engram.types import Fact
+
+    mem = Memory(config=Config(evidence_planner=False))
+    ep = mem.add(
+        "The Apollo launch code is A17. Keep the printed checklist near the blue binder.",
+        user_id="u1",
+        session_id="apollo",
+        event_time=BASE,
+    )
+    fact = Fact(
+        subject="Apollo",
+        predicate="launch_code",
+        object="A17",
+        user_id=mem.resolver.resolve("u1"),
+        valid_at=BASE,
+        provenance=[ep.id],
+    )
+    fact.embedding = mem.embedder.embed(fact.text)
+    mem.fact_store.upsert(fact.id, fact.embedding, fact)
+
+    ctx = mem.lean_context(
+        "What is Apollo's launch code?",
+        user_id="u1",
+        persona=False,
+        n_chunks=0,
+        char_budget=10_000,
+    )
+
+    assert "FACTS (current, dated):" in ctx
+    assert "PROVENANCE RAW EVIDENCE (source episodes for retrieved facts):" in ctx
+    assert "A17" in ctx
+    assert "blue binder" in ctx
+
+
+def test_provenance_evidence_can_be_disabled_for_ablation():
+    from engram.config import Config
+    from engram.types import Fact
+
+    mem = Memory(config=Config(evidence_planner=False, provenance_evidence=False))
+    ep = mem.add(
+        "The Apollo launch code is A17. Keep the printed checklist near the blue binder.",
+        user_id="u1",
+        session_id="apollo",
+        event_time=BASE,
+    )
+    fact = Fact(
+        subject="Apollo",
+        predicate="launch_code",
+        object="A17",
+        user_id=mem.resolver.resolve("u1"),
+        valid_at=BASE,
+        provenance=[ep.id],
+    )
+    fact.embedding = mem.embedder.embed(fact.text)
+    mem.fact_store.upsert(fact.id, fact.embedding, fact)
+
+    ctx = mem.lean_context(
+        "What is Apollo's launch code?",
+        user_id="u1",
+        persona=False,
+        n_chunks=0,
+        char_budget=10_000,
+    )
+
+    assert "A17" in ctx
+    assert "PROVENANCE RAW EVIDENCE" not in ctx
+    assert "blue binder" not in ctx
+
+
+def test_provenance_raw_evidence_dedups_full_detail_chunk():
+    from engram.types import Fact
+
+    mem = Memory()
+    ep = mem.add(
+        "The Apollo launch code is A17. Keep the printed checklist near the blue binder.",
+        user_id="u1",
+        session_id="apollo",
+        event_time=BASE,
+    )
+    fact = Fact(
+        subject="Apollo",
+        predicate="launch_code",
+        object="A17",
+        user_id=mem.resolver.resolve("u1"),
+        valid_at=BASE,
+        provenance=[ep.id],
+    )
+    fact.embedding = mem.embedder.embed(fact.text)
+    mem.fact_store.upsert(fact.id, fact.embedding, fact)
+
+    ctx = mem.lean_context(
+        "What is Apollo's launch code?",
+        user_id="u1",
+        persona=False,
+        n_chunks=1,
+        char_budget=10_000,
+    )
+
+    assert "RELEVANT CONVERSATIONS (full detail):" in ctx
+    assert "blue binder" in ctx
+    assert "PROVENANCE RAW EVIDENCE (source episodes for retrieved facts):" not in ctx
+
+
+def test_provenance_raw_evidence_is_hidden_in_redacted_context():
+    from engram.config import Config
+    from engram.types import Fact
+
+    mem = Memory(config=Config(evidence_planner=False))
+    ep = mem.add(
+        "The Apollo launch code is A17. Keep the printed checklist near the blue binder.",
+        user_id="u1",
+        session_id="apollo",
+        event_time=BASE,
+    )
+    fact = Fact(
+        subject="Apollo",
+        predicate="launch_code",
+        object="A17",
+        user_id=mem.resolver.resolve("u1"),
+        valid_at=BASE,
+        provenance=[ep.id],
+        sensitive=True,
+    )
+    fact.embedding = mem.embedder.embed(fact.text)
+    mem.fact_store.upsert(fact.id, fact.embedding, fact)
+
+    ctx = mem.lean_context(
+        "What is Apollo's launch code?",
+        user_id="u1",
+        persona=False,
+        n_chunks=0,
+        redact_sensitive=True,
+        char_budget=10_000,
+    )
+
+    assert "PROVENANCE RAW EVIDENCE" not in ctx
+    assert "blue binder" not in ctx
+
+
+def test_context_for_adds_provenance_raw_evidence_for_fact_sources():
+    from engram.types import Fact
+
+    mem = Memory()
+    ep = mem.add(
+        "The Apollo launch code is A17. Keep the printed checklist near the blue binder.",
+        user_id="u1",
+        session_id="apollo",
+        event_time=BASE,
+    )
+    fact = Fact(
+        subject="Apollo",
+        predicate="launch_code",
+        object="A17",
+        user_id=mem.resolver.resolve("u1"),
+        valid_at=BASE,
+        provenance=[ep.id],
+    )
+    fact.embedding = mem.embedder.embed(fact.text)
+    mem.fact_store.upsert(fact.id, fact.embedding, fact)
+
+    ctx = mem.context_for("What is Apollo's launch code?", user_id="u1", k_chunks=0)
+
+    assert "PROVENANCE RAW EVIDENCE (source episodes for retrieved facts):" in ctx
+    assert "blue binder" in ctx
+
+
 def test_current_state_preserves_multi_valued_attributes():
     mem = Memory()
     mem.add_fact("Wei", "owns", "a bike", user_id="u1")
@@ -590,6 +829,71 @@ def test_deleted_relation_fact_does_not_drive_multihop_planner():
     res = mem.search("What is the profession of the user's sister who moved to Seattle?", user_id="u1")
     assert res.via != "multi-hop"
     assert "pediatrician" not in res.answer().lower()
+
+
+def test_graph_scores_expand_beyond_one_hop_for_bridge_facts():
+    mem = Memory()
+    direct = mem.add_fact("Wei", "colleague", "Lin", user_id="u1", valid_at=BASE)
+    bridge = mem.add_fact("Lin", "works_at", "Moonshot AI", user_id="u1", valid_at=BASE + DAY)
+    second_hop = mem.add_fact("Moonshot AI", "based_in", "Beijing", user_id="u1", valid_at=BASE + 2 * DAY)
+
+    scores, qids = mem.retriever._graph_scores(
+        "Tell me about Wei",
+        mem.resolver.resolve("u1"),
+        [direct, bridge, second_hop],
+        None,
+    )
+
+    assert qids, "query should anchor on the Wei entity"
+    assert scores[direct.id] == 1.0
+    assert scores[bridge.id] > scores[second_hop.id] > 0.0
+
+
+def test_graph_scores_respect_as_of_during_expansion():
+    mem = Memory()
+    direct = mem.add_fact("Wei", "colleague", "Lin", user_id="u1", valid_at=BASE)
+    future_bridge = mem.add_fact("Lin", "works_at", "Moonshot AI", user_id="u1", valid_at=BASE + DAY)
+    older_target = mem.add_fact("Moonshot AI", "based_in", "Beijing", user_id="u1", valid_at=BASE)
+    live = [direct, future_bridge, older_target]
+
+    before, _ = mem.retriever._graph_scores(
+        "Tell me about Wei",
+        mem.resolver.resolve("u1"),
+        live,
+        BASE + 0.5 * DAY,
+    )
+    after, _ = mem.retriever._graph_scores(
+        "Tell me about Wei",
+        mem.resolver.resolve("u1"),
+        live,
+        BASE + 2 * DAY,
+    )
+
+    assert before[older_target.id] == 0.0
+    assert after[older_target.id] > 0.0
+
+
+def test_graph_proximity_can_be_disabled_for_ablation():
+    from engram.config import Config
+
+    mem = Memory(config=Config(graph_proximity=False))
+    direct = mem.add_fact("Wei", "colleague", "Lin", user_id="u1", valid_at=BASE)
+    bridge = mem.add_fact("Lin", "works_at", "Moonshot AI", user_id="u1", valid_at=BASE + DAY)
+    second_hop = mem.add_fact("Moonshot AI", "based_in", "Beijing", user_id="u1", valid_at=BASE + 2 * DAY)
+
+    scores, qids = mem.retriever._graph_scores(
+        "Tell me about Wei",
+        mem.resolver.resolve("u1"),
+        [direct, bridge, second_hop],
+        None,
+    )
+    related = mem._graph_related_facts("Tell me about Wei", mem.resolver.resolve("u1"), None)
+    paths = mem._graph_paths_block("Tell me about Wei", mem.resolver.resolve("u1"), None)
+
+    assert qids, "entity anchoring still works; only proximity evidence is ablated"
+    assert all(score == 0.0 for score in scores.values())
+    assert related == []
+    assert paths == ""
 
 
 def test_bench_preconsolidation_uses_multi_hop_subqueries():
@@ -759,6 +1063,42 @@ def test_graph_related_facts_include_cold_tier_facts():
     assert "cold graph evidence" in {f.object for f in related}
 
 
+def test_graph_related_facts_expand_beyond_one_hop():
+    mem = Memory()
+    mem.add_fact("Wei", "colleague", "Lin", user_id="u1", valid_at=BASE)
+    mem.add_fact("Lin", "works_at", "Moonshot AI", user_id="u1", valid_at=BASE + DAY)
+    target = mem.add_fact("Moonshot AI", "based_in", "Beijing", user_id="u1", valid_at=BASE + 2 * DAY)
+
+    related = mem._graph_related_facts("Tell me about Wei", mem.resolver.resolve("u1"), None)
+
+    assert target.id in {f.id for f in related}
+
+
+def test_graph_related_facts_respect_as_of_during_expansion():
+    mem = Memory()
+    mem.add_fact("Wei", "colleague", "Lin", user_id="u1", valid_at=BASE)
+    mem.add_fact("Lin", "works_at", "Moonshot AI", user_id="u1", valid_at=BASE + DAY)
+    target = mem.add_fact("Moonshot AI", "based_in", "Beijing", user_id="u1", valid_at=BASE)
+
+    before = mem._graph_related_facts("Tell me about Wei", mem.resolver.resolve("u1"), BASE + 0.5 * DAY)
+    after = mem._graph_related_facts("Tell me about Wei", mem.resolver.resolve("u1"), BASE + 2 * DAY)
+
+    assert target.id not in {f.id for f in before}
+    assert target.id in {f.id for f in after}
+
+
+def test_context_for_graph_includes_multihop_related_facts():
+    mem = Memory()
+    mem.add_fact("Wei", "colleague", "Lin", user_id="u1", valid_at=BASE)
+    mem.add_fact("Lin", "works_at", "Moonshot AI", user_id="u1", valid_at=BASE + DAY)
+    mem.add_fact("Moonshot AI", "based_in", "Beijing", user_id="u1", valid_at=BASE + 2 * DAY)
+
+    ctx = mem.context_for("Tell me about Wei", user_id="u1", k_chunks=0, graph=True)
+
+    assert "RELATED FACTS (graph traversal):" in ctx
+    assert "Moonshot AI based in Beijing" in ctx
+
+
 def test_graph_paths_include_cold_tier_facts():
     mem = Memory()
     cold = mem.add_fact("project", "project_note", "cold path evidence", user_id="u1")
@@ -769,6 +1109,32 @@ def test_graph_paths_include_cold_tier_facts():
 
     block = mem._graph_paths_block("project", mem.resolver.resolve("u1"), None)
     assert "cold path evidence" in block
+
+
+def test_graph_paths_fallback_expands_beyond_one_hop():
+    mem = Memory()
+    mem.add_fact("Wei", "colleague", "Lin", user_id="u1", valid_at=BASE)
+    mem.add_fact("Lin", "works_at", "Moonshot AI", user_id="u1", valid_at=BASE + DAY)
+    mem.add_fact("Moonshot AI", "based_in", "Beijing", user_id="u1", valid_at=BASE + 2 * DAY)
+
+    block = mem._graph_paths_block("Tell me about Wei", mem.resolver.resolve("u1"), None)
+
+    assert "Wei --colleague--> Lin" in block
+    assert "Lin --works_at--> Moonshot AI" in block
+    assert "Moonshot AI --based_in--> Beijing" in block
+
+
+def test_graph_paths_fallback_respects_as_of_during_expansion():
+    mem = Memory()
+    mem.add_fact("Wei", "colleague", "Lin", user_id="u1", valid_at=BASE)
+    mem.add_fact("Lin", "works_at", "Moonshot AI", user_id="u1", valid_at=BASE + DAY)
+    mem.add_fact("Moonshot AI", "based_in", "Beijing", user_id="u1", valid_at=BASE)
+
+    before = mem._graph_paths_block("Tell me about Wei", mem.resolver.resolve("u1"), BASE + 0.5 * DAY)
+    after = mem._graph_paths_block("Tell me about Wei", mem.resolver.resolve("u1"), BASE + 2 * DAY)
+
+    assert "Moonshot AI --based_in--> Beijing" not in before
+    assert "Moonshot AI --based_in--> Beijing" in after
 
 
 def test_pending_conflict_and_resolution_include_cold_tier_facts():

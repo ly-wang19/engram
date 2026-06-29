@@ -38,6 +38,9 @@ class Config:
     max_hot_facts: int = 10_000  # heat-tier cap; cold facts remain durable and can page back on hot miss
     abstain_threshold: float = 0.45  # abstain if no attribute match AND best semantic sim below this
     evidence_planner: bool = True  # benchmark-neutral query -> evidence-shape routing for lean_context
+    chain_evidence: bool = True  # include bounded supersedes/evolution chains for retrieved facts
+    provenance_evidence: bool = True  # include compact raw source episodes for retrieved fact provenance
+    graph_proximity: bool = True  # n-hop graph proximity scoring / traversal ablation switch
 
     # --- consolidation ---
     salience_decay_per_day: float = 0.02

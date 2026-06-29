@@ -15,6 +15,7 @@ from .lexical import bm25_scores, stem, stems
 
 _MONTHS = ("january", "february", "march", "april", "may", "june", "july", "august",
            "september", "october", "november", "december")
+_GRAPH_HOP_DECAY = 0.65
 
 
 def date_terms(epoch: float) -> str:
@@ -89,24 +90,36 @@ class HybridRetriever:
         self, query: str, user_id: str, live: list[Fact], as_of: Optional[float]
     ) -> tuple[dict[str, float], set[str]]:
         qids = self.query_entity_ids(query, user_id)
-        one_hop: set[str] = set()
-        for eid in qids:
-            for rel in self.graph.neighbors(eid, as_of, "out"):
-                one_hop.add(rel.object_id)
-            for rel in self.graph.neighbors(eid, as_of, "in"):
-                one_hop.add(rel.subject_id)
+        if not self.config.graph_proximity:
+            return {f.id: 0.0 for f in live}, qids
+        live_fact_ids = {f.id for f in live}
+        node_scores: dict[str, float] = {eid: 1.0 for eid in qids}
+        frontier = set(qids)
+
+        for depth in range(1, max(0, self.config.max_hops) + 1):
+            hop_score = _GRAPH_HOP_DECAY ** depth
+            next_frontier: set[str] = set()
+            for eid in frontier:
+                for direction in ("out", "in"):
+                    for rel in self.graph.neighbors(eid, as_of, direction):
+                        if rel.fact_id not in live_fact_ids:
+                            continue
+                        neighbor_id = rel.object_id if direction == "out" else rel.subject_id
+                        if node_scores.get(neighbor_id, 0.0) >= hop_score:
+                            continue
+                        node_scores[neighbor_id] = hop_score
+                        next_frontier.add(neighbor_id)
+            if not next_frontier:
+                break
+            frontier = next_frontier
+
         scores: dict[str, float] = {}
         for f in live:
             subj = self.graph.get_entity(f.user_id, f.subject)
             obj = self.graph.get_entity(f.user_id, f.object)
             sid = subj.id if subj else None
             oid = obj.id if obj else None
-            if sid in qids or oid in qids:
-                scores[f.id] = 1.0
-            elif sid in one_hop or oid in one_hop:
-                scores[f.id] = 0.5
-            else:
-                scores[f.id] = 0.0
+            scores[f.id] = max(node_scores.get(sid, 0.0), node_scores.get(oid, 0.0))
         return scores, qids
 
     def _current_slot_heads(self, facts: list[Fact]) -> list[Fact]:

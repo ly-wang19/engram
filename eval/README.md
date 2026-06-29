@@ -22,6 +22,20 @@ python eval/report.py results/synthetic_durable.jsonl
 
 Synthetic logs are for regression and harness-shape checks. They are not public benchmark evidence.
 
+## Algorithm Ablation Smoke
+
+When read-path features are added, first prove they add the intended evidence in a zero-key synthetic
+ablation before spending on LongMemEval/LOCOMO:
+
+```bash
+python eval/ablate_features.py
+```
+
+This command toggles the newest evidence features one at a time and checks whether the enabled path
+surfaces evidence that the disabled path cannot: supersedes-chain context, provenance-backed raw snippets,
+and n-hop graph proximity. It is a local improvement proof for the target behavior, not a public
+accuracy claim. Publishable claims still require `eval/bench.py` plus committed raw logs.
+
 ## Real Benchmarks
 
 `eval/bench.py` is the unified rig for LongMemEval/LOCOMO/PersonaMem-style runs. Every system in one

@@ -1039,6 +1039,16 @@ class Memory:
             lines.append(f"{fmt_date(f.valid_at)} | {f.subject} | {f.predicate.replace('_', ' ')} | {f.object}")
         return "PREFERENCE RECORDS (current, structured):\n" + "\n".join(lines)
 
+    @staticmethod
+    def _chain_terms(f: Fact) -> str:
+        pred = f.predicate.replace("_", " ")
+        aliases = ""
+        if f.predicate.lower() in {"works_at", "employer", "company"}:
+            aliases = " work works worked employer employed employment company job"
+        elif f.predicate.lower() in {"lives_in", "location", "city", "home"}:
+            aliases = " live lives lived location city home"
+        return f"{f.subject} {pred} {f.object} {f.text} {aliases}"
+
     def _history_block(
         self,
         user: str,
@@ -1053,16 +1063,6 @@ class Memory:
         non-destructive chain as evidence: the old value, when it stopped being valid, and the current
         replacement that superseded it.
         """
-
-        def fact_terms(f: Fact) -> str:
-            pred = f.predicate.replace("_", " ")
-            aliases = ""
-            if f.predicate.lower() in {"works_at", "employer", "company"}:
-                aliases = " work works employer company job"
-            elif f.predicate.lower() in {"lives_in", "location", "city", "home"}:
-                aliases = " live lives location city home"
-            return f"{f.subject} {pred} {f.object} {f.text} {aliases}"
-
         facts = [f for f in self._all_facts() if f.user_id == user]
         if redact_sensitive:
             facts = [f for f in facts if not getattr(f, "sensitive", False)]
@@ -1093,10 +1093,10 @@ class Memory:
             )
             if not is_chain_member:
                 continue
-            if overlap_terms(query, fact_terms(f)):
+            if overlap_terms(query, self._chain_terms(f)):
                 add_chain(f)
                 continue
-            if any(overlap_terms(query, fact_terms(newer)) for newer in replaces.get(f.id, [])):
+            if any(overlap_terms(query, self._chain_terms(newer)) for newer in replaces.get(f.id, [])):
                 add_chain(f)
 
         if not selected:
@@ -1126,6 +1126,180 @@ class Memory:
                 f"{f.predicate.replace('_', ' ')} | {f.object} | {status}"
             )
         return "FACT HISTORY (supersession chain for update/previous-value questions):\n" + "\n".join(lines)
+
+    def _chain_facts_for_seeds(
+        self,
+        seeds: list[Fact],
+        user: str,
+        as_of: Optional[float],
+        limit: int = 12,
+        redact_sensitive: bool = False,
+    ) -> list[Fact]:
+        """Expand retrieved facts to their visible supersession chain.
+
+        This is the read-path half of non-destructive invalidation: retrieval still ranks only the live
+        slot head, but context assembly can show the bounded chain that explains what it replaced. The
+        `as_of` guard is intentionally valid-time based to match existing point-in-time search semantics,
+        so a past view never leaks a future replacement.
+        """
+        if not seeds:
+            return []
+        view_time = now() if as_of is None else as_of
+        facts = [f for f in self._all_facts() if f.user_id == user]
+        if redact_sensitive:
+            facts = [f for f in facts if not getattr(f, "sensitive", False)]
+        by_id = {f.id: f for f in facts}
+        replaces: dict[str, list[Fact]] = {}
+        for f in facts:
+            if f.supersedes:
+                replaces.setdefault(f.supersedes, []).append(f)
+
+        def visible(f: Fact) -> bool:
+            return f.valid_at <= view_time
+
+        selected: dict[str, Fact] = {}
+
+        def add_visible(f: Fact) -> None:
+            if visible(f):
+                selected.setdefault(f.id, f)
+
+        def add_chain(seed: Fact) -> None:
+            add_visible(seed)
+            cur = seed
+            seen: set[str] = {seed.id}
+            while cur.supersedes and cur.supersedes in by_id and cur.supersedes not in seen:
+                cur = by_id[cur.supersedes]
+                seen.add(cur.id)
+                add_visible(cur)
+            queue = [seed]
+            while queue:
+                cur = queue.pop(0)
+                for newer in sorted(replaces.get(cur.id, []), key=lambda f: f.valid_at):
+                    if newer.id in seen:
+                        continue
+                    seen.add(newer.id)
+                    add_visible(newer)
+                    queue.append(newer)
+
+        for seed in seeds:
+            add_chain(seed)
+
+        # A single visible fact is already shown in FACTS; only render when the chain adds explanatory
+        # evidence such as a superseded value or a visible replacement.
+        if len(selected) <= 1:
+            return []
+        return sorted(selected.values(), key=lambda f: (f.subject.lower(), f.predicate.lower(), f.valid_at))[:limit]
+
+    def _fact_evolution_block(
+        self,
+        seeds: list[Fact],
+        user: str,
+        as_of: Optional[float],
+        query: str = "",
+        limit: int = 12,
+        redact_sensitive: bool = False,
+    ) -> str:
+        if query:
+            seeds = [f for f in seeds if overlap_terms(query, self._chain_terms(f))]
+        rows = self._chain_facts_for_seeds(
+            seeds,
+            user,
+            as_of,
+            limit=limit,
+            redact_sensitive=redact_sensitive,
+        )
+        if not rows:
+            return ""
+        replaced_ids = {f.supersedes for f in self._all_facts() if f.supersedes}
+        lines = [
+            "valid from | valid until | subject | attribute | value | role",
+            "--- | --- | --- | --- | --- | ---",
+        ]
+        for f in rows:
+            until = fmt_date(f.invalid_at) if f.invalid_at is not None else "current"
+            if f.is_live(as_of):
+                role = "current"
+            elif f.id in replaced_ids:
+                role = "superseded"
+            elif f.supersedes:
+                role = "replacement"
+            else:
+                role = "past"
+            lines.append(
+                f"{fmt_date(f.valid_at)} | {until} | {f.subject} | "
+                f"{f.predicate.replace('_', ' ')} | {f.object} | {role}"
+            )
+        return "FACT EVOLUTION (retrieved supersession chain):\n" + "\n".join(lines)
+
+    @staticmethod
+    def _snippet_for_evidence(content: str, needle: str, max_chars: int = 360) -> str:
+        """Return a compact raw-evidence slice, preferring lines/sentences that match the query/fact.
+
+        Raw provenance is valuable because fact extraction can drop qualifiers, counts, or surrounding
+        details. The slice is intentionally tiny so provenance evidence improves recall without quietly
+        turning the lean path into full-history replay.
+        """
+        text = " ".join(content.split())
+        if len(text) <= max_chars:
+            return text
+        parts = [p.strip() for p in re.split(r"(?<=[.!?。！？])\s+|\n+", content) if p.strip()]
+        best = ""
+        best_score = -1
+        for part in parts:
+            score = len(overlap_terms(needle, part))
+            if score > best_score:
+                best = part
+                best_score = score
+        snippet = " ".join((best or text).split())
+        if len(snippet) <= max_chars:
+            return snippet
+        return snippet[: max_chars - 1].rstrip() + "…"
+
+    def _provenance_raw_block(
+        self,
+        facts: list[Fact],
+        query: str,
+        user: str,
+        as_of: Optional[float],
+        exclude_episode_ids: set[str],
+        limit: int = 4,
+        snippet_chars: int = 360,
+        redact_sensitive: bool = False,
+    ) -> str:
+        """Compact source episodes for retrieved facts.
+
+        This is the raw side of hybrid memory: facts give precise, conflict-resolved slots; their
+        provenance episodes restore dropped detail. We only use episodes explicitly cited by retrieved
+        facts, exclude already-rendered full-detail chunks, obey `as_of`, and disable the block for
+        redacted contexts because raw prose can contain sensitive material outside fact classifiers.
+        """
+        if redact_sensitive or not facts:
+            return ""
+        rows: list[str] = []
+        seen_eps: set[str] = set(exclude_episode_ids)
+        view_time = now() if as_of is None else as_of
+        for fact in sorted(facts, key=lambda f: f.valid_at, reverse=True):
+            if getattr(fact, "sensitive", False):
+                continue
+            if query and not overlap_terms(query, self._chain_terms(fact)):
+                continue
+            for ep_id in fact.provenance:
+                if ep_id in seen_eps:
+                    continue
+                ep = self.episodes_doc.get(ep_id)
+                if ep is None or ep.user_id != user or ep.event_time > view_time:
+                    continue
+                seen_eps.add(ep_id)
+                needle = f"{query} {fact.text} {fact.subject} {fact.predicate} {fact.object}"
+                snippet = self._snippet_for_evidence(ep.content, needle, max_chars=snippet_chars)
+                date = ep.metadata.get("date") or fmt_date(ep.event_time)
+                rows.append(
+                    f"- [{date}] (session: {ep.session_id}; supports: "
+                    f"{fact.subject} {fact.predicate.replace('_', ' ')} {fact.object}) {snippet}"
+                )
+                if len(rows) >= limit:
+                    return "PROVENANCE RAW EVIDENCE (source episodes for retrieved facts):\n" + "\n".join(rows)
+        return "PROVENANCE RAW EVIDENCE (source episodes for retrieved facts):\n" + "\n".join(rows) if rows else ""
 
     def _aggregation_block(
         self,
@@ -1246,7 +1420,7 @@ class Memory:
         limit: int = 12,
         redact_sensitive: bool = False,
     ) -> str:
-        """One-hop graph path evidence from query anchors; enough structure for relation-chain questions."""
+        """Bounded graph path evidence from query anchors; enough structure for relation-chain questions."""
         lines: list[str] = []
         plan = self.planner.plan(query, user, as_of)
         if plan is not None and plan.facts:
@@ -1257,25 +1431,37 @@ class Memory:
             if lines:
                 return "GRAPH PATHS (relation evidence):\n" + "\n".join(lines)
             return ""
-        for eid in self.retriever.query_entity_ids(query, user):
-            ent = self.graph.entities.get(eid)
-            if ent is None:
+        if not self.config.graph_proximity:
+            return ""
+        qids = self.retriever.query_entity_ids(query, user)
+        frontier: list[tuple[str, int]] = [(eid, 0) for eid in qids]
+        seen_nodes = set(qids)
+        seen_edges: set[str] = set()
+        max_hops = max(0, self.config.max_hops)
+        while frontier and len(lines) < limit:
+            eid, depth = frontier.pop(0)
+            if depth > max_hops:
                 continue
             for direction in ("out", "in"):
                 for rel in self.graph.neighbors(eid, as_of, direction):
+                    if rel.id in seen_edges:
+                        continue
                     f = self.fact_store.get(rel.fact_id) or self.cold_store.get(rel.fact_id)
                     if f is None or not f.is_live(as_of):
                         continue
                     if redact_sensitive and getattr(f, "sensitive", False):
                         continue
-                    if direction == "out":
-                        obj = self.graph.entities.get(rel.object_id)
-                        lines.append(f"- [{fmt_date(f.valid_at)}] {ent.name} --{rel.predicate}--> "
-                                     f"{obj.name if obj else f.object}")
-                    else:
-                        subj = self.graph.entities.get(rel.subject_id)
-                        lines.append(f"- [{fmt_date(f.valid_at)}] {subj.name if subj else f.subject} "
-                                     f"--{rel.predicate}--> {ent.name}")
+                    seen_edges.add(rel.id)
+                    subj = self.graph.entities.get(rel.subject_id)
+                    obj = self.graph.entities.get(rel.object_id)
+                    lines.append(
+                        f"- [{fmt_date(f.valid_at)}] {subj.name if subj else f.subject} "
+                        f"--{rel.predicate}--> {obj.name if obj else f.object}"
+                    )
+                    neighbor_id = rel.object_id if direction == "out" else rel.subject_id
+                    if depth < max_hops and neighbor_id not in seen_nodes:
+                        seen_nodes.add(neighbor_id)
+                        frontier.append((neighbor_id, depth + 1))
                     if len(lines) >= limit:
                         return "GRAPH PATHS (relation evidence):\n" + "\n".join(lines)
         return "GRAPH PATHS (relation evidence):\n" + "\n".join(lines) if lines else ""
@@ -1407,6 +1593,17 @@ class Memory:
                 paths = self._graph_paths_block(query, user, as_of, redact_sensitive=redact_sensitive)
                 if paths:
                     blocks.append(paths)
+            if self.config.chain_evidence and (need is None or not need.history):
+                evo = self._fact_evolution_block(
+                    all_facts,
+                    user,
+                    as_of,
+                    query=query,
+                    limit=max(8, min(18, n_facts + 3)),
+                    redact_sensitive=redact_sensitive,
+                )
+                if evo:
+                    blocks.append(evo)
 
         if need is not None and need.history:
             hist = self._history_block(user, query, as_of, redact_sensitive=redact_sensitive)
@@ -1487,6 +1684,18 @@ class Memory:
                 f"(session: {e.session_id})\n{e.content}" for e in detail_eps
             )
             blocks.append(f"RELEVANT CONVERSATIONS (full detail):\n{chunks}")
+
+        if self.config.provenance_evidence:
+            raw_prov = self._provenance_raw_block(
+                all_facts,
+                query,
+                user,
+                as_of,
+                exclude_episode_ids=detail_ids,
+                redact_sensitive=redact_sensitive,
+            )
+            if raw_prov:
+                blocks.append(raw_prov)
 
         if need is not None and need.duration:
             dur = self._duration_block(query, all_facts, detail_eps + aggregation_eps)
@@ -1691,10 +1900,12 @@ class Memory:
         # Sort most-recent first: for knowledge-update questions the LLM should see the latest
         # fact (e.g., new job, new city) at the top — and trust it over older facts lower in the list.
         ranked_by_date = sorted(ranked, key=lambda x: x[0].valid_at, reverse=True)
-        fact_lines = [f"- [{fmt_date(f.valid_at)}] {f.text}" for f, _ in ranked_by_date]
+        ranked_facts = [f for f, _ in ranked_by_date]
+        fact_lines = [f"- [{fmt_date(f.valid_at)}] {f.text}" for f in ranked_facts]
         facts_block = "\n".join(fact_lines) or "(none)"
 
         chunk_block = ""
+        episodes: list[Episode] = []
         if k_chunks:
             if agentic and self.llm is not None:
                 from .retrieve.agentic import AgenticRetriever
@@ -1712,6 +1923,20 @@ class Memory:
             f"FACTS (current, with dates):\n{facts_block}\n\n"
             f"RELEVANT CONVERSATIONS (with dates):\n{chunk_block}"
         ).strip()
+        if self.config.chain_evidence:
+            evo = self._fact_evolution_block(ranked_facts, user, as_of, query=search_query)
+            if evo:
+                result += f"\n\n{evo}"
+        if self.config.provenance_evidence:
+            raw_prov = self._provenance_raw_block(
+                ranked_facts,
+                search_query,
+                user,
+                as_of,
+                exclude_episode_ids={ep.id for ep in episodes},
+            )
+            if raw_prov:
+                result += f"\n\n{raw_prov}"
         if timeline:
             # explicit chronological ordering of the relevant facts — helps "first/after/how long" (M2b)
             ordered = sorted((f for f, _ in ranked), key=lambda f: f.valid_at)
@@ -1770,14 +1995,15 @@ class Memory:
         return "\n\n".join(f"[{ep.metadata.get('date', '?')}]\n{ep.content}" for ep in more)
 
     def _graph_related_facts(self, query: str, user: str, as_of: Optional[float], limit: int = 8) -> list[Fact]:
-        seen: dict[str, Fact] = {}
-        for eid in self.retriever.query_entity_ids(query, user):
-            for direction in ("out", "in"):
-                for rel in self.graph.neighbors(eid, as_of, direction):
-                    f = self.fact_store.get(rel.fact_id) or self.cold_store.get(rel.fact_id)
-                    if f is not None and f.is_live(as_of):
-                        seen[f.id] = f
-        return list(seen.values())[:limit]
+        if not self.config.graph_proximity:
+            return []
+        live = [f for f in self._all_facts() if f.user_id == user and f.is_live(as_of)]
+        if not live:
+            return []
+        graph_scores, _ = self.retriever._graph_scores(query, user, live, as_of)
+        related = [f for f in live if graph_scores.get(f.id, 0.0) > 0.0]
+        related.sort(key=lambda f: (-graph_scores.get(f.id, 0.0), -f.valid_at, f.text.lower()))
+        return related[:limit]
 
     def _entity_notes(self, query: str, user: str, as_of: Optional[float], max_entities: int = 3) -> list[str]:
         if self.llm is None:
