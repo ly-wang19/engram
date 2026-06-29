@@ -124,6 +124,12 @@ def _graph_self_anchor_context(enabled: bool) -> str:
     return mem.context_for("Where is my project based?", user_id="u1", k_chunks=0, graph=True)
 
 
+def _graph_entity_alias_context(enabled: bool) -> str:
+    mem = Memory(config=Config(graph_entity_alias_anchor=enabled))
+    mem.add_fact("Moonshot AI", "based_in", "Beijing", user_id="u1", valid_at=BASE)
+    return mem.context_for("Where is Moonshot based?", user_id="u1", k_chunks=0, graph=True)
+
+
 def _contains(marker: str, target: str):
     return lambda ctx: marker in ctx and target in ctx
 
@@ -173,6 +179,12 @@ def run_ablation() -> tuple[list[AblationResult], dict]:
             _graph_self_anchor_context,
             _contains("RELATED FACTS (graph traversal):", "Atlas based in Reykjavik"),
             "first-person query anchors to user graph node",
+        ),
+        (
+            "graph_entity_alias_anchor",
+            _graph_entity_alias_context,
+            _contains("RELATED FACTS (graph traversal):", "Moonshot AI based in Beijing"),
+            "unique short name anchors to full graph entity",
         ),
     ]
     rows: list[AblationResult] = []

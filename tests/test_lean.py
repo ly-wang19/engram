@@ -1012,6 +1012,62 @@ def test_graph_self_anchor_can_be_disabled_for_ablation():
     assert "RELATED FACTS (graph traversal):" not in ctx
 
 
+def test_graph_entity_alias_anchor_matches_unique_short_name():
+    mem = Memory()
+    target = mem.add_fact("Moonshot AI", "based_in", "Beijing", user_id="u1", valid_at=BASE)
+    live = [f for f in mem.fact_store.values() if f.user_id == mem.resolver.resolve("u1")]
+
+    scores, qids = mem.retriever._graph_scores(
+        "Where is Moonshot based?",
+        mem.resolver.resolve("u1"),
+        live,
+        None,
+    )
+    ctx = mem.context_for("Where is Moonshot based?", user_id="u1", k_chunks=0, graph=True)
+
+    assert qids
+    assert scores[target.id] > 0.0
+    assert "Moonshot AI based in Beijing" in ctx
+
+
+def test_graph_entity_alias_anchor_can_be_disabled_for_ablation():
+    from engram.config import Config
+
+    mem = Memory(config=Config(graph_entity_alias_anchor=False))
+    target = mem.add_fact("Moonshot AI", "based_in", "Beijing", user_id="u1", valid_at=BASE)
+    live = [f for f in mem.fact_store.values() if f.user_id == mem.resolver.resolve("u1")]
+
+    scores, qids = mem.retriever._graph_scores(
+        "Where is Moonshot based?",
+        mem.resolver.resolve("u1"),
+        live,
+        None,
+    )
+    ctx = mem.context_for("Where is Moonshot based?", user_id="u1", k_chunks=0, graph=True)
+
+    assert qids == set()
+    assert scores[target.id] == 0.0
+    assert "RELATED FACTS (graph traversal):" not in ctx
+
+
+def test_graph_entity_alias_anchor_requires_unique_token():
+    mem = Memory()
+    first = mem.add_fact("Moonshot AI", "based_in", "Beijing", user_id="u1", valid_at=BASE)
+    second = mem.add_fact("Moonshot Labs", "based_in", "Shanghai", user_id="u1", valid_at=BASE + DAY)
+    live = [f for f in mem.fact_store.values() if f.user_id == mem.resolver.resolve("u1")]
+
+    scores, qids = mem.retriever._graph_scores(
+        "Where is Moonshot based?",
+        mem.resolver.resolve("u1"),
+        live,
+        None,
+    )
+
+    assert qids == set()
+    assert scores[first.id] == 0.0
+    assert scores[second.id] == 0.0
+
+
 def test_bench_preconsolidation_uses_multi_hop_subqueries():
     from engram.types import Episode
     from eval.bench import retrieve_evidence_episodes

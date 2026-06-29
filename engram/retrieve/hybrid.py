@@ -69,6 +69,10 @@ _SELF_ANCHOR_RE = re.compile(
     r"\b(i|me|my|mine|myself|we|our|ours|user's|the user's|their|his|her)\b|我|我的|用户|用户的",
     re.IGNORECASE,
 )
+_ENTITY_ANCHOR_STOP = frozenset({
+    "the", "and", "for", "with", "from", "inc", "ltd", "llc", "corp", "co", "company", "project",
+    "user", "assistant", "team", "group", "system", "ai",
+})
 
 
 def order_positive(scores: dict[str, float]) -> list[str]:
@@ -117,6 +121,16 @@ def graph_relation_relevance(query: str, fact: Fact) -> float:
     return 0.0
 
 
+def _entity_anchor_terms(name: str, aliases: list[str]) -> set[str]:
+    terms: set[str] = set()
+    for text in (name, *aliases):
+        for tok in tokenize(text):
+            term = stem(tok)
+            if len(term) >= 3 and not term.isdigit() and term not in _ENTITY_ANCHOR_STOP:
+                terms.add(term)
+    return terms
+
+
 class HybridRetriever:
     def __init__(self, fact_store: VectorStore, graph: GraphStore, embedder: Embedder, config: Config) -> None:
         self.fact_store = fact_store
@@ -132,12 +146,20 @@ class HybridRetriever:
         """Entity nodes whose full name appears in the query (the query's anchor entities)."""
         q = set(stems(query)) | set(tokenize(query))
         ids: set[str] = set()
-        for ent in self.graph.entities.values():
-            if ent.user_id != user_id:
-                continue
-            name_toks = [stem(t) for t in tokenize(ent.name)]
-            if name_toks and all(t in q for t in name_toks):
+        entities = [ent for ent in self.graph.entities.values() if ent.user_id == user_id]
+        for ent in entities:
+            names = (ent.name, *ent.aliases)
+            if any((toks := [stem(t) for t in tokenize(name)]) and all(t in q for t in toks) for name in names):
                 ids.add(ent.id)
+        if self.config.graph_entity_alias_anchor:
+            term_to_ids: dict[str, set[str]] = {}
+            for ent in entities:
+                for term in _entity_anchor_terms(ent.name, ent.aliases):
+                    term_to_ids.setdefault(term, set()).add(ent.id)
+            for term in q:
+                hits = term_to_ids.get(term)
+                if hits is not None and len(hits) == 1:
+                    ids.update(hits)
         if self.config.graph_self_anchor and _SELF_ANCHOR_RE.search(query):
             for name in (user_id, "user"):
                 ent = self.graph.get_entity(user_id, name)
