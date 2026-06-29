@@ -40,6 +40,7 @@ class Config:
     evidence_planner: bool = True  # benchmark-neutral query -> evidence-shape routing for lean_context
     evidence_budgeting: bool = True  # intent-aware context packing instead of equal/raw truncation
     chain_evidence: bool = True  # include bounded supersedes/evolution chains for retrieved facts
+    temporal_history_queries: bool = True  # answer before/previous/former queries from supersession chains
     provenance_evidence: bool = True  # include compact raw source episodes for retrieved fact provenance
     graph_proximity: bool = True  # n-hop graph proximity scoring / traversal ablation switch
     graph_relation_awareness: bool = True  # query-conditioned predicate weighting inside graph proximity
