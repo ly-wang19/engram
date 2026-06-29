@@ -140,6 +140,40 @@ def test_multi_valued_identity_facts_are_not_slot_deduped():
     assert {f.object for f, _ in ranked} >= {"a bike", "a camera"}
 
 
+def test_zero_score_evidence_signals_do_not_boost_irrelevant_salient_facts():
+    """RRF should fuse evidence, not arbitrary zero-score positions.
+
+    The target is the only lexical hit. The distractor has very high salience but zero lexical evidence.
+    If the lexical ranking includes zero-score docs, the distractor borrows almost the same lexical RRF
+    contribution as the true hit and can outrank it. Filtering zero evidence keeps relevance first.
+    """
+    mem = Memory(config=Config(w_sem=0.0, w_lex=1.0, w_graph=0.0, w_rec=0.0, w_sal=0.6))
+    target = Fact(
+        "Wei",
+        "ticket_code",
+        "alpha-42",
+        user_id="u1",
+        salience=0.1,
+        embedding=mem.embedder.embed("Wei ticket code alpha 42"),
+    )
+    distractor = Fact(
+        "Wei",
+        "likes",
+        "jazz",
+        user_id="u1",
+        salience=100.0,
+        embedding=mem.embedder.embed("Wei likes jazz"),
+    )
+    mem.fact_store.upsert(target.id, target.embedding or [], target)
+    mem.fact_store.upsert(distractor.id, distractor.embedding or [], distractor)
+
+    ranked, diag = mem.retriever.retrieve("ticket code alpha", mem.resolver.resolve("u1"), top_k=2)
+
+    assert ranked[0][0] is target
+    assert diag["lex"][target.id] > 0
+    assert diag["lex"][distractor.id] == 0
+
+
 def test_project_rules_are_structured_multi_value_memory():
     mem = Memory()
     mem.add(

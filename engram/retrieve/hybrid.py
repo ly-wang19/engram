@@ -41,6 +41,16 @@ _IDENTITY_PREDS = frozenset({
 })
 
 
+def order_positive(scores: dict[str, float]) -> list[str]:
+    """Rank only real evidence hits.
+
+    RRF gives every ranked item a positive contribution. For evidence signals (semantic, lexical, graph),
+    a zero score means "this signal found no evidence", not "last place evidence". Filtering zeros keeps
+    priors like salience/recency from borrowing fake support through arbitrary zero-score ordering.
+    """
+    return [doc_id for doc_id, score in sorted(scores.items(), key=lambda x: x[1], reverse=True) if score > 0.0]
+
+
 def fact_type_weight(fact: Fact, config: Config) -> float:
     """Retrieval multiplier by fact type: preference > identity > incidental. A durable 'who they are /
     what they like' fact should outrank a one-off mention when both match a query."""
@@ -161,9 +171,9 @@ class HybridRetriever:
         sal = {f.id: f.salience for f in live}
 
         rankings = {
-            "sem": order_by_score(sem),
-            "lex": order_by_score(lex),
-            "graph": order_by_score(gph),
+            "sem": order_positive(sem),
+            "lex": order_positive(lex),
+            "graph": order_positive(gph),
             "rec": order_by_score(rec),
             "sal": order_by_score(sal),
         }
