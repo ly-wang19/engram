@@ -5,7 +5,14 @@ a number is publishable only when the raw JSONL log is committed, reportable, an
 
 ## Offline Smoke Harness
 
-Run the zero-key synthetic harness first:
+Run the zero-key project smoke first:
+
+```bash
+python scripts/check_zero_setup.py
+```
+
+That command exercises the quickstart, synthetic harness, committed public-log validation, paper stats,
+and stdlib compilation without optional dependencies. To run only the synthetic harness:
 
 ```bash
 python eval/harness.py
@@ -14,6 +21,27 @@ python eval/report.py results/synthetic_durable.jsonl
 ```
 
 Synthetic logs are for regression and harness-shape checks. They are not public benchmark evidence.
+
+## Algorithm Ablation Smoke
+
+When read-path features are added, first prove they add the intended evidence in a zero-key synthetic
+ablation before spending on LongMemEval/LOCOMO:
+
+```bash
+python eval/ablate_features.py
+```
+
+This command toggles the newest evidence features one at a time and checks whether the enabled path
+surfaces evidence that the disabled path cannot: supersedes-chain context, provenance-backed raw snippets,
+n-hop graph proximity, and query-conditioned graph relation weighting that ranks the target relation
+ahead of same-node distractors, plus PPR-style graph path reinforcement that ranks a multi-path-supported
+target ahead of a single-path distractor, and self-anchoring for first-person graph queries. It is a local
+improvement proof for the target behavior, not a public accuracy claim. It also checks unique short-name
+entity anchoring, so "Moonshot" can safely anchor `Moonshot AI` only when that token is unambiguous, and
+negative graph constraints, so "not in Lisbon" filters the excluded path instead of boosting it, plus
+planner location/project chains, so colleague/company and person/project questions can continue from
+`works_at` or `works_on` to `based_in`/`located_in` answer facts.
+Publishable claims still require `eval/bench.py` plus committed raw logs.
 
 ## Real Benchmarks
 
@@ -34,11 +62,34 @@ python eval/validate_results.py --expected-rows <full item count> --require-comp
   missing fields, unscored rows, or error rows.
   For LongMemEval_S full-set runs, `<full item count>` is `500`; use the benchmark's real full item count
   for other datasets.
+  If a multi-system log includes an exploratory or explicitly errored system that is not part of the
+  published claim, validate the cited systems explicitly:
+
+```bash
+python eval/validate_results.py --expected-rows 500 --require-complete \
+    --system engram_lean --system full_context results/<name>.jsonl
+```
+
+- `audit_results.py` scans a messy local `results/` directory and labels each log `complete`,
+  `incomplete`, or `invalid` so exploratory logs do not get mistaken for evidence.
+- `compare.py` compares two or more validated logs on their shared scored qids for one system, reporting
+  per-log accuracy, disagreements, and the oracle upper bound for multi-backbone complementarity:
+
+```bash
+python eval/compare.py results/backbone_a.jsonl results/backbone_b.jsonl --system engram_lean --per-category
+```
 
 Only logs that pass validation should be marked `DONE` in paper notes or used in README/RESULTS copy.
 Partial logs, smoke slices, failed competitor runs, and exploratory ablations can stay local until they
 are completed or explicitly documented as exploratory. See [`../results/README.md`](../results/README.md)
 for the commit policy for raw logs.
+
+Before deciding what to commit, audit the directory:
+
+```bash
+python eval/audit_results.py
+python eval/audit_results.py --fail-invalid results/headline_500.jsonl results/bb_flash.jsonl
+```
 
 PersonaMem-v2 is a multiple-choice runner with a different JSONL shape (`pref_type` + picked option,
 not LongMemEval's `cat` + judged `pred/gold`). Validate it with the explicit schema:

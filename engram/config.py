@@ -38,6 +38,16 @@ class Config:
     max_hot_facts: int = 10_000  # heat-tier cap; cold facts remain durable and can page back on hot miss
     abstain_threshold: float = 0.45  # abstain if no attribute match AND best semantic sim below this
     evidence_planner: bool = True  # benchmark-neutral query -> evidence-shape routing for lean_context
+    chain_evidence: bool = True  # include bounded supersedes/evolution chains for retrieved facts
+    provenance_evidence: bool = True  # include compact raw source episodes for retrieved fact provenance
+    graph_proximity: bool = True  # n-hop graph proximity scoring / traversal ablation switch
+    graph_relation_awareness: bool = True  # query-conditioned predicate weighting inside graph proximity
+    graph_path_reinforcement: bool = True  # PPR-style boost when multiple paths support the same graph node
+    graph_self_anchor: bool = True  # anchor first-person/user queries to the user's own graph node
+    graph_entity_alias_anchor: bool = True  # anchor unique entity-name/alias tokens (e.g. "Moonshot" -> Moonshot AI)
+    graph_negative_constraints: bool = True  # honor not/except/excluding entity constraints in graph retrieval
+    planner_location_chains: bool = True  # let multi-hop planner answer based_in/located_in/headquarters chains
+    planner_project_chains: bool = True  # let multi-hop planner walk works_on/project -> based_in chains
 
     # --- consolidation ---
     salience_decay_per_day: float = 0.02

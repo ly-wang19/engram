@@ -714,7 +714,7 @@ class MemoryService:
         self,
         user: str,
         as_of: float | None = None,
-        include_sensitive: bool = True,
+        include_sensitive: bool = False,
         q: str = "",
         live_only: bool = False,
         limit: Optional[int] = None,
@@ -738,10 +738,14 @@ class MemoryService:
         episodes_offset: int = 0,
         status: Optional[str] = None,
         q: str = "",
-        include_sensitive: bool = True,
+        include_sensitive: bool = False,
     ) -> dict:
-        """Everything stored for this user: profile, counts, bi-temporal facts (live + superseded with
-        provenance), raw episodes + L2 summaries. The 'look inside my memory' payload."""
+        """Browse stored memory.
+
+        Default is share-safe: non-sensitive facts plus content-free counts, with profile/raw episodes
+        omitted. With `include_sensitive=True`, this is the owner-visible inspection payload: profile,
+        raw episodes + L2 summaries, and sensitive facts.
+        """
         from .localize import display_of  # localized rendering for Chinese-recorded facts
 
         mem = self.get(user)
@@ -893,13 +897,15 @@ class MemoryService:
             "consolidation_backlog": bool(pending_episodes),
         }
 
-    def export(self, user: str, include_sensitive: bool = True) -> dict:
-        """Data export. With `include_sensitive=True`, this is full-fidelity portability: every fact's
-        bi-temporal stamps + provenance, raw episodes, summaries, profile, focus, and graph.
+    def export(self, user: str, include_sensitive: bool = False) -> dict:
+        """Data export.
 
-        With `include_sensitive=False`, the payload is a share-safe structured export: only non-sensitive
-        facts plus a graph derived from those facts. Free-text layers (profile, raw episodes, summaries)
-        are omitted because they can fold sensitive content into prose."""
+        Default is a share-safe structured export: only non-sensitive facts plus a graph derived from
+        those facts. Free-text layers (profile, raw episodes, summaries) are omitted because they can
+        fold sensitive content into prose. With `include_sensitive=True`, this is full-fidelity
+        portability: every fact's bi-temporal stamps + provenance, raw episodes, summaries, profile,
+        focus, and graph.
+        """
         mem = self.get(user)
         _facts = [f for f in _all_facts(mem)
                   if include_sensitive or not getattr(f, "sensitive", False)]

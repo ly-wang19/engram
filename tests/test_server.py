@@ -46,6 +46,16 @@ def test_health(client):
     assert "data_dir" not in data and "api_keys" not in data
 
 
+def test_private_api_responses_are_not_cacheable(client):
+    h = hdr("cache_headers")
+
+    memories = client.get("/v1/memories", headers=h)
+    exported = client.get("/v1/export", headers=h)
+
+    assert memories.headers["cache-control"] == "no-store"
+    assert exported.headers["cache-control"] == "no-store"
+
+
 def test_remember_recall_roundtrip(client):
     h = hdr("alice")
     assert client.post("/v1/remember", json={"content": "My name is Wei and I live in Shenzhen."},
@@ -327,7 +337,11 @@ def test_graph_endpoint_can_exclude_sensitive_edges(client):
     client.post("/v1/facts", json={"predicate": "has_disease", "object": "diabetes"}, headers=h)
     client.post("/v1/facts", json={"predicate": "works_at", "object": "Acme"}, headers=h)
 
-    full = client.get("/v1/graph", headers=h).json()
+    default_safe = client.get("/v1/graph", headers=h).json()
+    assert "diabetes" not in str(default_safe).lower()
+    assert "Acme" in str(default_safe)
+
+    full = client.get("/v1/graph?include_sensitive=true", headers=h).json()
     assert "diabetes" in str(full).lower()
     assert "Acme" in str(full)
 
@@ -364,7 +378,15 @@ def test_memories_endpoint_supports_pagination_filtering_and_sensitive_create(cl
         "sensitive": True,
     }, headers=h)
 
-    episode_page = client.get("/v1/memories?facts_limit=0&episodes_limit=1", headers=h).json()
+    safe_default = client.get("/v1/memories?facts_limit=10&episodes_limit=1", headers=h).json()
+    assert safe_default["profile"] == ""
+    assert safe_default["episodes"] == []
+    assert all(not f["sensitive"] for f in safe_default["facts"])
+
+    episode_page = client.get(
+        "/v1/memories?facts_limit=0&episodes_limit=1&include_sensitive=true",
+        headers=h,
+    ).json()
     assert len(episode_page["episodes"]) == 1
     assert episode_page["episodes_page"]["total"] == 2
     assert episode_page["episodes_page"]["has_more"] is True
@@ -501,7 +523,14 @@ def test_export_without_sensitive_omits_free_text_layers_and_sensitive_graph(cli
     client.post("/v1/facts", json={"predicate": "has_disease", "object": "diabetes"}, headers=h)
     client.post("/v1/facts", json={"predicate": "works_at", "object": "Acme"}, headers=h)
 
-    full = client.get("/v1/export", headers=h).json()
+    default_safe = client.get("/v1/export", headers=h).json()
+    assert default_safe["include_sensitive"] is False
+    assert default_safe["redacted_sensitive"] is True
+    assert "diabetes" not in str(default_safe).lower()
+    assert default_safe["profile"] == ""
+    assert default_safe["episodes"] == []
+
+    full = client.get("/v1/export?include_sensitive=true", headers=h).json()
     assert full["include_sensitive"] is True
     assert any("diabetes" in f["text"].lower() for f in full["facts"])
     assert full["episodes"]

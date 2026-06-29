@@ -199,7 +199,7 @@
         <li><span class="i18n-en">Distills structured memory; <b>retrieves precisely</b> at query time</span><span class="i18n-zh">提炼成结构化记忆,提问时<b>精准检索</b></span></li>
         <li><span class="i18n-en">Only <b>~9.6k tokens</b> (<b style="color:var(--teal)">8× leaner</b>)</span><span class="i18n-zh">只用 <b>~9.6k token</b>(<b style="color:var(--teal)">省 8 倍</b>)</span></li>
         <li><span class="i18n-en">Drops the noise, keeps the signal → more focused</span><span class="i18n-zh">去掉噪声、只留精华 → 更聚焦</span></li>
-        <li><span class="i18n-en"><b style="color:var(--teal)">83.6%</b> accurate, and it holds up as history grows</span><span class="i18n-zh">准确率 <b style="color:var(--teal)">83.6%</b>,且历史再长也不崩</span></li>
+        <li><span class="i18n-en"><b style="color:var(--teal)">83.6%</b> accurate in this 500-question run</span><span class="i18n-zh">这次 500 题运行准确率 <b style="color:var(--teal)">83.6%</b></span></li>
       </ul>
     </div>
   </div>
@@ -209,16 +209,16 @@
 <section id="how" style="background:linear-gradient(180deg,transparent,rgba(34,211,238,.04),transparent)"><div class="wrap">
   <div class="eyebrow rv"><span class="i18n-en">How it works · dual-process, brain-inspired</span><span class="i18n-zh">它怎么工作 · 双过程,仿人脑</span></div>
   <h2 class="rv d1"><span class="i18n-en">Writes never block; <span class="hl">structuring happens in the background</span></span><span class="i18n-zh">写入不挡路,<span class="hl">整理在后台</span></span></h2>
-  <p class="lead rv d2"><span class="i18n-en">Two paths, like the brain: <b>System-1</b> jots things down as you chat (&lt;50ms, never blocks you); <b>System-2</b>, like sleep, distills memory, builds the graph, and resolves contradictions in the background.</span><span class="i18n-zh">和人脑一样分两条路:<b>System-1</b> 边聊边快速记下(&lt;50ms,不卡你);<b>System-2</b> 像睡觉时一样,在后台把记忆提炼、建图、解决矛盾。</span></p>
+  <p class="lead rv d2"><span class="i18n-en">Two paths, like the brain: <b>System-1</b> jots things down as you chat; <b>System-2</b>, like sleep, distills memory, builds the graph, and resolves contradictions in the background.</span><span class="i18n-zh">和人脑一样分两条路:<b>System-1</b> 边聊边记下;<b>System-2</b> 像睡觉时一样,在后台把记忆提炼、建图、解决矛盾。</span></p>
 
   <div class="flow">
-    <div class="fstep rv d2"><div class="ms">&lt;50ms</div><div class="ic">💬</div><div class="t"><span class="i18n-en">You chat</span><span class="i18n-zh">你聊天</span></div><div class="s"><span class="i18n-en">raw turn stored losslessly (timestamped)</span><span class="i18n-zh">原始对话无损存下(带时间)</span></div></div>
+    <div class="fstep rv d2"><div class="ms">hot</div><div class="ic">💬</div><div class="t"><span class="i18n-en">You chat</span><span class="i18n-zh">你聊天</span></div><div class="s"><span class="i18n-en">raw turn stored losslessly (timestamped)</span><span class="i18n-zh">原始对话无损存下(带时间)</span></div></div>
     <div class="farrow rv d2">→</div>
     <div class="fstep rv d3"><div class="ic">⚗️</div><div class="t"><span class="i18n-en">Distill facts</span><span class="i18n-zh">提炼事实</span></div><div class="s"><span class="i18n-en">atomic facts<br>(subject·predicate·object)</span><span class="i18n-zh">抽出原子事实<br>(主语·谓语·宾语)</span></div></div>
     <div class="farrow rv d3">→</div>
     <div class="fstep rv d3"><div class="ic">🕸️</div><div class="t"><span class="i18n-en">Bi-temporal graph</span><span class="i18n-zh">双时间轴图谱</span></div><div class="s"><span class="i18n-en">entities + relations;<br>resolve conflicts, never overwrite</span><span class="i18n-zh">建实体关系图<br>解决矛盾不覆盖</span></div></div>
     <div class="farrow rv d4">→</div>
-    <div class="fstep rv d4"><div class="ms">&lt;100ms</div><div class="ic">🎯</div><div class="t"><span class="i18n-en">Precise recall</span><span class="i18n-zh">精准检索</span></div><div class="s"><span class="i18n-en">question → relevant slice → answer</span><span class="i18n-zh">提问 → 取相关一小片 → 作答</span></div></div>
+    <div class="fstep rv d4"><div class="ms">lean</div><div class="ic">🎯</div><div class="t"><span class="i18n-en">Precise recall</span><span class="i18n-zh">精准检索</span></div><div class="s"><span class="i18n-en">question → relevant slice → answer</span><span class="i18n-zh">提问 → 取相关一小片 → 作答</span></div></div>
   </div>
 
   <h3 class="rv d3" style="text-align:center;margin-top:54px;font-size:20px;color:var(--dim)"><span class="i18n-en">Five memory types, each its own job (like brain regions)</span><span class="i18n-zh">五类记忆,各管一摊(就像大脑的不同区域)</span></h3>
@@ -263,7 +263,7 @@
       <h3 style="font-size:18px"><span class="i18n-en">⚡ Engram lean retrieval</span><span class="i18n-zh">⚡ Engram 精简检索</span></h3>
       <div class="grid" id="gg"></div>
       <div class="vtok" style="color:var(--teal)">9.6k <small><span class="i18n-en">tokens · only the relevant slice</span><span class="i18n-zh">token · 只取相关片</span></small></div>
-      <div style="margin-top:10px;color:var(--teal)"><span class="i18n-en">✓ sharper · 83.6% · cost stays flat as history grows</span><span class="i18n-zh">✓ 更聚焦 · 83.6% 准 · 历史再长成本也不涨</span></div>
+      <div style="margin-top:10px;color:var(--teal)"><span class="i18n-en">✓ sharper · 83.6% · retrieves the relevant slice</span><span class="i18n-zh">✓ 更聚焦 · 83.6% 准 · 只取相关片</span></div>
     </div>
   </div>
 </div></section>
@@ -282,11 +282,11 @@
     <tr class="winrow"><td><b>Engram</b><span class="i18n-en"> (this project)</span><span class="i18n-zh">(本项目)</span></td><td class="sc hl">83.6%</td><td style="text-align:right">9.6k</td><td>✅ AGPL-3.0</td></tr>
     <tr><td><span class="i18n-en">Full-context (same backbone)</span><span class="i18n-zh">裸塞全文(同 backbone)</span></td><td class="sc">73.2%</td><td style="text-align:right">79k</td><td>—</td></tr>
   </table>
-  <p class="note rv d3"><span class="i18n-en"><b>Where it stands:</b> Engram beats full-context by <b>+10.4</b> at ~8× fewer tokens — fully open, reproducible, cost flat as history grows. 83.6% on the official 500-question judge, every per-question log published.</span><span class="i18n-zh"><b>它的定位:</b>Engram 远超裸全文(<b>+10.4 分</b>)且省约 8 倍 token,<b>全开源、可复现、历史再长成本也不涨</b>。500 题官方判分 ≈83.6%,每题原始日志公开。</span></p>
+  <p class="note rv d3"><span class="i18n-en"><b>Where it stands:</b> Engram beats full-context by <b>+10.4</b> at ~8× fewer tokens — fully open and reproducible. 83.6% on the official 500-question judge, every per-question log published. <a href="https://github.com/ly-wang19/engram/blob/main/RESULTS.md" target="_blank">Raw logs + methodology</a>.</span><span class="i18n-zh"><b>它的定位:</b>Engram 远超裸全文(<b>+10.4 分</b>)且省约 8 倍 token,<b>全开源、可复现</b>。500 题官方判分 ≈83.6%,每题原始日志公开。<a href="https://github.com/ly-wang19/engram/blob/main/RESULTS.md" target="_blank">原始日志与方法</a>。</span></p>
   <div class="repro rv d4">
 <span class="c1"># <span class="i18n-en">Reproduce every number yourself:</span><span class="i18n-zh">每个数字都能自己跑一遍验证:</span></span><br>
 git clone https://github.com/ly-wang19/engram && cd engram<br>
-pytest&nbsp;&nbsp;<span class="c1"># <span class="i18n-en">80+ unit tests, zero deps, no API key</span><span class="i18n-zh">80+ 个单元测试,零依赖、不要 key</span></span><br>
+python scripts/check_zero_setup.py&nbsp;&nbsp;<span class="c1"># <span class="i18n-en">zero-dep smoke + evidence validation</span><span class="i18n-zh">零依赖冒烟 + 证据日志校验</span></span><br>
 python eval/bench.py --data s --limit 500 --systems engram_lean,full_context ...
   </div>
 </div></section>
@@ -295,16 +295,16 @@ python eval/bench.py --data s --limit 500 --systems engram_lean,full_context ...
 <section id="sources" style="background:linear-gradient(180deg,transparent,rgba(34,211,238,.04),transparent)"><div class="wrap">
   <div class="eyebrow rv"><span class="i18n-en">Full architecture · every claim has code + tests</span><span class="i18n-zh">完整架构 · 每个声称都有代码 + 测试</span></div>
   <h2 class="rv d1"><span class="i18n-en">Not a single trick — <span class="hl">a whole memory engine</span></span><span class="i18n-zh">不是单点技巧,是<span class="hl">一整套记忆引擎</span></span></h2>
-  <p class="lead rv d2"><span class="i18n-en">From write to consolidation to retrieval — layered, reproducible, cost stays flat as history grows; every capability has code and unit tests behind it.</span><span class="i18n-zh">从写入、固化到检索,逐层设计、可复现、成本随历史增长保持平稳 —— 每个能力都有对应的代码和单元测试。</span></p>
+  <p class="lead rv d2"><span class="i18n-en">From write to consolidation to retrieval — layered, reproducible, and built to avoid full-history replay; every capability has code and unit tests behind it.</span><span class="i18n-zh">从写入、固化到检索,逐层设计、可复现,目标是避免每次重读全部历史 —— 每个能力都有对应的代码和单元测试。</span></p>
   <div class="chips">
-    <div class="chip rv d2"><span class="i18n-en"><b>Dual-process write / consolidate</b> · System-1 hot write (no LLM, &lt;50ms) + System-2 async extract & graph</span><span class="i18n-zh"><b>双过程写入 / 固化</b> · System-1 热写入(不调 LLM、&lt;50ms)+ System-2 异步抽取建图</span></div>
+    <div class="chip rv d2"><span class="i18n-en"><b>Dual-process write / consolidate</b> · System-1 hot write (no LLM) + System-2 async extract & graph</span><span class="i18n-zh"><b>双过程写入 / 固化</b> · System-1 热写入(不调 LLM)+ System-2 异步抽取建图</span></div>
     <div class="chip rv d2"><span class="i18n-en"><b>Bi-temporal facts</b> · valid-time + transaction-time, <b>as-of queries</b>, knowledge-updates first-class</span><span class="i18n-zh"><b>双时间轴事实</b> · 有效时间 + 事务时间,<b>as-of 时点查询</b>、知识更新一等公民</span></div>
     <div class="chip rv d3"><span class="i18n-en"><b>Non-destructive conflict resolution</b> · slot + semantic + subsumption, LLM only when ambiguous; <b>invalidate (not delete), full provenance</b></span><span class="i18n-zh"><b>非破坏式冲突解决</b> · 精确槽 + 语义 + 子集,仅模糊时 LLM 裁决;<b>失效不删除、全溯源</b></span></div>
     <div class="chip rv d3"><span class="i18n-en"><b>Hybrid retrieval</b> · semantic + BM25 lexical + graph n-hop + recency/salience, fused with <b>RRF</b> (optional rerank)</span><span class="i18n-zh"><b>混合检索</b> · 语义 + 词法 BM25 + 图 n 跳 + 时近/显著度,<b>RRF 融合</b>(可选重排)</span></div>
     <div class="chip rv d4"><span class="i18n-en"><b>Typed memory</b> · episodic / semantic graph / profile / procedural / working, each with its own store & policy</span><span class="i18n-zh"><b>类型化记忆</b> · 情节 / 语义图谱 / 画像身份 / 程序性 / 工作记忆,各有存储与策略</span></div>
     <div class="chip rv d4"><span class="i18n-en"><b>Salience decay + Reflector</b> · reinforce & forget, summary refresh, answer-verification loop</span><span class="i18n-zh"><b>显著度衰减 + Reflector</b> · 强化与遗忘、摘要刷新、答案验证回路</span></div>
   </div>
-  <p class="note rv d4" style="margin-top:24px"><span class="i18n-en">Everything pluggable: LLM / embedder / vector store / graph store sit behind interfaces with <b>zero-dep offline fallbacks</b> — <code>pytest</code> passes green with no key and no services.</span><span class="i18n-zh">一切可插拔:LLM / 嵌入器 / 向量库 / 图库都在接口背后,带<b>零依赖离线兜底</b> —— 不用 key、不用任何服务即可 <code>pytest</code> 全绿。</span></p>
+  <p class="note rv d4" style="margin-top:24px"><span class="i18n-en">Everything pluggable: LLM / embedder / vector store / graph store sit behind interfaces with <b>zero-dep offline fallbacks</b> — <code>python scripts/check_zero_setup.py</code> runs with no key and no services.</span><span class="i18n-zh">一切可插拔:LLM / 嵌入器 / 向量库 / 图库都在接口背后,带<b>零依赖离线兜底</b> —— 不用 key、不用任何服务即可跑 <code>python scripts/check_zero_setup.py</code>。</span></p>
 </div></section>
 
 <!-- HOW TO CALL -->

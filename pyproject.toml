@@ -9,7 +9,7 @@ description = "Engram — an open-source, reproducible long-term memory engine f
 readme = "README.md"
 requires-python = ">=3.10"
 license = "AGPL-3.0-only"
-license-files = ["LICENSE"]
+license-files = ["LICENSE", "COMMERCIAL-LICENSE.md"]
 authors = [{ name = "Engram contributors" }]
 keywords = ["memory", "llm", "agents", "rag", "knowledge-graph", "long-term-memory", "bi-temporal"]
 classifiers = [
@@ -38,6 +38,7 @@ dev = ["pytest>=7.0", "pytest-asyncio>=0.23", "ruff>=0.4"]
 all = ["engram-memory[server,mcp,embeddings,backends,llm,eval,dev]"]
 
 [project.scripts]
+engram-quickstart = "engram.quickstart:main"       # zero-setup installed demo
 engram-mcp = "engram.mcp.__main__:main"            # run the MCP server
 engram-import = "engram.connectors.__main__:main"  # import a chat/history export
 engram-migrate-pickle = "engram.store.migrate:main" # migrate trusted legacy pickle snapshots
@@ -46,8 +47,10 @@ engram-agent-bootstrap = "engram.agent_setup:bootstrap_main" # install + verify 
 engram-agent-doctor = "engram.agent_doctor:main"   # verify an agent's Python/MCP memory runtime
 
 [project.urls]
-Homepage = "https://github.com/your-org/engram"
-Repository = "https://github.com/your-org/engram"
+Homepage = "https://github.com/ly-wang19/engram"
+Repository = "https://github.com/ly-wang19/engram"
+Documentation = "https://github.com/ly-wang19/engram#readme"
+Issues = "https://github.com/ly-wang19/engram/issues"
 
 [tool.hatch.build.targets.wheel]
 packages = ["engram"]

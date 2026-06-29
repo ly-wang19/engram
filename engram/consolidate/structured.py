@@ -40,6 +40,7 @@ _BASIC: dict[str, tuple[str, str]] = {
 
 _POSITIVE = {"likes", "like", "loves", "love", "enjoys", "enjoy", "prefers", "prefer", "favorite",
              "favourite", "interested_in", "fan_of", "into", "fond_of", "wants", "wishes_for"}
+_DIETARY = {"diet", "dietary_restriction", "dietary_restrictions"}
 _NEGATIVE = {"dislikes", "dislike", "hates", "hate", "avoids", "avoid", "allergic_to", "allergic",
              "cannot_eat", "cant_eat", "not_into", "disinterested_in"}
 _HABIT = {"usually", "often", "routine", "regularly", "habit", "tends_to", "commutes", "frequently",
@@ -77,6 +78,8 @@ def _polarity(pred: str) -> str | None:
     """like / dislike polarity of a preference predicate — handles compound predicates the LLM emits
     (likes_quiet_environments, doesn't_drive_on_elevated_roads, ...) not just the canonical verbs."""
     p = pred.lower()
+    if p in _DIETARY:
+        return "diet"
     if p in _POSITIVE or p.startswith(_POS_PREFIX):
         return "like"
     if p in _NEGATIVE or p.startswith(_NEG_PREFIX):

@@ -20,6 +20,7 @@ class EvidenceNeed:
     preference: bool = False
     current_state: bool = False
     duration: bool = False
+    history: bool = False
     multi_hop: bool = False
     exact_lookup: bool = False
     abstention_sensitive: bool = False
@@ -42,11 +43,16 @@ _TEMPORAL_TERMS = {
 _PREFERENCE_TERMS = {
     "prefer", "prefers", "preference", "favorite", "favourite", "like", "likes", "liked",
     "dislike", "dislikes", "hate", "hates", "love", "loves", "avoid", "avoids", "allergic",
-    "recommend", "recommendation",
+    "diet", "dietary", "restriction", "restrictions", "vegetarian", "vegan", "intolerant",
+    "intolerance", "recommend", "recommendation",
 }
 _CURRENT_TERMS = {
     "now", "current", "currently", "today", "still", "latest", "new", "newest", "updated",
     "changed", "anymore", "most_recent", "often", "frequency",
+}
+_HISTORY_TERMS = {
+    "before", "previous", "previously", "former", "formerly", "old", "older", "past",
+    "history", "changed", "updated", "superseded", "replaced", "used",
 }
 _RELATION_TERMS = {
     "colleague", "coworker", "friend", "partner", "spouse", "manager", "boss", "child",
@@ -54,13 +60,23 @@ _RELATION_TERMS = {
     "company", "employer", "profession", "occupation", "role", "title", "works", "work",
     "lives", "live", "moved", "relocated",
 }
+_BRIDGE_RELATIONS = (
+    "sister", "brother", "mother", "father", "parent", "child", "spouse", "wife", "husband", "partner",
+    "colleague", "coworker", "co-worker", "friend", "manager", "boss",
+)
+_ANSWER_ATTRS = {
+    "profession", "occupation", "role", "title", "job", "employer", "company", "work", "works",
+    "live", "lives", "location", "city", "home",
+}
 _EXACT_TERMS = {"id", "email", "phone", "url", "link", "address", "number", "code", "identifier"}
 
 _CJK_PATTERNS = {
     "aggregation": ("多少", "几个", "几次", "哪些", "所有", "全部", "一共", "总共", "列出", "每次"),
     "temporal": ("什么时候", "哪天", "日期", "之前", "之后", "最早", "最近", "最新", "第一次", "最后", "期间"),
-    "preference": ("喜欢", "偏好", "更爱", "最爱", "讨厌", "不喜欢", "避免", "推荐"),
+    "preference": ("喜欢", "偏好", "更爱", "最爱", "讨厌", "不喜欢", "避免", "推荐",
+                   "忌口", "过敏", "饮食禁忌"),
     "current": ("现在", "当前", "目前", "如今", "最新", "还", "是否仍", "不再"),
+    "history": ("以前", "之前", "曾经", "过去", "历史", "变化", "变更", "改成", "换成"),
     "relation": ("同事", "朋友", "老板", "经理", "伴侣", "孩子", "父母", "姐姐", "妹妹", "哥哥", "弟弟", "公司", "职业", "搬到", "住在"),
     "exact": ("邮箱", "电话", "链接", "地址", "编号", "代码", "号码"),
 }
@@ -153,24 +169,21 @@ def _multi_hop_subqueries(query: str) -> tuple[str, ...]:
     candidates: list[str] = []
 
     relation = ""
-    m = re.search(
-        r"\b(?:my|user's|the user's|their|his|her)\s+"
-        r"(sister|brother|mother|father|parent|child|spouse|wife|husband|partner|"
-        r"colleague|coworker|co-worker|friend|manager|boss)\b",
-        q,
-    )
+    relation_re = "|".join(re.escape(r) for r in _BRIDGE_RELATIONS)
+    m = re.search(rf"\b(?:my|user's|the user's|their|his|her)\s+({relation_re})\b", q)
     if m:
         relation = m.group(1)
         candidates.append(relation)
 
-    attrs = [
-        attr for attr in ("profession", "occupation", "role", "title", "job", "employer", "company")
-        if attr in q
-    ]
+    attrs = [attr for attr in sorted(_ANSWER_ATTRS) if attr in q]
     for attr in attrs:
         candidates.append(attr)
         if relation:
             candidates.append(f"{relation} {attr}")
+    if relation and any(attr in attrs for attr in ("work", "works", "employer", "company")):
+        candidates.extend((f"{relation} employer", f"{relation} company", f"{relation} works"))
+    if relation and any(attr in attrs for attr in ("live", "lives", "location", "city", "home")):
+        candidates.extend((f"{relation} lives", f"{relation} location", f"{relation} city"))
 
     place = ""
     m = re.search(r"\b(?:moved|relocated|lives?|living)\s+(?:to|in)\s+([a-z][a-z' -]{1,40})", q)
@@ -235,9 +248,26 @@ def plan_evidence(query: str) -> EvidenceNeed:
     if current_state:
         reasons.append("current_state")
 
+    history = (
+        _token_hit(toks, _HISTORY_TERMS)
+        or "used to" in q
+        or _has_phrase(q, _CJK_PATTERNS["history"])
+    )
+    if history:
+        reasons.append("history")
+
     relation_hits = _token_hit(toks, _RELATION_TERMS) or _has_phrase(q, _CJK_PATTERNS["relation"])
     possessive_chain = bool(re.search(r"\b(my|their|his|her)\s+\w+'?s\b", q)) or q.count("'s") >= 1
-    multi_hop = relation_hits and (possessive_chain or aggregation or " of " in q or " 的 " in q)
+    relation_re = "|".join(re.escape(r) for r in _BRIDGE_RELATIONS)
+    named_bridge = bool(re.search(rf"\b(?:my|user's|the user's|their|his|her)\s+(?:{relation_re})\b", q))
+    answer_attr = _token_hit(toks, _ANSWER_ATTRS)
+    multi_hop = relation_hits and (
+        possessive_chain
+        or aggregation
+        or " of " in q
+        or " 的 " in q
+        or (named_bridge and answer_attr)
+    )
     if multi_hop:
         reasons.append("multi_hop")
 
@@ -250,7 +280,7 @@ def plan_evidence(query: str) -> EvidenceNeed:
         reasons.append("abstention_sensitive")
 
     kinds = tuple(reasons) if reasons else ("lookup",)
-    n_facts = 8 if (preference or current_state or multi_hop or exact_lookup) else 0
+    n_facts = 8 if (preference or current_state or history or multi_hop or exact_lookup) else 0
     n_summaries = 12 if aggregation else (6 if (timeline or duration or multi_hop) else 0)
     n_chunks = 2 if (preference or exact_lookup or multi_hop or duration) else (1 if aggregation or timeline else 0)
     subquery_items: list[str] = []
@@ -267,6 +297,7 @@ def plan_evidence(query: str) -> EvidenceNeed:
         preference=preference,
         current_state=current_state,
         duration=duration,
+        history=history,
         multi_hop=multi_hop,
         exact_lookup=exact_lookup,
         abstention_sensitive=abstention_sensitive,

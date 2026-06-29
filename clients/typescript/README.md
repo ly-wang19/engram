@@ -1,6 +1,6 @@
 # engram-memory (TypeScript/JavaScript SDK)
 
-Official SDK for [Engram](https://github.com/your-org/engram) — the open-source long-term memory engine
+Official SDK for [Engram](https://github.com/ly-wang19/engram) — the open-source long-term memory engine
 for LLM agents. Zero runtime dependencies (uses the global `fetch`); works in Node 18+, browsers, Deno,
 Bun, and edge runtimes.
 
@@ -114,7 +114,7 @@ const fullPrivate = await engram.export({ includeSensitive: true })
 // Content-free session index: which Codex / Claude / app sessions touched this namespace.
 const sessions = await engram.sessions({ limit: 20, query: 'claude-code' })
 
-// Owner view: paginate and search the user's editable memories.
+// Share-safe/default view: paginate and search editable non-sensitive facts.
 const page = await engram.memories({
   factsLimit: 50,
   factsOffset: 0,
@@ -123,11 +123,11 @@ const page = await engram.memories({
   query: 'work',
 })
 
-// Share-safe/list-preview view: omit sensitive facts plus free-text layers.
-const safePage = await engram.memories({
+// Owner-visible inspection view: include raw episodes, profile, and sensitive facts.
+const fullPrivatePage = await engram.memories({
   factsLimit: 50,
-  episodesLimit: 0,
-  includeSensitive: false,
+  episodesLimit: 10,
+  includeSensitive: true,
 })
 ```
 
@@ -142,7 +142,7 @@ const safePage = await engram.memories({
 | `sessions({ limit?, offset?, query? })` | GET /v1/sessions | content-free cross-agent/app session index |
 | `sessionReport(sessionId, { includeSensitive? })` | GET /v1/sessions/report | `SessionReport` for what this session saved |
 | `search(query, { asOf?, redactSensitive? })` | POST /v1/recall | `SearchResult` |
-| `memories({ factsLimit?, factsOffset?, episodesLimit?, episodesOffset?, status?, query?, includeSensitive? })` | GET /v1/memories | paged `MemoryDump` for user-owned memory management |
+| `memories({ factsLimit?, factsOffset?, episodesLimit?, episodesOffset?, status?, query?, includeSensitive? })` | GET /v1/memories | paged `MemoryDump`; share-safe by default, full owner-visible view with `includeSensitive: true` |
 | `agentStatus({ sessionId? })` | GET /v1/agent/status | `AgentStatus` content-free namespace/session/focus/counts/next actions |
 | `stats()` | GET /v1/stats | `MemoryStats` content-free namespace observability, including consolidation backlog, hot/cold fact tiers, and page-in/out counts |
 | `profile()` | GET /v1/profile | `ProfileResult` |
@@ -150,7 +150,7 @@ const safePage = await engram.memories({
 | `updateFact(id, patch)` / `deleteFact(id)` | PATCH/DELETE /v1/facts/:id | — |
 | `getFocus()` / `setFocus(f)` | GET/PUT /v1/focus | `Focus` |
 | `getPolicy()` / `setPolicy(p)` | GET/PUT /v1/policy | `PolicyResponse` |
-| `graph({ asOf?, includeSensitive? })` | GET /v1/graph | `GraphData` |
+| `graph({ asOf?, includeSensitive? })` | GET /v1/graph | `GraphData`; share-safe by default, full owner-visible graph with `includeSensitive: true` |
 | `import(params)` | POST /v1/import | `ImportResult` |
 | `export({ includeSensitive? })` | GET /v1/export | share-safe structured JSON by default; full private JSON with `includeSensitive: true` |
 | `forget({ confirm: true })` | POST /v1/forget | `{ ok, message }`; irreversible namespace wipe |
@@ -169,6 +169,8 @@ npm run typecheck
 
 ## License
 
-Engram is **dual-licensed**: open source under [GNU AGPL-3.0](../../LICENSE), or a separate **commercial
+Engram is **dual-licensed**: open source under
+[GNU AGPL-3.0](https://github.com/ly-wang19/engram/blob/main/LICENSE), or a separate **commercial
 license** for proprietary/closed-source use. Commercial use that won't comply with the AGPL requires
-authorization — see [`COMMERCIAL-LICENSE.md`](../../COMMERCIAL-LICENSE.md).
+authorization — see
+[`COMMERCIAL-LICENSE.md`](https://github.com/ly-wang19/engram/blob/main/COMMERCIAL-LICENSE.md).

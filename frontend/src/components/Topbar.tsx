@@ -4,6 +4,7 @@ import { Copy, Eye, EyeOff, LogOut, Menu, Wifi, WifiOff } from 'lucide-react'
 import { useAuth } from '../store/auth'
 import { useHealth } from '../hooks/queries'
 import { useT } from '../i18n'
+import { copyText } from '../lib/clipboard'
 import { LangToggle } from './LangToggle'
 import { toast } from './Toast'
 
@@ -23,8 +24,12 @@ export function Topbar({ onMenu }: { onMenu: () => void }) {
 
   const copyKey = async () => {
     if (!apiKey) return
-    await navigator.clipboard?.writeText(apiKey)
-    toast.success(t.topbar.keyCopied)
+    try {
+      await copyText(apiKey)
+      toast.success(t.topbar.keyCopied)
+    } catch {
+      toast.error(t.common.copyFailed)
+    }
   }
 
   return (

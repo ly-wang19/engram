@@ -40,6 +40,43 @@ def test_validate_bench_log_rejects_partial_or_unscored_log(tmp_path):
     assert f"{path}:engram_lean: scored 1/3 rows" in errors
 
 
+def test_validate_bench_log_can_require_only_named_systems(tmp_path):
+    path = tmp_path / "mixed.jsonl"
+    rows = [
+        _row("q1", system="full_context"),
+        _row("q2", ok=False, system="full_context"),
+    ]
+    for row in rows:
+        row["sys"]["engram_full"] = {
+            "ok": None,
+            "tok": 0,
+            "lat": 1.0,
+            "err": "timeout",
+        }
+    _write_jsonl(path, rows)
+
+    assert validate_bench_log(
+        path,
+        expected_rows=2,
+        require_complete=True,
+        required_systems=("full_context",),
+    ) == []
+
+
+def test_validate_bench_log_rejects_missing_required_system(tmp_path):
+    path = tmp_path / "missing_system.jsonl"
+    _write_jsonl(path, [_row("q1", system="full_context")])
+
+    errors = validate_bench_log(
+        path,
+        expected_rows=1,
+        require_complete=True,
+        required_systems=("engram_lean",),
+    )
+
+    assert f"{path}:engram_lean: missing from log" in errors
+
+
 def test_validate_personamem_log_accepts_choice_schema(tmp_path):
     path = tmp_path / "personamem.jsonl"
     _write_jsonl(path, [
@@ -94,6 +131,36 @@ def test_report_uses_personamem_pref_type_as_category(tmp_path):
     assert "?                         100.0%" not in report
     assert "Public LongMemEval_S SOTA" not in report
     assert "PersonaMem-v2 is a multiple-choice personalization benchmark" in report
+
+
+def test_report_only_prints_reproducible_log_systems(tmp_path):
+    path = tmp_path / "bench.jsonl"
+    rows = [
+        {
+            "qid": "q1",
+            "cat": "single-session-user",
+            "sys": {
+                "engram_lean": {
+                    "ok": True,
+                    "tok": 123,
+                    "lat": 45.6,
+                    "err": None,
+                    "pred": "A",
+                    "gold": "A",
+                }
+            },
+        }
+    ]
+
+    report = format_bench_report(str(path), rows)
+
+    assert "engram_lean" in report
+    assert "SOTA" not in report
+    assert "Public LongMemEval_S SOTA" not in report
+    assert "OMEGA" not in report
+    assert "Mem0-2026" not in report
+    assert "Hunyuan" not in report
+    assert "WE BEAT THIS" not in report
 
 
 def test_report_keeps_long_categories_readable(tmp_path):

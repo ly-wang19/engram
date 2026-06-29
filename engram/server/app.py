@@ -91,7 +91,9 @@ app = FastAPI(
 async def cache_headers(request: Request, call_next):
     response = await call_next(request)
     path = request.url.path
-    if path.startswith("/ui/assets/"):
+    if path.startswith("/v1/"):
+        response.headers["Cache-Control"] = "no-store"
+    elif path.startswith("/ui/assets/"):
         response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
     elif path == "/ui" or path.startswith("/ui/") or path == "/":
         response.headers["Cache-Control"] = "no-cache"
@@ -348,11 +350,15 @@ def memories(
     episodes_offset: int = 0,
     status: Optional[str] = None,
     q: str = "",
-    include_sensitive: bool = True,
+    include_sensitive: bool = False,
     user: str = Depends(auth),
 ):
-    """See EVERYTHING stored for this user — the raw episodes, the extracted bi-temporal facts (live and
-    superseded, with provenance), and the L2 session summaries. This is the 'look inside my memory' view."""
+    """Browse stored memory.
+
+    Defaults to a share-safe view: non-sensitive facts plus content-free counts, with profile/raw episodes
+    omitted. Pass `include_sensitive=true` only for an explicit owner-visible inspection view with raw
+    episodes, summaries, profile, and sensitive facts.
+    """
     return svc().memories(
         user,
         facts_limit=facts_limit,
@@ -606,14 +612,15 @@ def resolve_conflict(conflict_id: str, req: ResolveReq, user: str = Depends(auth
 @app.get("/v1/graph")
 def graph(
     as_of: float | None = None,
-    include_sensitive: bool = True,
+    include_sensitive: bool = False,
     q: str = "",
     live_only: bool = False,
     limit: Optional[int] = None,
     user: str = Depends(auth),
 ):
     """Nodes (entities) + edges (bi-temporal relations) of this user's semantic graph.
-    `include_sensitive=false` omits edges backed by facts tagged sensitive."""
+    Defaults to a share-safe graph that omits edges backed by facts tagged sensitive. Pass
+    `include_sensitive=true` only for an explicit owner-visible graph inspection."""
     return svc().graph(
         user,
         as_of=as_of,
@@ -626,11 +633,13 @@ def graph(
 
 # --- ④ privacy: full data export (GDPR-style portability); erase is POST /v1/forget ---
 @app.get("/v1/export")
-def export(include_sensitive: bool = True, user: str = Depends(auth)):
-    """Download EVERYTHING stored for this user as a single JSON (data portability). Full fidelity:
-    every fact's bi-temporal stamps + provenance, raw episodes, summaries, profile, and focus.
-    `include_sensitive=false` returns a share-safe structured export: non-sensitive facts + their graph,
-    with free-text profile/episodes/summaries omitted."""
+def export(include_sensitive: bool = False, user: str = Depends(auth)):
+    """Download this user's memory as JSON (data portability).
+
+    Defaults to a share-safe structured export: non-sensitive facts + their graph, with free-text
+    profile/episodes/summaries omitted. Pass `include_sensitive=true` only for an explicit full private
+    export with every fact's bi-temporal stamps + provenance, raw episodes, summaries, profile, and focus.
+    """
     from fastapi.responses import JSONResponse
 
     data = svc().export(user, include_sensitive=include_sensitive)

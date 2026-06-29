@@ -1,5 +1,5 @@
 """Honest results reporter (CLAUDE.md Bet D): from a bench.py output JSONL, print the TRIPLE —
-accuracy + tokens + latency — per category and overall, for every system, next to the public SOTA.
+accuracy + tokens + latency — per category and overall, for every system in the log.
 
     python eval/report.py data/star.jsonl [more.jsonl ...]
 
@@ -12,11 +12,6 @@ from __future__ import annotations
 import json
 import sys
 from collections import defaultdict
-
-# Public LongMemEval_S leaderboard (overall), for context. These used each system's own harness/judge;
-# our numbers use the OFFICIAL category judge so they're comparable to within judge/answerer differences.
-SOTA = {"OMEGA": 95.4, "Mem0-2026": 94.4, "Hunyuan Hy-Memory": 85.2}
-
 
 def load(path: str) -> list[dict]:
     with open(path, encoding="utf-8") as fh:
@@ -161,16 +156,8 @@ def format_bench_report(path: str, rows: list[dict]) -> str:
     lines.append(line)
 
     is_personamem = any("pref_type" in r for r in rows)
-    if not is_personamem:
-        lines.append("\n  Public LongMemEval_S SOTA (overall):")
-        for name, score in SOTA.items():
-            best = max(overall.values()) if overall else 0.0
-            flag = ""
-            if best:
-                flag = "  <- WE BEAT THIS" if best >= score else f"  (gap {score - best:+.1f})"
-            lines.append(f"    {name:22s} {score:.1f}{flag}")
-    else:
-        lines.append("\n  Note: PersonaMem-v2 is a multiple-choice personalization benchmark; LongMemEval_S SOTA rows do not apply.")
+    if is_personamem:
+        lines.append("\n  Note: PersonaMem-v2 is a multiple-choice personalization benchmark; LongMemEval_S comparison rows do not apply.")
     lines.append("")
     return "\n".join(lines)
 

@@ -71,6 +71,8 @@ same discipline to larger corpora is the active roadmap, alongside the hardest c
 
 ```bash
 python examples/quickstart.py
+# or, after pip install:
+engram-quickstart
 ```
 
 Runs the full pipeline — ingest → consolidate → retrieve — using offline deterministic fallbacks (hashing
@@ -226,7 +228,8 @@ The TypeScript SDK's `engram.export()` uses that share-safe export by default; p
 `{ includeSensitive: true }` only for an explicit private export.
 For a user-facing "my memory" page, the SDK also exposes paged inspection:
 `engram.memories({ factsLimit, factsOffset, episodesLimit, status, query, includeSensitive })`.
-The standalone graph endpoint also supports `/v1/graph?include_sensitive=false`.
+The standalone graph endpoint is share-safe by default; pass `/v1/graph?include_sensitive=true` only for
+an explicit private graph inspection.
 
 **3. Batch import** — bring your whole history (ChatGPT export, OpenAI messages, JSONL, transcript;
 auto-detected):
@@ -280,8 +283,10 @@ flowchart TB
 and enqueues — no LLM on the critical path. **The consolidation path (System-2)**
 runs asynchronously: it extracts atomic `(subject, predicate, object)` facts, builds a knowledge graph, and
 resolves contradictions. **The read path** decomposes the question, retrieves through four complementary
-channels in parallel, fuses them with RRF (optional cross-encoder rerank), applies a point-in-time temporal filter, and assembles a
-dated, provenance-tagged context.
+channels in parallel, fuses positive evidence with RRF plus recency/salience priors (optional
+cross-encoder rerank), applies a point-in-time temporal filter, and assembles a dated,
+provenance-tagged context. For the algorithm-level contracts, see
+[`docs/algorithm-architecture.md`](docs/algorithm-architecture.md).
 
 ### What makes it different
 
@@ -290,9 +295,9 @@ dated, provenance-tagged context.
 | 1 | **Bi-temporal facts** — every fact carries *valid time* (true in the world) **and** *transaction time* (when we learned it) | Makes "what did we know on date T?" (`as_of`) and knowledge-updates **first-class**, not bolted-on. This is why knowledge-update scores 87.5% and temporal 81.1%. |
 | 2 | **Non-destructive conflict resolution** — a contradicted fact is *invalidated* (`invalid_at` + `supersedes` chain), never deleted | No silent memory corruption. Every fact answers "where did this come from?" and "what did it replace?" — full provenance + audit trail. |
 | 3 | **Cheap conflict detection** — slot-match + embedding/NLI heuristics, escalate to an LLM **only** when ambiguous | Production-grade temporal correctness **without** an LLM call per fact — the cost win at scale. |
-| 4 | **Hybrid retrieval** — dense semantic + BM25 lexical + graph proximity + recency/salience, fused with RRF | No single retriever wins everywhere. The *validated* finding: **facts + raw chunks beats either alone** — facts add conflict-resolved/temporal signal, chunks restore lost detail. |
+| 4 | **Hybrid retrieval** — dense semantic + BM25 lexical + graph proximity fused as positive evidence, with recency/salience as priors | No single retriever wins everywhere. The *validated* finding: **facts + raw chunks beats either alone** — facts add conflict-resolved/temporal signal, chunks restore lost detail. |
 | 5 | **Dual-process split** — fast write, async consolidation | Keeps graph-building, dedup, and conflict resolution off the critical path; read-path latency is measured in the harness before we publish claims. |
-| 6 | **Pluggable everything** — LLM / embedder / vector store / graph store all sit behind interfaces with **zero-dep offline fallbacks** | `quickstart.py` and `pytest` run with **no API keys, no services**. Swap in BGE / LanceDB / Kuzu / any LLM via one config line. |
+| 6 | **Pluggable everything** — LLM / embedder / vector store / graph store all sit behind interfaces with **zero-dep offline fallbacks** | `python scripts/check_zero_setup.py` runs with **no API keys, no services**; `pytest` covers the full unit suite when test dependencies are installed. Swap in BGE / LanceDB / Kuzu / any LLM via one config line. |
 | 7 | **The reproducible harness** — one neutral eval, official judge baked in, full-context baseline in every table, raw logs published | In a field where every vendor's number is contested, *being the scoreboard anyone can verify* is the real moat. |
 
 The full data model and conflict-resolution rules live in [`engram/types.py`](engram/types.py) and
@@ -301,7 +306,10 @@ The full data model and conflict-resolution rules live in [`engram/types.py`](en
 ## Reproduce the benchmark
 
 ```bash
-# 1. zero-dep smoke test + unit tests
+# 1. zero-dep smoke test: quickstart + offline harness + evidence validation
+python scripts/check_zero_setup.py
+
+# optional: full unit suite when test dependencies are installed
 pytest
 
 # 2. retrieval recall on the real haystack (no LLM needed)

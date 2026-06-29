@@ -10,7 +10,7 @@ import argparse
 import json
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 
 BENCH_REQUIRED_RESULT_KEYS = {"ok", "tok", "lat", "err"}
@@ -45,12 +45,14 @@ def validate_bench_log(
     *,
     expected_rows: int | None = None,
     require_complete: bool = False,
+    required_systems: Iterable[str] | None = None,
     schema: str = "bench",
 ) -> list[str]:
     """Return validation errors for a ``bench.py`` JSONL log.
 
-    ``require_complete`` is the standard for published/DONE evidence: every discovered system must have a
-    scored, non-error result on every row, with prediction and gold present.
+    ``require_complete`` is the standard for published/DONE evidence. By default every discovered system
+    must have a scored, non-error result on every row, with prediction and gold present. Pass
+    ``required_systems`` when only named systems from a multi-system log are being cited.
     """
     if schema not in SCHEMAS:
         return [f"{path}: unknown schema {schema!r}; expected one of {sorted(SCHEMAS)}"]
@@ -94,9 +96,13 @@ def validate_bench_log(
     if len(qids) != len(set(qids)):
         errors.append(f"{path}: duplicate qids")
     if require_complete:
-        if not systems:
+        systems_to_check = set(required_systems) if required_systems is not None else systems
+        if not systems_to_check:
             errors.append(f"{path}: no systems")
-        for system in sorted(systems):
+        for system in sorted(systems_to_check):
+            if system not in systems:
+                errors.append(f"{path}:{system}: missing from log")
+                continue
             scored = 0
             errored = 0
             missing = 0
@@ -167,6 +173,13 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="require every system to be scored with no errors on every row",
     )
+    ap.add_argument(
+        "--system",
+        action="append",
+        dest="systems",
+        default=None,
+        help="when --require-complete is set, only require this system to be complete; repeatable",
+    )
     args = ap.parse_args(argv)
 
     all_errors: list[str] = []
@@ -175,6 +188,7 @@ def main(argv: list[str] | None = None) -> int:
             log,
             expected_rows=args.expected_rows,
             require_complete=args.require_complete,
+            required_systems=args.systems,
             schema=args.schema,
         )
         if errors:

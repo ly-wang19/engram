@@ -69,7 +69,10 @@ class ProfileBuilder:
     """L3, deterministic floor: the user's current single-valued facts as an O(1) profile dict. Always
     available (no LLM), and the offline fallback for the narrative persona."""
 
-    _KEYS = {"works_at", "lives_in", "name", "born_in", "married_to", "occupation", "job_title", "age"}
+    _KEYS = {
+        "works_at", "lives_in", "name", "born_in", "married_to", "occupation", "job_title", "age",
+        "diet",
+    }
 
     def build(self, subject: str, live_facts: list[Fact]) -> dict[str, str]:
         # #7 profile authority: when two live facts share a slot, the authoritative (source="user") one wins,

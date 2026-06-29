@@ -26,12 +26,16 @@ _PRED_KEYWORDS: list[tuple[tuple[str, ...], str]] = [
     (("parent",), "parent"),
     (("child",), "child"),
     (("spouse", "wife", "husband", "partner"), "spouse"),
+    (("project", "projects", "initiative", "initiatives", "works_on", "worked_on"), "works_on"),
     (("work", "works", "working", "employer", "company", "job", "employed"), "works_at"),
     (("profession", "occupation", "role", "title"), "occupation"),
     (("live", "lives", "living", "city", "reside", "resides"), "lives_in"),
+    (("based", "located", "location", "headquarters", "headquarter", "hq"), "based_in"),
 ]
-_RELATION_PREDS = {"colleague", "sister", "brother", "mother", "father", "parent", "child", "spouse"}
-_ANSWER_ATTR_PREDS = {"works_at", "occupation", "lives_in"}
+_RELATION_PREDS = {"colleague", "sister", "brother", "mother", "father", "parent", "child", "spouse", "works_on"}
+_ANSWER_ATTR_PREDS = {"works_at", "occupation", "lives_in", "based_in"}
+_LOCATION_ATTR_PREDS = {"based_in", "located_in", "headquartered_in"}
+_PROJECT_REL_PREDS = {"works_on", "project", "worked_on", "built", "building"}
 
 
 @dataclass
@@ -77,6 +81,10 @@ class MultiHopPlanner:
             if pred not in seen:
                 ordered.append(pred)
                 seen.add(pred)
+        if not self.config.planner_project_chains:
+            ordered = [p for p in ordered if p not in _PROJECT_REL_PREDS]
+        if not self.config.planner_location_chains:
+            ordered = [p for p in ordered if p not in _LOCATION_ATTR_PREDS]
         rels = [p for p in ordered if p in _RELATION_PREDS]
         attrs = [p for p in ordered if p in _ANSWER_ATTR_PREDS]
         if rels and attrs:
@@ -149,6 +157,8 @@ class MultiHopPlanner:
                     if (
                         rel_pred == pred
                         or (pred == "works_at" and rel_pred.startswith("work"))
+                        or (pred == "works_on" and rel_pred in _PROJECT_REL_PREDS)
+                        or (pred == "based_in" and rel_pred in _LOCATION_ATTR_PREDS)
                         or (pred == "spouse" and rel_pred in {"wife", "husband", "partner"})
                     ):
                         fact = self._fact(rel.fact_id)

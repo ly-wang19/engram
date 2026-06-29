@@ -21,8 +21,14 @@ import argparse
 import json
 import os
 import re
+import sys
 import time
 from datetime import datetime, timezone
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 from engram import Memory
 from engram.util import DAY, fmt_date
@@ -88,7 +94,11 @@ def pick_featured(items: list[dict], per_cat: int) -> set[int]:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--data", required=True, help="path to longmemeval_s json")
-    ap.add_argument("--out", default="/tmp/console_pkls")
+    ap.add_argument(
+        "--out",
+        default="/tmp/console_stores",
+        help="directory for generated per-user JSONL store directories",
+    )
     ap.add_argument("--embedder", default="bge-small")
     ap.add_argument("--llm", default="volcano:doubao-seed-1-6-flash-250615")
     ap.add_argument("--featured-per-cat", type=int, default=3)

@@ -15,6 +15,10 @@ from ..types import Episode, Fact
 _FILLER = {"too", "now", "also", "currently", "anymore", "though", "well", "as",
            "right", "these", "days", "nowadays", "actually"}
 _PRONOUNS = {"i", "my", "me", "myself", "we", "actually", "then", "and", "but", "so", "also", "now"}
+_NON_OCCUPATIONS = {
+    "awesome", "cool", "exciting", "fine", "fun", "good", "great", "nice", "noted", "ok", "okay",
+    "wonderful",
+}
 
 _CLAUSE_SPLIT = re.compile(r"\n+|[.!?。！？]+(?:\s+|$)|,|;| and | but |—|--|\bthen\b", re.I)
 _FAMILY = "sister|brother|mother|father|parent|child|spouse|wife|husband|partner"
@@ -38,7 +42,12 @@ def _clean_role(s: str) -> str:
 
 def _clean_location(s: str) -> str:
     """Keep the destination head from movement clauses."""
-    return _clean_obj(re.split(r"\b(?:for|with|after|before)\b", s, 1, flags=re.I)[0])
+    return _clean_obj(re.split(
+        r"\b(?:next|this|last)\s+(?:week|month|year)|\b(?:for|with|after|before)\b",
+        s,
+        1,
+        flags=re.I,
+    )[0])
 
 
 def _slug(s: str) -> str:
@@ -98,30 +107,54 @@ class RuleExtractor:
             out.append(self._mk(m.group(1), "agent_instruction", _clean_obj("should " + m.group(2)), ep))
             return out
 
-        # 1. name -> just register identity, emit no SPO fact
+        # 1. Movement + purpose. This must run before name detection, otherwise "I'm moving..." looks like
+        # the user's name is "moving" to the tiny offline extractor.
+        m = re.search(r"\b(?:i'?m|i am|we'?re|we are)?\s*(?:moving|relocating) to (.+)", clause, re.I)
+        if m:
+            dest = _clean_location(m.group(1))
+            if dest:
+                out.append(self._mk(self._subject(clause, ep), "lives_in", dest, ep))
+            job = re.search(r"\bfor (?:a |an |the )?job at (.+)", clause, re.I)
+            if job:
+                out.append(self._mk(self._subject(clause, ep), "works_at", _clean_obj(job.group(1)), ep))
+            return out
+
+        # 2. Dietary restrictions and allergies.
+        m = re.search(r"\ballergic to (.+)", clause, re.I)
+        if m:
+            out.append(self._mk(self._subject(clause, ep), "allergic_to", _clean_obj(m.group(1)), ep))
+            return out
+        if re.search(r"\b(?:i'?m|i am|we'?re|we are)?\s*vegetarian\b", clause, re.I):
+            out.append(self._mk(self._subject(clause, ep), "diet", "vegetarian", ep))
+            return out
+
+        # 3. name -> just register identity, emit no SPO fact
         m = (
             re.search(r"\bmy name is (\w[\w'-]*)", clause, re.I)
             or re.search(r"\bi am (\w[\w'-]*)\b", clause, re.I)
             or re.search(r"\bi'?m (\w[\w'-]*)\b", clause, re.I)
         )
-        if m and m.group(1).lower() not in {"a", "an", "the", "not", "working", "going", "into", "fond", "fan"}:
+        if m and m.group(1).lower() not in {
+            "a", "an", "the", "not", "working", "going", "moving", "relocating", "into", "fond", "fan",
+            "vegetarian",
+        }:
             self.self_name[ep.user_id] = m.group(1)
             return out
 
-        # 2. "my colleague Lin works at Moonshot AI" -> colleague edge + Lin's employer
+        # 4. "my colleague Lin works at Moonshot AI" -> colleague edge + Lin's employer
         m = re.search(r"\bmy (?:colleague|coworker|co-worker|friend) (\w+) works? (?:at|for) (.+)", clause, re.I)
         if m:
             out.append(self._mk(self.self_of(ep.user_id), "colleague", m.group(1), ep))
             out.append(self._mk(m.group(1), "works_at", _clean_obj(m.group(2)), ep))
             return out
 
-        # 3. plain colleague mention
+        # 5. plain colleague mention
         m = re.search(r"\bmy (?:colleague|coworker|co-worker|friend) (?:is )?(\w+)", clause, re.I)
         if m:
             out.append(self._mk(self.self_of(ep.user_id), "colleague", m.group(1), ep))
             return out
 
-        # 4. "my sister Maya is a pediatrician" -> family edge + Maya's occupation
+        # 6. "my sister Maya is a pediatrician" -> family edge + Maya's occupation
         m = re.search(rf"\bmy ({_FAMILY}) (\w+) is (?:an? |the )?(.+)", clause, re.I)
         if m:
             rel, name, role = m.group(1).lower(), m.group(2), _clean_role(m.group(3))
@@ -130,25 +163,25 @@ class RuleExtractor:
                 out.append(self._mk(name, "occupation", role, ep))
             return out
 
-        # 5. plain family mention
+        # 7. plain family mention
         m = re.search(rf"\bmy ({_FAMILY}) (?:is )?(\w+)", clause, re.I)
         if m:
             out.append(self._mk(self.self_of(ep.user_id), m.group(1).lower(), m.group(2), ep))
             return out
 
-        # 6. "Maya moved to Seattle" / "Maya relocated to Seattle" -> current location
+        # 8. "Maya moved to Seattle" / "Maya relocated to Seattle" -> current location
         m = re.search(r"\b(?:moved|relocated) to (.+)", clause, re.I)
         if m:
             out.append(self._mk(self._subject(clause, ep), "lives_in", _clean_location(m.group(1)), ep))
             return out
 
-        # 7. "my favorite X is Y" (favou?rite matches both "favorite" and "favourite")
+        # 9. "my favorite X is Y" (favou?rite matches both "favorite" and "favourite")
         m = re.search(r"\bfavou?rite (.+?) (?:is|are) (.+)", clause, re.I)
         if m:
             out.append(self._mk(self._subject(clause, ep), "favorite_" + _slug(m.group(1)), _clean_obj(m.group(2)), ep))
             return out
 
-        # 8. "I am a fan of jazz" / "I'm into synthwave" -> preference, not occupation.
+        # 10. "I am a fan of jazz" / "I'm into synthwave" -> preference, not occupation.
         m = (
             re.search(rf"\b{_I_AM}\s+(?:an? )?fan of (.+)", clause, re.I)
             or re.search(rf"\b{_I_AM}\s+(?:really )?into (.+)", clause, re.I)
@@ -158,7 +191,7 @@ class RuleExtractor:
             out.append(self._mk(self._subject(clause, ep), "likes", _clean_obj(m.group(1)), ep))
             return out
 
-        # 9. "Maya is a pediatrician" / "I work as a designer" -> occupation
+        # 11. "Maya is a pediatrician" / "I work as a designer" -> occupation
         m = (
             re.search(r"\bworks? as (?:an? |the )?(.+)", clause, re.I)
             or re.search(r"\bi am (?:an? |the )(.+)", clause, re.I)
@@ -167,17 +200,21 @@ class RuleExtractor:
         )
         if m:
             role = _clean_role(m.group(1))
-            if role and role.lower() not in {"my", "your", "his", "her", "their"} and "fan of" not in role.lower():
+            if (
+                role
+                and role.lower() not in {"my", "your", "his", "her", "their", *_NON_OCCUPATIONS}
+                and "fan of" not in role.lower()
+            ):
                 out.append(self._mk(self._subject(clause, ep), "occupation", role, ep))
                 return out
 
-        # 10. "<subj> works at Y"
+        # 12. "<subj> works at Y"
         m = re.search(r"\bworks? (?:at|for) (.+)", clause, re.I)
         if m:
             out.append(self._mk(self._subject(clause, ep), "works_at", _clean_obj(m.group(1)), ep))
             return out
 
-        # 11. "<subj> lives in Y"
+        # 13. "<subj> lives in Y"
         m = re.search(r"\blives? in (.+)", clause, re.I)
         if m:
             out.append(self._mk(self._subject(clause, ep), "lives_in", _clean_obj(m.group(1)), ep))

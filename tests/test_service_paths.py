@@ -102,7 +102,7 @@ def test_service_close_session_grooms_one_session_and_clears_working(tmp_path):
 
     stats = svc.stats("u")
     assert stats["counts"]["episodes_pending"] == 0
-    dump = svc.memories("u")
+    dump = svc.memories("u", include_sensitive=True)
     assert dump["counts"]["summaries"] == 1
     assert dump["episodes"][0]["summary"]
 
@@ -221,7 +221,7 @@ def test_service_write_lock_preserves_external_process_writes(tmp_path):
     assert child_msg == {"ok": True, "extracted": 1}
 
     reloaded = MemoryService(data_dir=str(tmp_path), embedder_name="hashing", llm_name="")
-    rendered = str(reloaded.memories(user))
+    rendered = str(reloaded.memories(user, include_sensitive=True))
     assert "parent-write-alpha" in rendered
     assert "child-write-beta" in rendered
     assert reloaded.working_memory(user, session_id=parent_session)["items"][0]["content"] == "parent temporary state"
@@ -347,6 +347,7 @@ def test_service_memories_and_export_include_cold_facts(tmp_path):
     assert {f["object"] for f in memories["facts"]} == {"cold-value", "hot-value"}
 
     exported = svc.export("u")
+    assert exported["include_sensitive"] is False
     assert {f["object"] for f in exported["facts"]} == {"cold-value", "hot-value"}
 
 

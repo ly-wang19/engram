@@ -8,6 +8,11 @@ from collections import Counter
 from pathlib import Path
 
 from eval.validate_results import validate_bench_log
+from scripts.check_zero_setup import (
+    EVIDENCE_REQUIREMENTS,
+    format_public_evidence_requirements,
+    public_evidence_logs,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -65,6 +70,53 @@ def test_results_md_raw_log_links_exist():
     assert links
     for link in links:
         assert (ROOT / link).exists(), link
+
+
+def test_zero_setup_audits_results_md_evidence_logs():
+    evidence = {path.relative_to(ROOT).as_posix() for path in public_evidence_logs()}
+    results_links = set(
+        re.findall(
+            r"\]\((results/[^)]+\.jsonl)\)",
+            (ROOT / "RESULTS.md").read_text(encoding="utf-8"),
+        )
+    )
+
+    assert results_links <= evidence
+    assert "results/headline_500.jsonl" in evidence
+    assert "results/bb_flash.jsonl" in evidence
+
+
+def test_results_md_evidence_logs_have_validation_requirements():
+    results_links = set(
+        re.findall(
+            r"\]\((results/[^)]+\.jsonl)\)",
+            (ROOT / "RESULTS.md").read_text(encoding="utf-8"),
+        )
+    )
+    requirements = {path.relative_to(ROOT).as_posix() for path in EVIDENCE_REQUIREMENTS}
+
+    assert results_links <= requirements
+    for rel in results_links:
+        systems = EVIDENCE_REQUIREMENTS[ROOT / rel]
+        assert systems, f"{rel} must name at least one required citable system"
+
+
+def test_zero_setup_prints_system_scoped_evidence_requirements():
+    text = format_public_evidence_requirements(public_evidence_logs())
+
+    assert "public evidence requirements" in text
+    assert "results/longmemeval_s_volcano_doubao_deepseekjudge.jsonl: require full_context" in text
+    assert "engram_full" not in text
+    assert "invalid" not in text.lower()
+
+
+def test_public_evidence_docs_explain_system_scoped_validation():
+    for rel in ("CONTRIBUTING.md", "RESULTS.md", "eval/README.md", "results/README.md"):
+        text = (ROOT / rel).read_text(encoding="utf-8")
+        assert "--system" in text, f"{rel} must document system-scoped evidence validation"
+
+    results = (ROOT / "RESULTS.md").read_text(encoding="utf-8")
+    assert "--system engram_lean --system full_context" in results
 
 
 def test_paper_done_result_logs_are_complete_and_scored():
@@ -248,16 +300,41 @@ def test_public_copy_avoids_unmeasured_scale_or_latency_claims():
         "under 50ms",
         "~50ms",
     )
-    for rel in ("README.md", "README.zh-CN.md", "RESULTS.md", "docs/index.html"):
+    for rel in ("README.md", "README.zh-CN.md", "RESULTS.md", "docs/index.html", "demo/index.html"):
         text = (ROOT / rel).read_text(encoding="utf-8")
         lowered = text.lower()
         for phrase in forbidden:
             assert phrase.lower() not in lowered, f"{phrase!r} found in {rel}"
 
 
+def test_public_copy_avoids_competitor_leaderboard_positioning():
+    forbidden = (
+        "OMEGA",
+        "Mem0-2026",
+        "Hunyuan",
+        "SOTA",
+        "Public LongMemEval_S SOTA",
+        "WE BEAT THIS",
+        "对标腾讯",
+    )
+    public_surfaces = (
+        "README.md",
+        "README.zh-CN.md",
+        "RESULTS.md",
+        "docs/index.html",
+        "demo/index.html",
+        "frontend/README.md",
+        "eval/report.py",
+    )
+    for rel in public_surfaces:
+        text = (ROOT / rel).read_text(encoding="utf-8")
+        for phrase in forbidden:
+            assert phrase not in text, f"{phrase!r} found in {rel}"
+
+
 def test_public_headline_claims_are_traceable_to_results():
     expected_claims = ("83.6", "73.2", "9.6k", "79k")
-    for rel in ("README.md", "README.zh-CN.md", "docs/index.html"):
+    for rel in ("README.md", "README.zh-CN.md", "docs/index.html", "demo/index.html"):
         text = (ROOT / rel).read_text(encoding="utf-8")
         for claim in expected_claims:
             assert claim in text, f"{claim!r} missing from {rel}"
@@ -284,7 +361,7 @@ def test_public_derived_headline_claims_match_raw_logs():
     assert accuracy_delta == 10.4
     assert token_ratio == 8
 
-    docs = ("README.md", "README.zh-CN.md", "RESULTS.md", "docs/index.html")
+    docs = ("README.md", "README.zh-CN.md", "RESULTS.md", "docs/index.html", "demo/index.html")
     for rel in docs:
         text = (ROOT / rel).read_text(encoding="utf-8")
         assert "+10.4" in text, f"derived accuracy delta missing from {rel}"

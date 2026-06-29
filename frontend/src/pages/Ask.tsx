@@ -4,6 +4,7 @@ import { MessageSquare, Search, Sparkles, Zap } from 'lucide-react'
 import { Button, Card, EmptyState, ErrorState, PageHeader, Spinner } from '../components/ui'
 import { useRecall } from '../hooks/queries'
 import { useT } from '../i18n'
+import { copyText } from '../lib/clipboard'
 import type { Dict } from '../i18n/en'
 import { toast } from '../components/Toast'
 
@@ -140,8 +141,12 @@ export default function Ask() {
                 <Button
                   variant="ghost"
                   onClick={async () => {
-                    await navigator.clipboard?.writeText(result.answer || '')
-                    toast.success(t.common.copied)
+                    try {
+                      await copyText(result.answer || '')
+                      toast.success(t.common.copied)
+                    } catch {
+                      toast.error(t.common.copyFailed)
+                    }
                   }}
                 >
                   {t.ask.copyAnswer}
@@ -184,8 +189,12 @@ export default function Ask() {
                   <Button
                     variant="ghost"
                     onClick={async () => {
-                      await navigator.clipboard?.writeText(result.context)
-                      toast.success(t.common.copied)
+                      try {
+                        await copyText(result.context)
+                        toast.success(t.common.copied)
+                      } catch {
+                        toast.error(t.common.copyFailed)
+                      }
                     }}
                   >
                     {t.ask.copyContext}

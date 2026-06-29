@@ -96,6 +96,41 @@ def test_duplicate_live_identity_slot_reads_current_head():
     assert "moonshot" in mem.search("Where does Wei work?", user_id="u1").answer().lower()
 
 
+def test_duplicate_live_slot_for_non_identity_single_valued_predicate_reads_current_head():
+    """The slot-head dedup covers ALL single-valued predicates, not just the small _IDENTITY_PREDS list.
+    A predicate like `major` is single-valued (state) but not in the identity set — two live payloads
+    for the same slot must still collapse to the current head instead of competing in fusion."""
+    mem = Memory(config=Config(w_sem=0.0, w_lex=0.0, w_graph=0.0, w_rec=0.0, w_sal=1.0))
+    old = Fact(
+        "Wei",
+        "major",
+        "physics",
+        user_id="u1",
+        valid_at=BASE,
+        salience=100.0,
+        embedding=mem.embedder.embed("Wei major physics"),
+    )
+    new = Fact(
+        "Wei",
+        "major",
+        "computer science",
+        user_id="u1",
+        valid_at=BASE + DAY,
+        salience=1.0,
+        supersedes=old.id,
+        embedding=mem.embedder.embed("Wei major computer science"),
+    )
+    mem.fact_store.upsert(old.id, old.embedding or [], old)
+    mem.fact_store.upsert(new.id, new.embedding or [], new)
+
+    ranked, _ = mem.retriever.retrieve(
+        "What is Wei's major?", mem.resolver.resolve("u1"), top_k=5
+    )
+    objs = {f.object for f, _ in ranked}
+    assert "computer science" in objs
+    assert "physics" not in objs
+
+
 def test_multi_valued_identity_facts_are_not_slot_deduped():
     mem = Memory()
     mem.add_fact("Wei", "owns", "a bike", user_id="u1")
@@ -103,6 +138,40 @@ def test_multi_valued_identity_facts_are_not_slot_deduped():
 
     ranked, _ = mem.retriever.retrieve("What does Wei own?", mem.resolver.resolve("u1"), top_k=5)
     assert {f.object for f, _ in ranked} >= {"a bike", "a camera"}
+
+
+def test_zero_score_evidence_signals_do_not_boost_irrelevant_salient_facts():
+    """RRF should fuse evidence, not arbitrary zero-score positions.
+
+    The target is the only lexical hit. The distractor has very high salience but zero lexical evidence.
+    If the lexical ranking includes zero-score docs, the distractor borrows almost the same lexical RRF
+    contribution as the true hit and can outrank it. Filtering zero evidence keeps relevance first.
+    """
+    mem = Memory(config=Config(w_sem=0.0, w_lex=1.0, w_graph=0.0, w_rec=0.0, w_sal=0.6))
+    target = Fact(
+        "Wei",
+        "ticket_code",
+        "alpha-42",
+        user_id="u1",
+        salience=0.1,
+        embedding=mem.embedder.embed("Wei ticket code alpha 42"),
+    )
+    distractor = Fact(
+        "Wei",
+        "likes",
+        "jazz",
+        user_id="u1",
+        salience=100.0,
+        embedding=mem.embedder.embed("Wei likes jazz"),
+    )
+    mem.fact_store.upsert(target.id, target.embedding or [], target)
+    mem.fact_store.upsert(distractor.id, distractor.embedding or [], distractor)
+
+    ranked, diag = mem.retriever.retrieve("ticket code alpha", mem.resolver.resolve("u1"), top_k=2)
+
+    assert ranked[0][0] is target
+    assert diag["lex"][target.id] > 0
+    assert diag["lex"][distractor.id] == 0
 
 
 def test_project_rules_are_structured_multi_value_memory():
@@ -274,3 +343,55 @@ def test_first_person_fan_of_is_preference_not_occupation():
     assert ("u1", "likes", "jazz") in facts
     assert ("u1", "likes", "synthwave") in facts
     assert "occupation" not in {p for _, p, _ in facts}
+
+
+def test_import_style_moving_and_dietary_restrictions_extract_cleanly():
+    mem = Memory()
+    mem.add("I'm moving to Berlin next month for a job at Acme.", user_id="u1", event_time=BASE)
+    mem.add("By the way, I'm vegetarian and allergic to peanuts.", user_id="u1", event_time=BASE + DAY)
+    mem.consolidate()
+
+    facts = {(f.subject, f.predicate, f.object) for f in mem.fact_store.values()}
+    assert ("u1", "lives_in", "Berlin") in facts
+    assert ("u1", "works_at", "Acme") in facts
+    assert ("u1", "diet", "vegetarian") in facts
+    assert ("u1", "allergic_to", "peanuts") in facts
+
+    profile = mem.structured_profile("u1")
+    dietary_items = [it for items in profile["preferences"].values() for it in items]
+    assert any(it["predicate"] == "diet" and it["item"] == "vegetarian" for it in dietary_items)
+    assert any(it["predicate"] == "allergic_to" and it["item"] == "peanuts" for it in dietary_items)
+
+
+def test_assistant_small_talk_is_not_profile_occupation():
+    mem = Memory()
+    mem.add("Exciting! Berlin is great.", user_id="u1", speaker="assistant", event_time=BASE)
+    mem.consolidate()
+
+    facts = {(f.subject, f.predicate, f.object) for f in mem.fact_store.values()}
+    assert ("Berlin", "occupation", "great") not in facts
+    assert "occupation" not in {p for _, p, _ in facts}
+
+
+def test_stemmer_aligns_inflections_for_lexical_retrieval():
+    """The BM25 lexical scorer and offline HashingEmbedder both build on stem(). Plurals and -y/-ies
+    inflections must reduce to a shared stem or lexical retrieval silently misses matches."""
+    from engram.util import stem, stems
+
+    assert stem("works") == stem("work")
+    assert stem("colleagues") == stem("colleague")
+    assert stem("studies") == stem("study")
+    assert stem("cities") == stem("city")
+    assert stem("salaries") == stem("salary")
+    assert stem("companies") == stem("company")
+    assert stem("carries") == stem("carry")
+
+    # Short base forms ending in -ies are NOT -y inflections (tie/lies/dies/pies) — the bare -s strip
+    # keeps them aligned with their singular, never collapsed to a -y stem.
+    assert stem("ties") == stem("tie")
+    assert stem("lies") == stem("lie")
+    assert stem("dies") == stem("die")
+
+    # Sanity: stems() runs the rule across a free-form query
+    q_stems = set(stems("Which cities did Wei study in?"))
+    assert "city" in q_stems and "studi" not in q_stems  # studi only if -ies rule failed
