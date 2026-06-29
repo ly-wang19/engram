@@ -1469,6 +1469,171 @@ class Memory:
                         return "GRAPH PATHS (relation evidence):\n" + "\n".join(lines)
         return "GRAPH PATHS (relation evidence):\n" + "\n".join(lines) if lines else ""
 
+    @staticmethod
+    def _evidence_block_title(block: str) -> str:
+        return block.split("\n", 1)[0].rstrip(":")
+
+    @classmethod
+    def _evidence_block_kind(cls, block: str) -> str:
+        title = cls._evidence_block_title(block)
+        if title.startswith("PROVENANCE RAW"):
+            return "provenance"
+        if title.startswith("RELEVANT CONVERSATIONS"):
+            return "raw"
+        if title.startswith("GRAPH PATHS"):
+            return "graph"
+        if title.startswith("AGGREGATION"):
+            return "aggregation"
+        if title.startswith("DURATION"):
+            return "duration"
+        if title.startswith("FACT HISTORY"):
+            return "history"
+        if title.startswith("FACT EVOLUTION"):
+            return "evolution"
+        if title.startswith("CURRENT STATE"):
+            return "current_state"
+        if title.startswith("PREFERENCE RECORDS"):
+            return "preference"
+        if title.startswith("FACTS"):
+            return "facts"
+        if title.startswith("SESSION SUMMARIES"):
+            return "summaries"
+        if title.startswith("TIMELINE"):
+            return "timeline"
+        if title.startswith("WORKING MEMORY"):
+            return "working"
+        if title.startswith("USER PROFILE"):
+            return "profile"
+        return "other"
+
+    @staticmethod
+    def _fit_evidence_block(block: str, cap: int) -> str:
+        if cap <= 0:
+            return ""
+        if len(block) <= cap:
+            return block
+        title, _, body = block.partition("\n")
+        if cap <= len(title):
+            return title[:cap]
+        return (title + "\n" + body[: cap - len(title) - 1]).rstrip()
+
+    def _evidence_priority(self, kind: str, need) -> int:
+        score = {
+            "working": 95,
+            "facts": 90,
+            "current_state": 88,
+            "provenance": 82,
+            "raw": 78,
+            "graph": 76,
+            "history": 75,
+            "evolution": 72,
+            "timeline": 68,
+            "aggregation": 66,
+            "duration": 66,
+            "preference": 66,
+            "summaries": 58,
+            "profile": 38,
+            "other": 40,
+        }.get(kind, 40)
+        if need is None:
+            return score
+        if need.exact_lookup:
+            score += {"provenance": 45, "raw": 35, "facts": 20}.get(kind, 0)
+        if need.multi_hop:
+            score += {"graph": 45, "facts": 25, "provenance": 15, "raw": 12}.get(kind, 0)
+        if need.aggregation:
+            score += {"aggregation": 55, "raw": 35, "summaries": 30, "facts": 10}.get(kind, 0)
+        if need.duration:
+            score += {"duration": 55, "raw": 35, "timeline": 25, "summaries": 15}.get(kind, 0)
+        if need.history:
+            score += {"history": 55, "evolution": 40, "timeline": 20, "facts": 15}.get(kind, 0)
+        if need.current_state:
+            score += {"current_state": 45, "facts": 20, "evolution": 20}.get(kind, 0)
+        if need.preference:
+            score += {"preference": 45, "facts": 18, "provenance": 12, "raw": 10}.get(kind, 0)
+        if need.timeline:
+            score += {"timeline": 35, "history": 15, "facts": 10}.get(kind, 0)
+        return score
+
+    def _evidence_block_cap(self, kind: str, budget: int, need) -> int:
+        ratio = {
+            "aggregation": 0.60,
+            "duration": 0.55,
+            "provenance": 0.55,
+            "raw": 0.55,
+            "graph": 0.45,
+            "history": 0.45,
+            "evolution": 0.42,
+            "facts": 0.42,
+            "timeline": 0.35,
+            "summaries": 0.35,
+            "current_state": 0.35,
+            "preference": 0.35,
+            "working": 0.25,
+            "profile": 0.18,
+            "other": 0.25,
+        }.get(kind, 0.25)
+        if need is not None and need.exact_lookup and kind in {"provenance", "raw"}:
+            ratio = 0.75
+        if need is not None and need.aggregation and kind == "aggregation":
+            ratio = 0.75
+        cap = int(max(96, budget * ratio))
+        return min(cap, budget)
+
+    def _fit_blocks_even(self, selected: list[str], budget: int) -> str:
+        if not selected or budget <= 0:
+            return ""
+        sep = "\n\n"
+        sep_chars = len(sep) * (len(selected) - 1)
+        if budget <= sep_chars:
+            return sep.join(block.split("\n", 1)[0] for block in selected)[:budget]
+        available = budget - sep_chars
+        quota, extra = divmod(available, len(selected))
+        fitted: list[str] = []
+        for i, block in enumerate(selected):
+            cap = quota + (1 if i < extra else 0)
+            fitted.append(self._fit_evidence_block(block, cap))
+        return sep.join(fitted)[:budget]
+
+    def _fit_blocks_by_evidence_budget(self, blocks: list[str], budget: int, need) -> str:
+        """Intent-aware evidence packer for the lean read path.
+
+        The old fallback split a tight budget evenly across blocks or raw-truncated from the top, which
+        can spend precious tokens on profile text while dropping the exact raw/provenance/graph evidence
+        the question needs. This ranks evidence classes by query intent, caps each class, and then emits
+        the selected evidence in the original readable order.
+        """
+        if not blocks or budget <= 0:
+            return ""
+        sep = "\n\n"
+        ranked = sorted(
+            enumerate(blocks),
+            key=lambda item: (-self._evidence_priority(self._evidence_block_kind(item[1]), need), item[0]),
+        )
+        selected: list[tuple[int, str]] = []
+        used = 0
+        for idx, block in ranked:
+            kind = self._evidence_block_kind(block)
+            priority = self._evidence_priority(kind, need)
+            sep_cost = len(sep) if selected else 0
+            remaining = budget - used - sep_cost
+            if remaining <= 0:
+                break
+            if selected and remaining < 120 and priority < 100:
+                continue
+            cap = min(len(block), self._evidence_block_cap(kind, budget, need), remaining)
+            fitted = self._fit_evidence_block(block, cap)
+            if not fitted:
+                continue
+            min_title = self._evidence_block_title(block)
+            if selected and len(fitted) < min(len(min_title), max(24, remaining)):
+                continue
+            selected.append((idx, fitted))
+            used += sep_cost + len(fitted)
+        if not selected:
+            return self._fit_evidence_block(blocks[0], budget)
+        return sep.join(block for _, block in sorted(selected, key=lambda item: item[0]))[:budget]
+
     def lean_context(
         self,
         query: str,
@@ -1715,29 +1880,8 @@ class Memory:
             if agg:
                 blocks.append(agg)
 
-        def fit_blocks(selected: list[str], budget: int) -> str:
-            if not selected or budget <= 0:
-                return ""
-            sep = "\n\n"
-            sep_chars = len(sep) * (len(selected) - 1)
-            if budget <= sep_chars:
-                return sep.join(block.split("\n", 1)[0] for block in selected)[:budget]
-            available = budget - sep_chars
-            quota, extra = divmod(available, len(selected))
-            fitted: list[str] = []
-            for i, block in enumerate(selected):
-                cap = quota + (1 if i < extra else 0)
-                if len(block) <= cap:
-                    fitted.append(block)
-                    continue
-                title, _, body = block.partition("\n")
-                if cap <= len(title):
-                    fitted.append(title[:cap])
-                else:
-                    fitted.append((title + "\n" + body[: cap - len(title) - 1]).rstrip())
-            return sep.join(fitted)[:budget]
-
         assembled = "\n\n".join(blocks)
+        default_budget = char_budget == 60_000
         if char_budget == 60_000:
             full_chars = sum(len(ep.content) for ep in self.episodes_doc.values() if ep.user_id == user)
             if full_chars:
@@ -1745,7 +1889,11 @@ class Memory:
                 # even block fitter can cut short durable project rules exactly where the constraint lives.
                 char_budget = min(char_budget, max(2048, full_chars * 3 - 1))
             if len(assembled) > char_budget:
-                return fit_blocks(blocks, char_budget)
+                if self.config.evidence_budgeting:
+                    return self._fit_blocks_by_evidence_budget(blocks, char_budget, need)
+                return self._fit_blocks_even(blocks, char_budget)
+        elif len(assembled) > char_budget and self.config.evidence_budgeting:
+            return self._fit_blocks_by_evidence_budget(blocks, char_budget, need)
         return assembled[:char_budget]
 
     # --- read path ---
