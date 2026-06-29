@@ -148,6 +148,14 @@ def _planner_location_context(enabled: bool) -> str:
     return res.answer()
 
 
+def _planner_project_context(enabled: bool) -> str:
+    mem = Memory(config=Config(planner_project_chains=enabled))
+    mem.add_fact("Wei", "works_on", "Atlas", user_id="u1", valid_at=BASE)
+    mem.add_fact("Atlas", "based_in", "Reykjavik", user_id="u1", valid_at=BASE + DAY)
+    res = mem.search("Where is Wei's project based?", user_id="u1")
+    return res.answer()
+
+
 def _contains(marker: str, target: str):
     return lambda ctx: marker in ctx and target in ctx
 
@@ -215,6 +223,12 @@ def run_ablation() -> tuple[list[AblationResult], dict]:
             _planner_location_context,
             lambda answer: "Beijing" in answer,
             "multi-hop planner reaches company location",
+        ),
+        (
+            "planner_project_chains",
+            _planner_project_context,
+            lambda answer: "Reykjavik" in answer,
+            "multi-hop planner reaches project location",
         ),
     ]
     rows: list[AblationResult] = []

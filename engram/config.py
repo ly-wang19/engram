@@ -47,6 +47,7 @@ class Config:
     graph_entity_alias_anchor: bool = True  # anchor unique entity-name/alias tokens (e.g. "Moonshot" -> Moonshot AI)
     graph_negative_constraints: bool = True  # honor not/except/excluding entity constraints in graph retrieval
     planner_location_chains: bool = True  # let multi-hop planner answer based_in/located_in/headquarters chains
+    planner_project_chains: bool = True  # let multi-hop planner walk works_on/project -> based_in chains
 
     # --- consolidation ---
     salience_decay_per_day: float = 0.02

@@ -1131,6 +1131,32 @@ def test_multihop_planner_location_chain_can_be_disabled_for_ablation():
     assert [f.predicate for f in res.facts] == ["colleague", "works_at"]
 
 
+def test_multihop_planner_reaches_project_location_chain():
+    mem = Memory()
+    mem.add_fact("Wei", "works_on", "Atlas", user_id="u1", valid_at=BASE)
+    mem.add_fact("Atlas", "based_in", "Reykjavik", user_id="u1", valid_at=BASE + DAY)
+
+    res = mem.search("Where is Wei's project based?", user_id="u1")
+
+    assert res.via == "multi-hop"
+    assert "reykjavik" in res.answer().lower()
+    assert [f.predicate for f in res.facts] == ["works_on", "based_in"]
+
+
+def test_multihop_planner_project_chain_can_be_disabled_for_ablation():
+    from engram.config import Config
+
+    mem = Memory(config=Config(planner_project_chains=False))
+    mem.add_fact("Wei", "works_on", "Atlas", user_id="u1", valid_at=BASE)
+    mem.add_fact("Atlas", "based_in", "Reykjavik", user_id="u1", valid_at=BASE + DAY)
+
+    res = mem.search("Where is Wei's project based?", user_id="u1")
+
+    assert res.via == "hybrid"
+    assert "atlas" in res.answer().lower()
+    assert "reykjavik" not in res.answer().lower()
+
+
 def test_bench_preconsolidation_uses_multi_hop_subqueries():
     from engram.types import Episode
     from eval.bench import retrieve_evidence_episodes
