@@ -10,7 +10,11 @@ def test_engram_config_applies_algorithm_ablation_flags():
     assert cfg.graph_proximity is False
     assert cfg.graph_relation_awareness is True
     assert cfg.graph_negative_constraints is False
+    assert cfg.evidence_budgeting is True
     assert cfg.evidence_planner is True
+
+    budget_cfg = engram_config(ablations=("evidence_budget",))
+    assert budget_cfg.evidence_budgeting is False
 
     relation_cfg = engram_config(ablations=("graph_relation",))
     assert relation_cfg.graph_proximity is True
@@ -43,6 +47,7 @@ def test_bench_exposes_named_lean_ablation_systems():
     names = {
         "engram_lean_no_chain",
         "engram_lean_no_raw",
+        "engram_lean_no_evidence_budget",
         "engram_lean_no_graph",
         "engram_lean_no_graph_relation",
         "engram_lean_no_graph_reinforcement",
@@ -57,6 +62,7 @@ def test_bench_exposes_named_lean_ablation_systems():
     assert names <= set(SYSTEMS)
     assert SYSTEMS["engram_lean_no_chain"].ablations == ("chain",)
     assert SYSTEMS["engram_lean_no_raw"].ablations == ("raw",)
+    assert SYSTEMS["engram_lean_no_evidence_budget"].ablations == ("evidence_budget",)
     assert SYSTEMS["engram_lean_no_graph"].ablations == ("graph",)
     assert SYSTEMS["engram_lean_no_graph_relation"].ablations == ("graph_relation",)
     assert SYSTEMS["engram_lean_no_graph_reinforcement"].ablations == ("graph_reinforcement",)
@@ -71,11 +77,12 @@ def test_bench_exposes_named_lean_ablation_systems():
 def test_offline_feature_ablation_proves_each_enabled_feature_adds_evidence():
     rows, summary = run_ablation()
 
-    assert summary["n"] == 10
-    assert summary["improved"] == 10
+    assert summary["n"] == 11
+    assert summary["improved"] == 11
     assert {row.feature for row in rows} == {
         "chain_evidence",
         "provenance_evidence",
+        "evidence_budgeting",
         "graph_proximity",
         "graph_relation_awareness",
         "graph_path_reinforcement",

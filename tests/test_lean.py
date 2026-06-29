@@ -102,6 +102,53 @@ def test_lean_context_respects_char_budget():
     assert len(ctx) <= 200, "lean_context must hard-cap at char_budget"
 
 
+def test_evidence_budgeting_keeps_exact_raw_detail_under_tight_budget():
+    from engram.config import Config
+    from engram.types import Fact
+
+    def make(enabled: bool) -> str:
+        mem = Memory(config=Config(evidence_budgeting=enabled))
+        ep = mem.add(
+            "The Apollo launch code is A17. Keep the printed checklist near the blue binder.",
+            user_id="u1",
+            session_id="apollo",
+            event_time=BASE,
+        )
+        fact = Fact(
+            subject="Apollo",
+            predicate="launch_code",
+            object="A17",
+            user_id=mem.resolver.resolve("u1"),
+            valid_at=BASE,
+            provenance=[ep.id],
+        )
+        fact.embedding = mem.embedder.embed(fact.text)
+        mem.fact_store.upsert(fact.id, fact.embedding, fact)
+        for i in range(12):
+            mem.add_fact(
+                "Apollo",
+                "project_note",
+                f"background filler note {i} with operational chatter that is not the checklist location",
+                user_id="u1",
+                valid_at=BASE + (i + 1) * DAY,
+            )
+        return mem.lean_context(
+            "What is Apollo's launch code and where is the printed checklist?",
+            user_id="u1",
+            persona=False,
+            n_summaries=0,
+            n_chunks=0,
+            char_budget=360,
+        )
+
+    enabled = make(True)
+    disabled = make(False)
+
+    assert len(enabled) <= 360
+    assert "blue binder" in enabled
+    assert "blue binder" not in disabled
+
+
 def test_lean_context_is_leaner_than_full_history():
     mem = build()
     full = "\n".join(ep.content for ep in mem.episodes_doc.values())

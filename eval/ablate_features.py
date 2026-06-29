@@ -88,6 +88,42 @@ def _raw_context(enabled: bool) -> str:
     )
 
 
+def _evidence_budget_context(enabled: bool) -> str:
+    mem = Memory(config=Config(evidence_budgeting=enabled))
+    ep = mem.add(
+        "The Apollo launch code is A17. Keep the printed checklist near the blue binder.",
+        user_id="u1",
+        session_id="apollo",
+        event_time=BASE,
+    )
+    fact = Fact(
+        subject="Apollo",
+        predicate="launch_code",
+        object="A17",
+        user_id=mem.resolver.resolve("u1"),
+        valid_at=BASE,
+        provenance=[ep.id],
+    )
+    fact.embedding = mem.embedder.embed(fact.text)
+    mem.fact_store.upsert(fact.id, fact.embedding, fact)
+    for i in range(12):
+        mem.add_fact(
+            "Apollo",
+            "project_note",
+            f"background filler note {i} with operational chatter that is not the checklist location",
+            user_id="u1",
+            valid_at=BASE + (i + 1) * DAY,
+        )
+    return mem.lean_context(
+        "What is Apollo's launch code and where is the printed checklist?",
+        user_id="u1",
+        persona=False,
+        n_summaries=0,
+        n_chunks=0,
+        char_budget=360,
+    )
+
+
 def _graph_context(enabled: bool) -> str:
     mem = Memory(config=Config(graph_proximity=enabled))
     mem.add_fact("Wei", "colleague", "Lin", user_id="u1", valid_at=BASE)
@@ -181,6 +217,12 @@ def run_ablation() -> tuple[list[AblationResult], dict]:
             _raw_context,
             _contains("PROVENANCE RAW EVIDENCE (source episodes for retrieved facts):", "blue binder"),
             "blue binder",
+        ),
+        (
+            "evidence_budgeting",
+            _evidence_budget_context,
+            lambda ctx: "blue binder" in ctx,
+            "tight budget keeps exact raw evidence",
         ),
         (
             "graph_proximity",
