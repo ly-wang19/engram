@@ -270,6 +270,9 @@ def test_evidence_planner_is_query_based_not_benchmark_based():
     temporal = plan_evidence("When was the first time I traveled after Lisbon?")
     assert temporal.timeline
 
+    history = plan_evidence("Where did Wei work before Moonshot AI?")
+    assert history.history and history.timeline and history.n_facts > 0
+
     kits = plan_evidence("How many model kits have I worked on or bought?")
     assert any("model kit" in q for q in kits.subqueries)
 
@@ -459,6 +462,25 @@ def test_lean_context_as_of_profile_does_not_leak_current_facts():
     assert "USER PROFILE (as of" in ctx
     assert "Tencent" in ctx
     assert "Moonshot AI" not in ctx
+
+
+def test_lean_context_adds_history_for_previous_value_queries():
+    mem = Memory()
+    old = mem.add_fact("Wei", "works_at", "Tencent", user_id="u1", valid_at=BASE)
+    new = mem.add_fact("Wei", "works_at", "Moonshot AI", user_id="u1", valid_at=BASE + 30 * DAY)
+
+    ctx = mem.lean_context(
+        "Where did Wei work before Moonshot AI?",
+        user_id="u1",
+        persona=False,
+        n_chunks=0,
+        char_budget=10_000,
+    )
+    assert new.supersedes == old.id
+    assert "FACT HISTORY (supersession chain" in ctx
+    assert "Tencent" in ctx
+    assert "Moonshot AI" in ctx
+    assert "superseded" in ctx and "current" in ctx
 
 
 def test_current_state_preserves_multi_valued_attributes():

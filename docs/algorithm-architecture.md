@@ -56,7 +56,8 @@ For a query `q`, Engram assembles context in this order:
 4. apply slot-head filtering for single-valued predicates;
 5. fuse positive evidence signals plus priors;
 6. page cold facts back only when hot retrieval misses;
-7. add graph paths, current-state tables, timelines, or preference records according to the evidence plan;
+7. add graph paths, current-state tables, supersession history, timelines, or preference records according
+   to the evidence plan;
 8. add summaries and raw chunks under the token budget;
 9. keep provenance and dates in the final context;
 10. abstain when memory does not contain enough evidence.
@@ -67,6 +68,8 @@ For a query `q`, Engram assembles context in this order:
 - No LLM dependency for zero-setup correctness. LLMs can improve extraction or judging, but the engine
   must still run deterministically offline.
 - No facts-only QA. The default read path combines consolidated facts with raw session chunks.
+- No history amnesia. Previous-value and update questions surface the supersession chain, not just the
+  current live slot head.
 - No prior-as-evidence leakage. Recency and salience can break ties, but they cannot turn a zero evidence
   hit into a relevant fact.
 - No benchmark-only branches. Query planning uses evidence shape, not dataset labels.
@@ -76,7 +79,7 @@ For a query `q`, Engram assembles context in this order:
 
 - Broader deterministic multi-hop planning for relation chains with multiple bridge entities or nested
   constraints.
-- Better temporal interval handling for facts that have explicit invalid_at or duration spans.
+- Better temporal interval reasoning over explicit invalid_at spans and duration evidence.
 - Learned or harness-tuned fusion weights per evidence shape, with fixed validation splits.
 - Backward-compatible richer fact predicates for constraints, goals, and procedural memory.
 - Cold-tier indexes that preserve recall when the memory grows beyond a model context window.

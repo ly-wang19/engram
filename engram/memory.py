@@ -1039,6 +1039,94 @@ class Memory:
             lines.append(f"{fmt_date(f.valid_at)} | {f.subject} | {f.predicate.replace('_', ' ')} | {f.object}")
         return "PREFERENCE RECORDS (current, structured):\n" + "\n".join(lines)
 
+    def _history_block(
+        self,
+        user: str,
+        query: str,
+        as_of: Optional[float],
+        limit: int = 16,
+        redact_sensitive: bool = False,
+    ) -> str:
+        """Supersession evidence for knowledge-update questions.
+
+        Normal retrieval intentionally filters to the live/as-of view. History questions need the
+        non-destructive chain as evidence: the old value, when it stopped being valid, and the current
+        replacement that superseded it.
+        """
+
+        def fact_terms(f: Fact) -> str:
+            pred = f.predicate.replace("_", " ")
+            aliases = ""
+            if f.predicate.lower() in {"works_at", "employer", "company"}:
+                aliases = " work works employer company job"
+            elif f.predicate.lower() in {"lives_in", "location", "city", "home"}:
+                aliases = " live lives location city home"
+            return f"{f.subject} {pred} {f.object} {f.text} {aliases}"
+
+        facts = [f for f in self._all_facts() if f.user_id == user]
+        if redact_sensitive:
+            facts = [f for f in facts if not getattr(f, "sensitive", False)]
+        if not facts:
+            return ""
+
+        by_id = {f.id: f for f in facts}
+        replaces: dict[str, list[Fact]] = {}
+        for f in facts:
+            if f.supersedes:
+                replaces.setdefault(f.supersedes, []).append(f)
+
+        selected: dict[str, Fact] = {}
+
+        def add_chain(f: Fact) -> None:
+            selected[f.id] = f
+            if f.supersedes and f.supersedes in by_id:
+                selected[f.supersedes] = by_id[f.supersedes]
+            for newer in replaces.get(f.id, []):
+                selected[newer.id] = newer
+
+        for f in facts:
+            is_chain_member = (
+                f.invalid_at is not None
+                or f.expired_at is not None
+                or f.supersedes is not None
+                or f.id in replaces
+            )
+            if not is_chain_member:
+                continue
+            if overlap_terms(query, fact_terms(f)):
+                add_chain(f)
+                continue
+            if any(overlap_terms(query, fact_terms(newer)) for newer in replaces.get(f.id, [])):
+                add_chain(f)
+
+        if not selected:
+            return ""
+
+        rows = sorted(
+            selected.values(),
+            key=lambda f: (f.subject.lower(), f.predicate.lower(), f.valid_at, f.object.lower()),
+        )[:limit]
+        lines = [
+            "valid from | valid until | subject | attribute | value | status",
+            "--- | --- | --- | --- | --- | ---",
+        ]
+        for f in rows:
+            until = fmt_date(f.invalid_at) if f.invalid_at is not None else "current"
+            view_time = now() if as_of is None else as_of
+            if f.valid_at > view_time:
+                status = "not yet valid"
+            elif f.is_live(as_of):
+                status = "current"
+            elif f.id in replaces:
+                status = "superseded"
+            else:
+                status = "past"
+            lines.append(
+                f"{fmt_date(f.valid_at)} | {until} | {f.subject} | "
+                f"{f.predicate.replace('_', ' ')} | {f.object} | {status}"
+            )
+        return "FACT HISTORY (supersession chain for update/previous-value questions):\n" + "\n".join(lines)
+
     def _aggregation_block(
         self,
         facts: list[Fact],
@@ -1319,6 +1407,11 @@ class Memory:
                 paths = self._graph_paths_block(query, user, as_of, redact_sensitive=redact_sensitive)
                 if paths:
                     blocks.append(paths)
+
+        if need is not None and need.history:
+            hist = self._history_block(user, query, as_of, redact_sensitive=redact_sensitive)
+            if hist:
+                blocks.append(hist)
 
         # L2 coarse: retrieve session summaries per (sub-)query, ranked. This is the coarse layer of a
         # coarse-to-fine cascade (CLAUDE.md Bet E / OpenViking): summaries are tiny, so we can index and
