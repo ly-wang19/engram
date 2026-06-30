@@ -1545,6 +1545,7 @@ class Memory:
                 summaries + detail_eps,
                 llm=self.llm,
                 numeric=self.config.numeric_aggregation_candidates,
+                constraint_filter=self.config.aggregation_constraint_filter,
             )
         )
         return f"{candidates}\n\n{evidence}" if candidates else evidence

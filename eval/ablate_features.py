@@ -277,6 +277,32 @@ def _aggregation_recall_expansion_context(enabled: bool) -> str:
     )
 
 
+def _aggregation_constraint_filter_context(enabled: bool) -> str:
+    mem = Memory(config=Config(aggregation_constraint_filter=enabled))
+    mem.add(
+        'I just finished a 416-page novel, but before that, I read "The Power" '
+        "by Naomi Alderman in December, which had 341 pages.",
+        user_id="u1",
+        session_id="books-jan",
+        event_time=BASE,
+    )
+    mem.add(
+        'I just finished "The Nightingale" by Kristin Hannah, which had 440 pages.',
+        user_id="u1",
+        session_id="books-mar",
+        event_time=BASE + DAY,
+    )
+    return mem.lean_context(
+        "What was the page count of the two novels I finished in January and March?",
+        user_id="u1",
+        persona=False,
+        n_facts=0,
+        n_summaries=0,
+        n_chunks=0,
+        char_budget=20_000,
+    )
+
+
 def _raw_context(enabled: bool) -> str:
     mem = Memory(config=Config(evidence_planner=False, provenance_evidence=enabled))
     ep = mem.add(
@@ -555,6 +581,16 @@ def run_ablation() -> tuple[list[AblationResult], dict]:
             _aggregation_recall_expansion_context,
             lambda ctx: '"has_workout": true' in ctx and '"has_track_workouts": true' in ctx,
             "aggregation planner adds high-recall activity subqueries",
+        ),
+        (
+            "aggregation_constraint_filter",
+            _aggregation_constraint_filter_context,
+            lambda ctx: (
+                "416-page novel" in ctx
+                and "440 pages novel" in ctx
+                and "EXCLUDE (local month december" in ctx
+            ),
+            "aggregation candidates exclude numeric values tied to conflicting local month constraints",
         ),
         (
             "provenance_evidence",

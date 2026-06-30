@@ -98,6 +98,45 @@ _NUMERIC_GENERIC_TERMS = {
     "did", "have", "has", "had", "was", "were", "the", "and", "for", "with", "from", "into",
 }
 
+_MONTH_ALIASES = {
+    "january": "january", "jan": "january",
+    "february": "february", "feb": "february",
+    "march": "march", "mar": "march",
+    "april": "april", "apr": "april",
+    "may": "may",
+    "june": "june", "jun": "june",
+    "july": "july", "jul": "july",
+    "august": "august", "aug": "august",
+    "september": "september", "sept": "september", "sep": "september",
+    "october": "october", "oct": "october",
+    "november": "november", "nov": "november",
+    "december": "december", "dec": "december",
+}
+
+
+def _query_months(query: str) -> set[str]:
+    q = query.lower()
+    return {canonical for name, canonical in _MONTH_ALIASES.items()
+            if re.search(r"\b" + re.escape(name) + r"\b", q)}
+
+
+def _local_text(text: str, start: int, end: int, radius: int = 48) -> str:
+    return text[max(0, start - radius): min(len(text), end + radius)]
+
+
+def _constraint_decision(query: str, evidence: str, start: int, end: int) -> tuple[bool, str]:
+    wanted_months = _query_months(query)
+    if not wanted_months:
+        return True, ""
+    local = _local_text(evidence, start, end).lower()
+    local_months = {canonical for name, canonical in _MONTH_ALIASES.items()
+                    if re.search(r"\b" + re.escape(name) + r"\b", local)}
+    if local_months and not (local_months & wanted_months):
+        months = ", ".join(sorted(local_months))
+        wanted = ", ".join(sorted(wanted_months))
+        return False, f"local month {months} does not match query month(s) {wanted}"
+    return True, ""
+
 
 def _numeric_mode(query: str) -> str:
     q = query.lower()
@@ -162,7 +201,12 @@ def _relevant_numeric_sentence(query: str, text: str) -> bool:
     )
 
 
-def _numeric_candidates_from_text(query: str, text: str, date: float) -> list[AggregationCandidate]:
+def _numeric_candidates_from_text(
+    query: str,
+    text: str,
+    date: float,
+    constraint_filter: bool = True,
+) -> list[AggregationCandidate]:
     mode = _numeric_mode(query)
     if not mode:
         return []
@@ -184,7 +228,12 @@ def _numeric_candidates_from_text(query: str, text: str, date: float) -> list[Ag
         if mode == "money":
             for m in re.finditer(r"\$\s*([0-9][0-9,]*(?:\.[0-9]+)?)", evidence):
                 value = float(m.group(1).replace(",", ""))
-                matches.append((value, "USD", "spent", m.group(0), True, ""))
+                include, reason = (
+                    _constraint_decision(query, evidence, m.start(), m.end())
+                    if constraint_filter
+                    else (True, "")
+                )
+                matches.append((value, "USD", "spent", m.group(0), include, reason))
         elif mode == "duration":
             for m in re.finditer(
                 r"\b([0-9]+(?:\.[0-9]+)?)\s*(?:-| )?\s*(hours?|hrs?|minutes?|mins?)\b",
@@ -210,7 +259,12 @@ def _numeric_candidates_from_text(query: str, text: str, date: float) -> list[Ag
         elif mode == "page_count":
             for m in re.finditer(r"\b([0-9][0-9,]{1,4})\s*(?:-| )?pages?\b", evidence, re.I):
                 value = float(m.group(1).replace(",", ""))
-                matches.append((value, "pages", "page_count", m.group(0), True, ""))
+                include, reason = (
+                    _constraint_decision(query, evidence, m.start(), m.end())
+                    if constraint_filter
+                    else (True, "")
+                )
+                matches.append((value, "pages", "page_count", m.group(0), include, reason))
         for value, unit, action, raw, include, reason in matches:
             raw_value = f"{raw} {item}".strip()
             out.append(AggregationCandidate(
@@ -442,15 +496,18 @@ def extract_aggregation_candidates(
     episodes: list[Episode],
     llm=None,
     numeric: bool = True,
+    constraint_filter: bool = True,
 ) -> list[AggregationCandidate]:
     llm_out = _llm_candidates(query, facts, episodes, llm)
     numeric_out: list[AggregationCandidate] = []
     if numeric:
         for fact in facts:
-            numeric_out.extend(_numeric_candidates_from_text(query, fact.text, fact.valid_at))
+            numeric_out.extend(_numeric_candidates_from_text(
+                query, fact.text, fact.valid_at, constraint_filter=constraint_filter))
         for ep in episodes:
             for segment in _user_segments(ep.content):
-                numeric_out.extend(_numeric_candidates_from_text(query, segment, ep.event_time))
+                numeric_out.extend(_numeric_candidates_from_text(
+                    query, segment, ep.event_time, constraint_filter=constraint_filter))
     target = _target_type(query)
     if not target:
         return dedupe_aggregation_candidates(llm_out + numeric_out)
