@@ -42,6 +42,7 @@ class Config:
     explicit_preference_extraction: bool = True  # extract I like/prefer/avoid style preference facts
     preference_object_filter: bool = True  # suppress weak explicit preference objects like "it"/"these ideas"
     preference_object_normalization: bool = True  # canonicalize "sound/idea of X" preference objects to X
+    preference_reversal_extraction: bool = True  # extract high-confidence "no longer like X" preference updates
     procedural_extraction: bool = True  # extract durable runbooks/how-to steps into typed procedure facts
     summary_fallback: bool = True  # answer from derived session summaries when facts cannot answer
     summary_fallback_k: int = 6  # candidate summaries inspected by the fallback before abstaining

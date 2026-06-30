@@ -14,7 +14,12 @@ from ..types import Episode
 from ..util import DAY
 from .conflict import ConflictResolver
 from .decay import is_durable
-from .extractor import RuleExtractor, is_specific_preference_object, normalize_preference_object
+from .extractor import (
+    RuleExtractor,
+    is_preference_reversal_fact,
+    is_specific_preference_object,
+    normalize_preference_object,
+)
 from .graph_builder import GraphBuilder
 from .summarizer import ProfileBuilder
 
@@ -45,6 +50,7 @@ class ConsolidationEngine:
                 config.explicit_preference_extraction,
                 config.preference_object_filter,
                 config.preference_object_normalization,
+                config.preference_reversal_extraction,
             )
         self.graph_builder = GraphBuilder(graph, embedder)
         # Semantic conflict detection needs a real (semantic) embedder; the offline HashingEmbedder
@@ -95,6 +101,11 @@ class ConsolidationEngine:
                 if (
                     not self.config.explicit_preference_extraction
                     and fact.predicate.lower() in _EXPLICIT_PREFERENCE_PREDS
+                ):
+                    continue
+                if (
+                    not self.config.preference_reversal_extraction
+                    and is_preference_reversal_fact(fact, ep.content)
                 ):
                     continue
                 if (

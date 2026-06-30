@@ -201,6 +201,32 @@ def _preference_object_normalization_context(enabled: bool) -> str:
     return f"FACTS={json.dumps(facts, ensure_ascii=False, sort_keys=True)}\n{json.dumps(profile, ensure_ascii=False, sort_keys=True)}\n\n{ctx}"
 
 
+def _preference_reversal_extraction_context(enabled: bool) -> str:
+    mem = Memory(config=Config(preference_reversal_extraction=enabled))
+    mem.add("I like jazz.", user_id="u1", session_id="prefs-old", event_time=BASE)
+    mem.add("I no longer like jazz.", user_id="u1", session_id="prefs-new", event_time=BASE + DAY)
+    mem.consolidate()
+    facts = [
+        {
+            "text": f.text,
+            "live": f.is_live(),
+            "supersedes": bool(f.supersedes),
+            "invalidated": f.invalid_at is not None,
+        }
+        for f in mem.fact_store.values()
+        if f.user_id == "u1"
+    ]
+    ctx = mem.lean_context(
+        "Do I still like jazz?",
+        user_id="u1",
+        persona=False,
+        n_summaries=0,
+        n_chunks=0,
+        char_budget=10_000,
+    )
+    return f"FACTS={json.dumps(facts, ensure_ascii=False, sort_keys=True)}\n\n{ctx}"
+
+
 def _raw_context(enabled: bool) -> str:
     mem = Memory(config=Config(evidence_planner=False, provenance_evidence=enabled))
     ep = mem.add(
@@ -450,6 +476,17 @@ def run_ablation() -> tuple[list[AblationResult], dict]:
                 'FACTS=["u1 likes avocado sauce", "u1 likes fruit kebabs"]' in ctx
             ),
             "preference object normalization canonicalizes sound/idea wrappers",
+        ),
+        (
+            "preference_reversal_extraction",
+            _preference_reversal_extraction_context,
+            lambda ctx: (
+                '"text": "u1 dislikes jazz"' in ctx
+                and '"live": true' in ctx
+                and '"text": "u1 likes jazz"' in ctx
+                and '"invalidated": true' in ctx
+            ),
+            "high-confidence reversal phrase invalidates the old preference",
         ),
         (
             "provenance_evidence",

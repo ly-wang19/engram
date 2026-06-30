@@ -1,0 +1,1 @@
+{"summary": {"dataset": "LOCOMO", "error": "FileNotFoundError", "items_scanned": 0, "matches": 0, "message": "LOCOMO data not found. Download locomo10.json from https://github.com/snap-research/locomo (data/locomo10.json) and place it at /Users/ywwl/Documents/Claude/Projects/Super memory/eval/locomo10.json, or pass an explicit path."}}

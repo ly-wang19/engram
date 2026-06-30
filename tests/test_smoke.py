@@ -458,6 +458,45 @@ def test_preference_object_normalization_can_be_disabled():
     assert ("u1", "likes", "sound of the avocado sauce") in facts
 
 
+def test_preference_reversal_extraction_invalidates_old_like():
+    mem = Memory()
+    mem.add("I like jazz.", user_id="u1", event_time=BASE)
+    mem.add("I no longer like jazz.", user_id="u1", event_time=BASE + DAY)
+    mem.consolidate()
+
+    live = {(f.subject, f.predicate, f.object) for f in mem.fact_store.values() if f.is_live()}
+    retired = [f for f in mem.fact_store.values() if f.predicate == "likes" and f.object == "jazz"]
+    current = [f for f in mem.fact_store.values() if f.predicate == "dislikes" and f.object == "jazz"]
+    assert ("u1", "dislikes", "jazz") in live
+    assert retired and retired[0].invalid_at == BASE + DAY
+    assert current and current[0].supersedes == retired[0].id
+
+
+def test_preference_reversal_extraction_handles_stopped_liking():
+    mem = Memory()
+    mem.add("I love crowded lounges.", user_id="u1", event_time=BASE)
+    mem.add("I stopped enjoying crowded lounges.", user_id="u1", event_time=BASE + DAY)
+    mem.consolidate()
+
+    live = {(f.subject, f.predicate, f.object) for f in mem.fact_store.values() if f.is_live()}
+    assert ("u1", "dislikes", "crowded lounges") in live
+    assert not any(f.predicate == "loves" and f.object == "crowded lounges" and f.is_live()
+                   for f in mem.fact_store.values())
+
+
+def test_preference_reversal_extraction_can_be_disabled():
+    from engram.config import Config
+
+    mem = Memory(config=Config(preference_reversal_extraction=False))
+    mem.add("I like jazz.", user_id="u1", event_time=BASE)
+    mem.add("I no longer like jazz.", user_id="u1", event_time=BASE + DAY)
+    mem.consolidate()
+
+    live = {(f.subject, f.predicate, f.object) for f in mem.fact_store.values() if f.is_live()}
+    assert ("u1", "likes", "jazz") in live
+    assert ("u1", "dislikes", "jazz") not in live
+
+
 def test_import_style_moving_and_dietary_restrictions_extract_cleanly():
     mem = Memory()
     mem.add("I'm moving to Berlin next month for a job at Acme.", user_id="u1", event_time=BASE)

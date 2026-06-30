@@ -105,6 +105,37 @@ def is_specific_preference_object(obj: str) -> bool:
     return True
 
 
+def preference_reversal_objects(text: str) -> set[str]:
+    """High-confidence preference updates whose natural meaning is "I do not like this anymore"."""
+    out: set[str] = set()
+    for raw in _CLAUSE_SPLIT.split(text):
+        clause = raw.strip()
+        if not clause:
+            continue
+        patterns = (
+            r"\b(?:i|we)\s+no\s+longer\s+(?:like|love|enjoy)s?\s+(.+)",
+            rf"\b{_I_AM}\s+no\s+longer\s+(?:into|fond of|(?:an? )?fan of)\s+(.+)",
+            r"\b(?:i|we)\s+stopped\s+(?:liking|loving|enjoying)\s+(.+)",
+        )
+        for pattern in patterns:
+            m = re.search(pattern, clause, re.I)
+            if not m:
+                continue
+            obj = _clean_preference_obj(m.group(1))
+            if obj:
+                out.add(obj)
+            break
+    return out
+
+
+def is_preference_reversal_fact(fact: Fact, source_text: str) -> bool:
+    if fact.predicate.lower() not in {"dislikes", "hates", "avoids"}:
+        return False
+    obj = normalize_preference_object(fact.object)
+    return any(normalize_preference_object(candidate).lower() == obj.lower()
+               for candidate in preference_reversal_objects(source_text))
+
+
 def _procedure_subject(action: str) -> str:
     """Pick a stable slot subject from a how-to action: 'rotate the PAT' -> 'PAT'."""
     text = _clean_obj(action)
@@ -141,12 +172,14 @@ class RuleExtractor:
         explicit_preference_extraction: bool = True,
         preference_object_filter: bool = True,
         preference_object_normalization: bool = True,
+        preference_reversal_extraction: bool = True,
     ) -> None:
         # learned per-user self name, so "I work at X" can be attributed to "Wei", not a pronoun.
         self.self_name: dict[str, str] = {}
         self.explicit_preference_extraction = explicit_preference_extraction
         self.preference_object_filter = preference_object_filter
         self.preference_object_normalization = preference_object_normalization
+        self.preference_reversal_extraction = preference_reversal_extraction
 
     def extract(self, ep: Episode) -> list[Fact]:
         facts: list[Fact] = self._episode_procedures(ep)
@@ -364,6 +397,14 @@ class RuleExtractor:
         return out
 
     def _explicit_preference(self, clause: str, ep: Episode) -> Fact | None:
+        if self.preference_reversal_extraction:
+            for obj in preference_reversal_objects(clause):
+                if self.preference_object_normalization:
+                    obj = normalize_preference_object(obj)
+                if self.preference_object_filter and not is_specific_preference_object(obj):
+                    return None
+                return self._mk(ep.user_id, "dislikes", obj, ep) if obj else None
+
         # Negated positive verbs are negative preference facts.
         m = re.search(
             r"\b(?:i|we)\s+(?:do\s+not|don't|dont)\s+(?:like|love|enjoy|prefer)\s+(.+)",
@@ -410,6 +451,8 @@ class RuleExtractor:
         if re.match(r"\s*(?:assistant|system)\s*:", clause, re.I):
             return False
         return bool(
+            preference_reversal_objects(clause)
+            or
             re.search(
                 r"\b(?:i|we)\s+(?:do\s+not|don't|dont)\s+(?:like|love|enjoy|prefer)\s+",
                 clause,
