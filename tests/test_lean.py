@@ -745,6 +745,61 @@ def test_provenance_raw_evidence_dedups_full_detail_chunk():
     assert "PROVENANCE RAW EVIDENCE (source episodes for retrieved facts):" not in ctx
 
 
+def test_provenance_source_episode_is_promoted_into_detail_chunks():
+    from engram.config import Config
+    from engram.types import Fact
+
+    def make(enabled: bool) -> str:
+        mem = Memory(
+            config=Config(
+                evidence_planner=False,
+                provenance_evidence=False,
+                provenance_chunk_promotion=enabled,
+            )
+        )
+        source = mem.add(
+            "A17 is written on the tag tucked inside the blue binder.",
+            user_id="u1",
+            session_id="apollo-source",
+            event_time=BASE,
+        )
+        for i in range(5):
+            mem.add(
+                f"Apollo launch code rehearsal note {i}: the team reviewed old checklist formats.",
+                user_id="u1",
+                session_id=f"apollo-distractor-{i}",
+                event_time=BASE + (i + 1) * DAY,
+            )
+        fact = Fact(
+            subject="Apollo",
+            predicate="launch_code",
+            object="A17",
+            user_id=mem.resolver.resolve("u1"),
+            valid_at=BASE,
+            provenance=[source.id],
+        )
+        fact.embedding = mem.embedder.embed(fact.text)
+        mem.fact_store.upsert(fact.id, fact.embedding, fact)
+        return mem.lean_context(
+            "What is Apollo's launch code?",
+            user_id="u1",
+            persona=False,
+            n_summaries=0,
+            n_chunks=1,
+            char_budget=10_000,
+        )
+
+    enabled = make(True)
+    disabled = make(False)
+    enabled_detail = enabled.split("RELEVANT CONVERSATIONS (full detail):", 1)[1]
+    disabled_detail = disabled.split("RELEVANT CONVERSATIONS (full detail):", 1)[1]
+
+    assert "blue binder" in enabled_detail
+    assert "apollo-source" in enabled_detail
+    assert "blue binder" not in disabled_detail
+    assert "apollo-distractor" in disabled_detail
+
+
 def test_provenance_raw_evidence_is_hidden_in_redacted_context():
     from engram.config import Config
     from engram.types import Fact

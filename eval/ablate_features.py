@@ -96,6 +96,47 @@ def _raw_context(enabled: bool) -> str:
     )
 
 
+def _provenance_chunk_context(enabled: bool) -> str:
+    mem = Memory(
+        config=Config(
+            evidence_planner=False,
+            provenance_evidence=False,
+            provenance_chunk_promotion=enabled,
+        )
+    )
+    source = mem.add(
+        "A17 is written on the tag tucked inside the blue binder.",
+        user_id="u1",
+        session_id="apollo-source",
+        event_time=BASE,
+    )
+    for i in range(5):
+        mem.add(
+            f"Apollo launch code rehearsal note {i}: the team reviewed old checklist formats.",
+            user_id="u1",
+            session_id=f"apollo-distractor-{i}",
+            event_time=BASE + (i + 1) * DAY,
+        )
+    fact = Fact(
+        subject="Apollo",
+        predicate="launch_code",
+        object="A17",
+        user_id=mem.resolver.resolve("u1"),
+        valid_at=BASE,
+        provenance=[source.id],
+    )
+    fact.embedding = mem.embedder.embed(fact.text)
+    mem.fact_store.upsert(fact.id, fact.embedding, fact)
+    return mem.lean_context(
+        "What is Apollo's launch code?",
+        user_id="u1",
+        persona=False,
+        n_summaries=0,
+        n_chunks=1,
+        char_budget=10_000,
+    )
+
+
 def _evidence_budget_context(enabled: bool) -> str:
     mem = Memory(config=Config(evidence_budgeting=enabled))
     ep = mem.add(
@@ -231,6 +272,12 @@ def run_ablation() -> tuple[list[AblationResult], dict]:
             _raw_context,
             _contains("PROVENANCE RAW EVIDENCE (source episodes for retrieved facts):", "blue binder"),
             "blue binder",
+        ),
+        (
+            "provenance_chunk_promotion",
+            _provenance_chunk_context,
+            _contains("RELEVANT CONVERSATIONS (full detail):", "blue binder"),
+            "source episode promoted into full-detail raw chunk",
         ),
         (
             "evidence_budgeting",

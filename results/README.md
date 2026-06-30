@@ -3,6 +3,17 @@
 This directory stores raw JSONL evidence for benchmark claims. Treat it as an audit log, not a scratch
 dump.
 
+## Experiment Persistence Rule
+
+Every experiment run for an algorithmic change must leave a saved artifact under `results/` or a
+documented path named in the PR. This includes smoke ablations, fixed-slice real-data checks, failed
+provider attempts, and complete benchmark runs.
+
+- Prefer machine-readable JSONL via `--out`, `--jsonl`, or a small saved runner output.
+- Record the exact command, dataset or slice, system(s), date, metrics, and status.
+- Mark failed, partial, or exploratory artifacts explicitly; never present them as publishable benchmark
+  evidence.
+
 ## Commit Rule
 
 A result log can be committed as evidence only when it has a clear consumer:

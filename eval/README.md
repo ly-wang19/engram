@@ -33,8 +33,9 @@ python eval/ablate_features.py
 
 This command toggles the newest evidence features one at a time and checks whether the enabled path
 surfaces evidence that the disabled path cannot: supersedes-chain context, natural-language previous-value
-answers from supersession history, provenance-backed raw snippets, n-hop graph proximity, intent-aware
-evidence budgeting that preserves exact raw detail under tight budgets, and query-conditioned graph relation weighting that ranks the target relation
+answers from supersession history, provenance-backed raw snippets, provenance-guided full-detail chunk
+promotion, n-hop graph proximity, intent-aware evidence budgeting that preserves exact raw detail under tight
+budgets, and query-conditioned graph relation weighting that ranks the target relation
 ahead of same-node distractors, plus PPR-style graph path reinforcement that ranks a multi-path-supported
 target ahead of a single-path distractor, and self-anchoring for first-person graph queries. It is a local
 improvement proof for the target behavior, not a public accuracy claim. It also checks unique short-name
@@ -43,6 +44,23 @@ negative graph constraints, so "not in Lisbon" filters the excluded path instead
 planner location/project chains, so colleague/company and person/project questions can continue from
 `works_at` or `works_on` to `based_in`/`located_in` answer facts.
 Publishable claims still require `eval/bench.py` plus committed raw logs.
+
+## Algorithm PR Gate
+
+Every algorithmic read/write-path PR must include both local correctness checks and real-data acceptance:
+
+```bash
+python eval/ablate_features.py --jsonl results/<feature>_ablation.jsonl
+pytest -q tests/test_lean.py tests/test_smoke.py tests/test_zero_setup_default.py tests/test_eval_ablation.py
+python eval/validate_results.py --expected-rows 500 --require-complete --system engram_lean results/headline_500.jsonl
+```
+
+For changes expected to affect benchmark behavior, add a fresh `eval/bench.py` run on LongMemEval,
+LOCOMO, or PersonaMem (a fixed slice is acceptable for PR gating; public claims still need complete
+committed logs). The PR description must report the command, row count, systems compared, accuracy,
+tokens, p50/p95 latency, saved artifact path, and whether the result is a regression, neutral, or
+improvement. Failed or interrupted experiments must also be saved as failed/partial artifacts instead of
+being silently discarded.
 
 ## Real Benchmarks
 

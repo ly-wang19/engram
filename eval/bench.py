@@ -145,6 +145,13 @@ def engram_config(evidence_planner: bool = True, ablations: tuple[str, ...] = ()
             and "temporal_history_queries" not in disabled
         ),
         provenance_evidence="raw" not in disabled and "provenance" not in disabled,
+        provenance_chunk_promotion=(
+            "raw" not in disabled
+            and "provenance" not in disabled
+            and "provenance_chunks" not in disabled
+            and "chunk_promotion" not in disabled
+            and "provenance_chunk_promotion" not in disabled
+        ),
         graph_proximity="graph" not in disabled and "graph_proximity" not in disabled,
         graph_relation_awareness=(
             "graph_relation" not in disabled
@@ -472,10 +479,17 @@ class EngramLeanNoChainSystem(EngramLeanSystem):
 
 
 class EngramLeanNoRawSystem(EngramLeanSystem):
-    """A/B baseline: lean system without provenance-backed raw source snippets."""
+    """A/B baseline: lean system without provenance-backed raw source evidence."""
 
     name = "engram_lean_no_raw"
     ablations = ("raw",)
+
+
+class EngramLeanNoProvenanceChunksSystem(EngramLeanSystem):
+    """A/B baseline: lean system without provenance-guided full-detail chunk promotion."""
+
+    name = "engram_lean_no_provenance_chunks"
+    ablations = ("provenance_chunks",)
 
 
 class EngramLeanNoEvidenceBudgetSystem(EngramLeanSystem):
@@ -561,6 +575,7 @@ SYSTEMS = {"engram": EngramSystem, "full_context": FullContextSystem, "rag": RAG
            "engram_lean_no_planner": EngramLeanNoPlannerSystem,
            "engram_lean_no_chain": EngramLeanNoChainSystem,
            "engram_lean_no_raw": EngramLeanNoRawSystem,
+           "engram_lean_no_provenance_chunks": EngramLeanNoProvenanceChunksSystem,
            "engram_lean_no_evidence_budget": EngramLeanNoEvidenceBudgetSystem,
            "engram_lean_no_temporal_history": EngramLeanNoTemporalHistorySystem,
            "engram_lean_no_graph": EngramLeanNoGraphSystem,
@@ -713,7 +728,8 @@ def main():
     ap.add_argument("--intent", action="store_true", help="engram: L6 intent hint (benchmark-neutral)")
     ap.add_argument("--ablate", default="",
                     help="comma-separated Engram algorithm switches to disable for all Engram systems in this run: "
-                         "evidence_budget, chain, temporal_history, raw/provenance, graph/graph_proximity, graph_relation, "
+                         "evidence_budget, chain, temporal_history, raw/provenance, provenance_chunks, "
+                         "graph/graph_proximity, graph_relation, "
                          "graph_reinforcement, graph_self_anchor, graph_entity_alias, graph_negative, "
                          "planner_location, planner_project")
     ap.add_argument("--full", action="store_true",

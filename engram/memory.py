@@ -1369,6 +1369,46 @@ class Memory:
                     return "PROVENANCE RAW EVIDENCE (source episodes for retrieved facts):\n" + "\n".join(rows)
         return "PROVENANCE RAW EVIDENCE (source episodes for retrieved facts):\n" + "\n".join(rows) if rows else ""
 
+    def _provenance_detail_chunks(
+        self,
+        facts: list[Fact],
+        query: str,
+        user: str,
+        as_of: Optional[float],
+        limit: int,
+        redact_sensitive: bool = False,
+    ) -> list[Episode]:
+        """Full raw chunks backed by retrieved facts' provenance.
+
+        Normal raw retrieval is query-first. If it is distracted, a fact can still pinpoint the right
+        source episode through provenance; promoting that episode restores surrounding details while the
+        same `n_chunks` budget keeps the read path lean.
+        """
+        if limit <= 0 or redact_sensitive or not facts:
+            return []
+        view_time = now() if as_of is None else as_of
+        scored: dict[str, tuple[int, int, float, Episode]] = {}
+        for fact_rank, fact in enumerate(facts):
+            if getattr(fact, "sensitive", False):
+                continue
+            fact_terms = self._chain_terms(fact)
+            fact_overlap = len(overlap_terms(query, fact_terms)) if query else 0
+            if query and fact_overlap == 0:
+                continue
+            for ep_id in fact.provenance:
+                ep = self.episodes_doc.get(ep_id)
+                if ep is None or ep.user_id != user or ep.event_time > view_time:
+                    continue
+                ep_overlap = len(overlap_terms(query, ep.content)) if query else 0
+                support_overlap = len(overlap_terms(fact.text, ep.content))
+                score = fact_overlap * 8 + support_overlap * 3 + ep_overlap * 2
+                prev = scored.get(ep.id)
+                item = (score, fact_rank, ep.event_time, ep)
+                if prev is None or (score, -fact_rank, ep.event_time) > (prev[0], -prev[1], prev[2]):
+                    scored[ep.id] = item
+        ranked = sorted(scored.values(), key=lambda item: (-item[0], item[1], -item[2], item[3].id))
+        return [ep for _, _, _, ep in ranked[:limit]]
+
     def _aggregation_block(
         self,
         facts: list[Fact],
@@ -1887,6 +1927,27 @@ class Memory:
                     if len(detail_eps) >= n_chunks:
                         break
         detail_ids = {e.id for e in detail_eps}
+        if self.config.provenance_chunk_promotion and n_chunks and not redact_sensitive:
+            promoted = self._provenance_detail_chunks(
+                all_facts,
+                " ".join(queries),
+                user,
+                as_of,
+                limit=n_chunks,
+                redact_sensitive=redact_sensitive,
+            )
+            if promoted:
+                merged: list[Episode] = []
+                seen_promoted: set[str] = set()
+                for ep in promoted + detail_eps:
+                    if ep.id in seen_promoted:
+                        continue
+                    seen_promoted.add(ep.id)
+                    merged.append(ep)
+                    if len(merged) >= n_chunks:
+                        break
+                detail_eps = merged
+                detail_ids = {e.id for e in detail_eps}
         summaries = [e for e in summ_ranked if e.id not in detail_ids]
 
         # Aggregation/list questions are especially vulnerable to compression loss: the right session can
@@ -2137,6 +2198,19 @@ class Memory:
                 episodes = AgenticRetriever(self, self.llm).gather_episodes(query, user, k_chunks, as_of=as_of)
             else:
                 episodes = self.retrieve_episodes(search_query, user, k_chunks, as_of=as_of)
+            if self.config.provenance_chunk_promotion:
+                promoted = self._provenance_detail_chunks(ranked_facts, search_query, user, as_of, k_chunks)
+                if promoted:
+                    merged: list[Episode] = []
+                    seen_promoted: set[str] = set()
+                    for ep in promoted + episodes:
+                        if ep.id in seen_promoted:
+                            continue
+                        seen_promoted.add(ep.id)
+                        merged.append(ep)
+                        if len(merged) >= k_chunks:
+                            break
+                    episodes = merged
             parts = []
             for ep in episodes:
                 date = ep.metadata.get("date") or fmt_date(ep.event_time)
