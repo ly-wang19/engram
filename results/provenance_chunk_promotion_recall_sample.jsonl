@@ -1,0 +1,4 @@
+{"answer_session_ids": ["sess_a"], "cat": "single-session-user", "hit": true, "qid": "s_user_1", "recall": 1.0, "retrieved_session_ids": ["sess_a", "sess_b"], "topk": 3, "type": "item"}
+{"answer_session_ids": ["sess_b"], "cat": "knowledge-update", "hit": true, "qid": "ku_1", "recall": 1.0, "retrieved_session_ids": ["sess_a", "sess_b", "sess_c"], "topk": 3, "type": "item"}
+{"answer_session_ids": ["sess_a", "sess_b"], "cat": "multi-session", "hit": true, "qid": "ms_1", "recall": 1.0, "retrieved_session_ids": ["sess_a", "sess_b", "sess_c"], "topk": 3, "type": "item"}
+{"dataset": "eval/longmemeval_sample.json", "date": "2026-06-30", "hit_at_k": 1.0, "mode": "LLM-free recall", "n": 3, "note": "real sample smoke; not public benchmark evidence", "recall_at_k": 1.0, "topk": 3, "type": "summary"}
