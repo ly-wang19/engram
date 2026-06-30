@@ -24,6 +24,13 @@ _NON_NAMES = {
     "vegetarian", "particularly", "especially", "interested", "looking", "planning", "thinking",
     "trying", "getting", "glad", "happy", "sure", "always", "also", "still", "really",
 }
+_WEAK_PREFERENCE_OBJECTS = {
+    "it", "this", "that", "these", "those", "them", "thing", "things", "stuff", "something",
+    "anything", "everything", "one", "ones", "use", "process", "experience", "journey",
+    "idea", "ideas", "suggestion", "suggestions", "tip", "tips", "option", "options",
+}
+_WEAK_DEICTIC_HEADS = ("these", "those", "this", "that")
+_WEAK_DEICTIC_NOUNS = {"idea", "ideas", "suggestion", "suggestions", "tip", "tips", "option", "options"}
 
 _CLAUSE_SPLIT = re.compile(r"\n+|[.!?。！？]+(?:\s+|$)|,|;| and | but |—|--|\bthen\b", re.I)
 _FAMILY = "sister|brother|mother|father|parent|child|spouse|wife|husband|partner"
@@ -66,6 +73,20 @@ def _clean_preference_obj(s: str) -> str:
     return _clean_obj(text)
 
 
+def is_specific_preference_object(obj: str) -> bool:
+    text = re.sub(r"\s+", " ", obj.strip().strip("\"'`*_ ")).lower()
+    if not text:
+        return False
+    if text in _WEAK_PREFERENCE_OBJECTS:
+        return False
+    if text.startswith(("you mentioned", "what you", "how they", "how it", "how this", "how that")):
+        return False
+    toks = text.split()
+    if toks and toks[0] in _WEAK_DEICTIC_HEADS and any(t in _WEAK_DEICTIC_NOUNS for t in toks[1:]):
+        return False
+    return True
+
+
 def _procedure_subject(action: str) -> str:
     """Pick a stable slot subject from a how-to action: 'rotate the PAT' -> 'PAT'."""
     text = _clean_obj(action)
@@ -97,10 +118,15 @@ def _slug(s: str) -> str:
 
 
 class RuleExtractor:
-    def __init__(self, explicit_preference_extraction: bool = True) -> None:
+    def __init__(
+        self,
+        explicit_preference_extraction: bool = True,
+        preference_object_filter: bool = True,
+    ) -> None:
         # learned per-user self name, so "I work at X" can be attributed to "Wei", not a pronoun.
         self.self_name: dict[str, str] = {}
         self.explicit_preference_extraction = explicit_preference_extraction
+        self.preference_object_filter = preference_object_filter
 
     def extract(self, ep: Episode) -> list[Fact]:
         facts: list[Fact] = self._episode_procedures(ep)
@@ -326,6 +352,8 @@ class RuleExtractor:
         ) or re.search(rf"\b{_I_AM}\s+not\s+into\s+(.+)", clause, re.I)
         if m:
             obj = _clean_preference_obj(m.group(1))
+            if self.preference_object_filter and not is_specific_preference_object(obj):
+                return None
             return self._mk(ep.user_id, "dislikes", obj, ep) if obj else None
 
         m = re.search(
@@ -340,6 +368,8 @@ class RuleExtractor:
         verb = m.group(1).lower()
         obj = _clean_preference_obj(m.group(2))
         if not obj:
+            return None
+        if self.preference_object_filter and not is_specific_preference_object(obj):
             return None
         pred = {
             "like": "likes",
