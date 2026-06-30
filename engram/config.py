@@ -41,6 +41,8 @@ class Config:
     evidence_budgeting: bool = True  # intent-aware context packing instead of equal/raw truncation
     summary_fallback: bool = True  # answer from derived session summaries when facts cannot answer
     summary_fallback_k: int = 6  # candidate summaries inspected by the fallback before abstaining
+    procedural_memory: bool = True  # surface standing rules/how-to memories as a typed derived read layer
+    procedural_memory_k: int = 6  # candidate procedural facts inspected before abstaining or context packing
     chain_evidence: bool = True  # include bounded supersedes/evolution chains for retrieved facts
     temporal_history_queries: bool = True  # answer before/previous/former queries from supersession chains
     provenance_chunk_promotion: bool = True  # promote retrieved facts' source episodes into raw chunks

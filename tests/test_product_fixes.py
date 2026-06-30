@@ -145,6 +145,59 @@ def test_summary_fallback_respects_as_of():
     assert "new security console" not in ans
 
 
+# ---------------- derived procedural memory ----------------
+def test_search_prefers_source_backed_procedural_memory_for_runbook_queries():
+    from engram.types import Fact
+
+    mem = Memory()
+    ep = mem.add(
+        "PAT runbook source: rotate the PAT by opening security settings and updating CI secrets.",
+        user_id="u1",
+        session_id="pat-runbook",
+    )
+    fact = Fact(
+        subject="PAT",
+        predicate="procedure",
+        object="open security settings and update CI secrets",
+        user_id=mem.resolver.resolve("u1"),
+        provenance=[ep.id],
+    )
+    fact.embedding = mem.embedder.embed(fact.text)
+    mem.fact_store.upsert(fact.id, fact.embedding, fact)
+
+    res = mem.search("What is the PAT runbook?", user_id="u1")
+
+    assert res.via == "procedural"
+    assert "sessions: pat-runbook" in res.answer()
+    assert "security settings" in res.answer()
+
+
+def test_procedural_memory_can_be_disabled_for_ablation():
+    from engram.config import Config
+    from engram.types import Fact
+
+    mem = Memory(config=Config(procedural_memory=False, abstain_threshold=2.0))
+    ep = mem.add(
+        "PAT runbook source: rotate the PAT by opening security settings and updating CI secrets.",
+        user_id="u1",
+        session_id="pat-runbook",
+    )
+    fact = Fact(
+        subject="PAT",
+        predicate="procedure",
+        object="open security settings and update CI secrets",
+        user_id=mem.resolver.resolve("u1"),
+        provenance=[ep.id],
+    )
+    fact.embedding = mem.embedder.embed(fact.text)
+    mem.fact_store.upsert(fact.id, fact.embedding, fact)
+
+    res = mem.search("What is the PAT runbook?", user_id="u1")
+
+    assert res.abstained
+    assert res.via == "abstain"
+
+
 # ---------------- #7 profile authority ----------------
 def test_profile_build_prefers_authoritative_and_recent():
     from engram.consolidate.summarizer import ProfileBuilder

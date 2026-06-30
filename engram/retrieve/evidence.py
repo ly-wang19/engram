@@ -21,6 +21,7 @@ class EvidenceNeed:
     current_state: bool = False
     duration: bool = False
     history: bool = False
+    procedural: bool = False
     multi_hop: bool = False
     exact_lookup: bool = False
     abstention_sensitive: bool = False
@@ -54,6 +55,12 @@ _HISTORY_TERMS = {
     "before", "previous", "previously", "former", "formerly", "old", "older", "past",
     "history", "changed", "updated", "superseded", "replaced", "used",
 }
+_PROCEDURAL_TERMS = {
+    "procedure", "procedures", "process", "workflow", "workflows", "runbook", "runbooks",
+    "instruction", "instructions", "rule", "rules", "policy", "policies", "protocol", "protocols",
+    "step", "steps", "checklist", "checklists", "always", "never", "should", "must", "remind",
+    "reminder", "remember",
+}
 _RELATION_TERMS = {
     "colleague", "coworker", "friend", "partner", "spouse", "manager", "boss", "child",
     "parent", "sibling", "sister", "brother", "mother", "father", "wife", "husband",
@@ -77,6 +84,7 @@ _CJK_PATTERNS = {
                    "忌口", "过敏", "饮食禁忌"),
     "current": ("现在", "当前", "目前", "如今", "最新", "还", "是否仍", "不再"),
     "history": ("以前", "之前", "曾经", "过去", "历史", "变化", "变更", "改成", "换成"),
+    "procedural": ("怎么", "如何", "步骤", "流程", "规则", "指令", "操作", "办法", "提醒", "记得"),
     "relation": ("同事", "朋友", "老板", "经理", "伴侣", "孩子", "父母", "姐姐", "妹妹", "哥哥", "弟弟", "公司", "职业", "搬到", "住在"),
     "exact": ("邮箱", "电话", "链接", "地址", "编号", "代码", "号码"),
 }
@@ -256,6 +264,16 @@ def plan_evidence(query: str) -> EvidenceNeed:
     if history:
         reasons.append("history")
 
+    procedural = (
+        bool(re.search(r"\bhow\s+(?:do|should|can|to|would|am|is)\b", q))
+        or bool(re.search(r"\b(?:what|which)\s+(?:procedure|process|workflow|runbook|instruction|rule|policy|steps?)\b", q))
+        or _token_hit(toks, _PROCEDURAL_TERMS)
+        or "remember to" in q
+        or _has_phrase(q, _CJK_PATTERNS["procedural"])
+    ) and not aggregation
+    if procedural:
+        reasons.append("procedural")
+
     relation_hits = _token_hit(toks, _RELATION_TERMS) or _has_phrase(q, _CJK_PATTERNS["relation"])
     possessive_chain = bool(re.search(r"\b(my|their|his|her)\s+\w+'?s\b", q)) or q.count("'s") >= 1
     relation_re = "|".join(re.escape(r) for r in _BRIDGE_RELATIONS)
@@ -280,9 +298,9 @@ def plan_evidence(query: str) -> EvidenceNeed:
         reasons.append("abstention_sensitive")
 
     kinds = tuple(reasons) if reasons else ("lookup",)
-    n_facts = 8 if (preference or current_state or history or multi_hop or exact_lookup) else 0
-    n_summaries = 12 if aggregation else (6 if (timeline or duration or multi_hop) else 0)
-    n_chunks = 2 if (preference or exact_lookup or multi_hop or duration) else (1 if aggregation or timeline else 0)
+    n_facts = 8 if (preference or current_state or history or procedural or multi_hop or exact_lookup) else 0
+    n_summaries = 12 if aggregation else (6 if (timeline or duration or procedural or multi_hop) else 0)
+    n_chunks = 2 if (preference or procedural or exact_lookup or multi_hop or duration) else (1 if aggregation or timeline else 0)
     subquery_items: list[str] = []
     if aggregation:
         subquery_items.extend(_aggregation_subqueries(query))
@@ -298,6 +316,7 @@ def plan_evidence(query: str) -> EvidenceNeed:
         current_state=current_state,
         duration=duration,
         history=history,
+        procedural=procedural,
         multi_hop=multi_hop,
         exact_lookup=exact_lookup,
         abstention_sensitive=abstention_sensitive,

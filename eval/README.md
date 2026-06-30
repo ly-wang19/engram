@@ -33,7 +33,8 @@ python eval/ablate_features.py
 
 This command toggles the newest evidence features one at a time and checks whether the enabled path
 surfaces evidence that the disabled path cannot: supersedes-chain context, natural-language previous-value
-answers from supersession history, derived-summary fallback for fact-miss how-to queries, provenance-backed
+answers from supersession history, derived-summary fallback for fact-miss how-to queries, source-backed
+procedural memory for runbook/rule queries, provenance-backed
 raw snippets, provenance-guided full-detail chunk promotion, n-hop graph proximity, intent-aware evidence
 budgeting that preserves exact raw detail under tight budgets, and query-conditioned graph relation weighting that ranks the target relation
 ahead of same-node distractors, plus PPR-style graph path reinforcement that ranks a multi-path-supported
