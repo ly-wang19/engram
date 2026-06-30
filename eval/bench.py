@@ -194,6 +194,11 @@ def engram_config(evidence_planner: bool = True, ablations: tuple[str, ...] = ()
             and "aggregation_recall" not in disabled
             and "aggregation_query_expansion" not in disabled
         ),
+        aggregation_constraint_filter=(
+            "aggregation_constraint_filter" not in disabled
+            and "aggregation_constraints" not in disabled
+            and "constraint_filter" not in disabled
+        ),
         chain_evidence="chain" not in disabled,
         temporal_history_queries=(
             "temporal_history" not in disabled
@@ -618,6 +623,13 @@ class EngramLeanNoAggregationRecallExpansionSystem(EngramLeanSystem):
     ablations = ("aggregation_recall_expansion",)
 
 
+class EngramLeanNoAggregationConstraintFilterSystem(EngramLeanSystem):
+    """A/B baseline: lean system without query-constraint filtering for aggregation candidates."""
+
+    name = "engram_lean_no_aggregation_constraint_filter"
+    ablations = ("aggregation_constraint_filter",)
+
+
 class EngramLeanNoTemporalHistorySystem(EngramLeanSystem):
     """A/B baseline: lean system without natural-language history/supersession queries."""
 
@@ -705,6 +717,7 @@ SYSTEMS = {"engram": EngramSystem, "full_context": FullContextSystem, "rag": RAG
            "engram_lean_no_preference_reversal_extraction": EngramLeanNoPreferenceReversalExtractionSystem,
            "engram_lean_no_numeric_aggregation_candidates": EngramLeanNoNumericAggregationCandidatesSystem,
            "engram_lean_no_aggregation_recall_expansion": EngramLeanNoAggregationRecallExpansionSystem,
+           "engram_lean_no_aggregation_constraint_filter": EngramLeanNoAggregationConstraintFilterSystem,
            "engram_lean_no_temporal_history": EngramLeanNoTemporalHistorySystem,
            "engram_lean_no_graph": EngramLeanNoGraphSystem,
            "engram_lean_no_graph_relation": EngramLeanNoGraphRelationSystem,
@@ -856,7 +869,7 @@ def main():
     ap.add_argument("--intent", action="store_true", help="engram: L6 intent hint (benchmark-neutral)")
     ap.add_argument("--ablate", default="",
                     help="comma-separated Engram algorithm switches to disable for all Engram systems in this run: "
-                         "evidence_budget, summary_fallback, procedural_memory, procedural_extraction, explicit_preference_extraction, preference_object_filter, preference_object_normalization, preference_reversal_extraction, numeric_aggregation_candidates, aggregation_recall_expansion, chain, temporal_history, raw/provenance, provenance_chunks, "
+                         "evidence_budget, summary_fallback, procedural_memory, procedural_extraction, explicit_preference_extraction, preference_object_filter, preference_object_normalization, preference_reversal_extraction, numeric_aggregation_candidates, aggregation_recall_expansion, aggregation_constraint_filter, chain, temporal_history, raw/provenance, provenance_chunks, "
                          "graph/graph_proximity, graph_relation, "
                          "graph_reinforcement, graph_self_anchor, graph_entity_alias, graph_negative, "
                          "planner_location, planner_project")

@@ -44,6 +44,9 @@ def test_engram_config_applies_algorithm_ablation_flags():
     aggregation_recall_cfg = engram_config(ablations=("aggregation_recall_expansion",))
     assert aggregation_recall_cfg.aggregation_recall_expansion is False
 
+    aggregation_constraint_cfg = engram_config(ablations=("aggregation_constraint_filter",))
+    assert aggregation_constraint_cfg.aggregation_constraint_filter is False
+
     temporal_cfg = engram_config(ablations=("temporal_history",))
     assert temporal_cfg.temporal_history_queries is False
 
@@ -93,6 +96,7 @@ def test_bench_exposes_named_lean_ablation_systems():
         "engram_lean_no_preference_reversal_extraction",
         "engram_lean_no_numeric_aggregation_candidates",
         "engram_lean_no_aggregation_recall_expansion",
+        "engram_lean_no_aggregation_constraint_filter",
         "engram_lean_no_temporal_history",
         "engram_lean_no_graph",
         "engram_lean_no_graph_relation",
@@ -129,6 +133,9 @@ def test_bench_exposes_named_lean_ablation_systems():
     assert SYSTEMS["engram_lean_no_aggregation_recall_expansion"].ablations == (
         "aggregation_recall_expansion",
     )
+    assert SYSTEMS["engram_lean_no_aggregation_constraint_filter"].ablations == (
+        "aggregation_constraint_filter",
+    )
     assert SYSTEMS["engram_lean_no_temporal_history"].ablations == ("temporal_history",)
     assert SYSTEMS["engram_lean_no_graph"].ablations == ("graph",)
     assert SYSTEMS["engram_lean_no_graph_relation"].ablations == ("graph_relation",)
@@ -144,8 +151,8 @@ def test_bench_exposes_named_lean_ablation_systems():
 def test_offline_feature_ablation_proves_each_enabled_feature_changes_target_evidence():
     rows, summary = run_ablation()
 
-    assert summary["n"] == 22
-    assert summary["improved"] == 22
+    assert summary["n"] == 23
+    assert summary["improved"] == 23
     assert {row.feature for row in rows} == {
         "chain_evidence",
         "temporal_history_queries",
@@ -158,6 +165,7 @@ def test_offline_feature_ablation_proves_each_enabled_feature_changes_target_evi
         "preference_reversal_extraction",
         "numeric_aggregation_candidates",
         "aggregation_recall_expansion",
+        "aggregation_constraint_filter",
         "provenance_evidence",
         "provenance_chunk_promotion",
         "evidence_budgeting",

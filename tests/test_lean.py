@@ -544,6 +544,41 @@ def test_numeric_aggregation_candidates_extract_money_and_hours():
     assert _numeric_mode("How much more miles per gallon was my car getting?") == ""
 
 
+def test_aggregation_constraint_filter_excludes_conflicting_month_values():
+    from engram.retrieve.aggregate import extract_aggregation_candidates
+
+    eps = [
+        Episode(
+            'I just finished a 416-page novel, but before that, I read "The Power" '
+            "by Naomi Alderman in December, which had 341 pages.",
+            event_time=BASE,
+        ),
+        Episode(
+            'I just finished "The Nightingale" by Kristin Hannah, which had 440 pages.',
+            event_time=BASE + DAY,
+        ),
+    ]
+
+    filtered = extract_aggregation_candidates(
+        "What was the page count of the two novels I finished in January and March?",
+        [],
+        eps,
+    )
+    included = {c.value for c in filtered if c.include}
+    excluded = {c.value: c.exclude_reason for c in filtered if not c.include}
+
+    assert included == {416.0, 440.0}
+    assert "december" in excluded[341.0]
+
+    disabled = extract_aggregation_candidates(
+        "What was the page count of the two novels I finished in January and March?",
+        [],
+        eps,
+        constraint_filter=False,
+    )
+    assert {c.value for c in disabled if c.include} == {341.0, 416.0, 440.0}
+
+
 def test_numeric_aggregation_candidates_can_be_disabled():
     mem = Memory(config=Config(numeric_aggregation_candidates=False))
     mem.add("I attended a digital marketing workshop. I paid $500 to attend.", user_id="u1", event_time=BASE)
