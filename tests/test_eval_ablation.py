@@ -17,6 +17,9 @@ def test_engram_config_applies_algorithm_ablation_flags():
     budget_cfg = engram_config(ablations=("evidence_budget",))
     assert budget_cfg.evidence_budgeting is False
 
+    summary_cfg = engram_config(ablations=("summary_fallback",))
+    assert summary_cfg.summary_fallback is False
+
     temporal_cfg = engram_config(ablations=("temporal_history",))
     assert temporal_cfg.temporal_history_queries is False
 
@@ -57,6 +60,7 @@ def test_bench_exposes_named_lean_ablation_systems():
         "engram_lean_no_raw",
         "engram_lean_no_provenance_chunks",
         "engram_lean_no_evidence_budget",
+        "engram_lean_no_summary_fallback",
         "engram_lean_no_temporal_history",
         "engram_lean_no_graph",
         "engram_lean_no_graph_relation",
@@ -74,6 +78,7 @@ def test_bench_exposes_named_lean_ablation_systems():
     assert SYSTEMS["engram_lean_no_raw"].ablations == ("raw",)
     assert SYSTEMS["engram_lean_no_provenance_chunks"].ablations == ("provenance_chunks",)
     assert SYSTEMS["engram_lean_no_evidence_budget"].ablations == ("evidence_budget",)
+    assert SYSTEMS["engram_lean_no_summary_fallback"].ablations == ("summary_fallback",)
     assert SYSTEMS["engram_lean_no_temporal_history"].ablations == ("temporal_history",)
     assert SYSTEMS["engram_lean_no_graph"].ablations == ("graph",)
     assert SYSTEMS["engram_lean_no_graph_relation"].ablations == ("graph_relation",)
@@ -89,11 +94,12 @@ def test_bench_exposes_named_lean_ablation_systems():
 def test_offline_feature_ablation_proves_each_enabled_feature_adds_evidence():
     rows, summary = run_ablation()
 
-    assert summary["n"] == 13
-    assert summary["improved"] == 13
+    assert summary["n"] == 14
+    assert summary["improved"] == 14
     assert {row.feature for row in rows} == {
         "chain_evidence",
         "temporal_history_queries",
+        "summary_fallback",
         "provenance_evidence",
         "provenance_chunk_promotion",
         "evidence_budgeting",

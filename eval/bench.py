@@ -138,6 +138,11 @@ def engram_config(evidence_planner: bool = True, ablations: tuple[str, ...] = ()
     return Config(
         evidence_planner=evidence_planner,
         evidence_budgeting="evidence_budget" not in disabled and "evidence_budgeting" not in disabled,
+        summary_fallback=(
+            "summary_fallback" not in disabled
+            and "summary" not in disabled
+            and "derived_summary" not in disabled
+        ),
         chain_evidence="chain" not in disabled,
         temporal_history_queries=(
             "temporal_history" not in disabled
@@ -499,6 +504,13 @@ class EngramLeanNoEvidenceBudgetSystem(EngramLeanSystem):
     ablations = ("evidence_budget",)
 
 
+class EngramLeanNoSummaryFallbackSystem(EngramLeanSystem):
+    """A/B baseline: lean system without derived-summary fallback for search misses."""
+
+    name = "engram_lean_no_summary_fallback"
+    ablations = ("summary_fallback",)
+
+
 class EngramLeanNoTemporalHistorySystem(EngramLeanSystem):
     """A/B baseline: lean system without natural-language history/supersession queries."""
 
@@ -577,6 +589,7 @@ SYSTEMS = {"engram": EngramSystem, "full_context": FullContextSystem, "rag": RAG
            "engram_lean_no_raw": EngramLeanNoRawSystem,
            "engram_lean_no_provenance_chunks": EngramLeanNoProvenanceChunksSystem,
            "engram_lean_no_evidence_budget": EngramLeanNoEvidenceBudgetSystem,
+           "engram_lean_no_summary_fallback": EngramLeanNoSummaryFallbackSystem,
            "engram_lean_no_temporal_history": EngramLeanNoTemporalHistorySystem,
            "engram_lean_no_graph": EngramLeanNoGraphSystem,
            "engram_lean_no_graph_relation": EngramLeanNoGraphRelationSystem,
@@ -728,7 +741,7 @@ def main():
     ap.add_argument("--intent", action="store_true", help="engram: L6 intent hint (benchmark-neutral)")
     ap.add_argument("--ablate", default="",
                     help="comma-separated Engram algorithm switches to disable for all Engram systems in this run: "
-                         "evidence_budget, chain, temporal_history, raw/provenance, provenance_chunks, "
+                         "evidence_budget, summary_fallback, chain, temporal_history, raw/provenance, provenance_chunks, "
                          "graph/graph_proximity, graph_relation, "
                          "graph_reinforcement, graph_self_anchor, graph_entity_alias, graph_negative, "
                          "planner_location, planner_project")
