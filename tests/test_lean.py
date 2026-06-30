@@ -326,6 +326,11 @@ def test_evidence_planner_is_query_based_not_benchmark_based():
     freq = plan_evidence("How often do I practice yoga now?")
     assert freq.current_state and not freq.aggregation and not freq.subqueries
 
+    proc = plan_evidence("How do I rotate the PAT?")
+    assert proc.procedural and proc.n_facts > 0 and proc.n_chunks > 0
+    assert not plan_evidence("How many PAT rotations did I do?").procedural
+    assert plan_evidence("这个 PAT 流程怎么操作?").procedural
+
     dur = plan_evidence("How many weeks in total did I spend reading these books?")
     assert dur.duration and dur.aggregation and dur.n_chunks > 0
 
@@ -356,6 +361,40 @@ def test_lean_context_auto_adds_preference_records():
     ctx = mem.lean_context("What is my favorite language?", user_id="u1", n_chunks=0)
     assert "PREFERENCE RECORDS (current, structured):" in ctx
     assert "favorite language" in ctx.lower()
+
+
+def test_lean_context_auto_adds_procedural_memory_block():
+    from engram.types import Fact
+
+    mem = Memory()
+    ep = mem.add(
+        "PAT runbook source: rotate the PAT by opening security settings and updating CI secrets.",
+        user_id="u1",
+        session_id="pat-runbook",
+        event_time=BASE,
+    )
+    fact = Fact(
+        subject="PAT",
+        predicate="procedure",
+        object="open security settings and update CI secrets",
+        user_id=mem.resolver.resolve("u1"),
+        valid_at=BASE,
+        provenance=[ep.id],
+    )
+    fact.embedding = mem.embedder.embed(fact.text)
+    mem.fact_store.upsert(fact.id, fact.embedding, fact)
+
+    ctx = mem.lean_context(
+        "What is the PAT runbook?",
+        user_id="u1",
+        persona=False,
+        n_summaries=0,
+        n_chunks=0,
+    )
+
+    assert "PROCEDURAL MEMORY (standing rules/how-to, source-backed):" in ctx
+    assert "sessions: pat-runbook" in ctx
+    assert "security settings" in ctx
 
 
 def test_lean_context_auto_adds_dietary_restriction_records():

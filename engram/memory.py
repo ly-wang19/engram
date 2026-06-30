@@ -84,6 +84,12 @@ _TEMPORAL_HISTORY_RE = re.compile(
     r"以前|之前|曾经|过去|原来|从前|上一",
     re.IGNORECASE,
 )
+_PROCEDURAL_QUERY_RE = re.compile(
+    r"\b(how\s+(?:do|should|can|to|would|am|is)|procedure|process|workflow|runbook|instruction|"
+    r"rule|policy|protocol|steps?|checklist|always|never|remind|remember\s+to)\b|"
+    r"怎么|如何|步骤|流程|规则|指令|操作|办法|提醒|记得",
+    re.IGNORECASE,
+)
 
 
 def _expected_answer_type(query: str):
@@ -946,13 +952,89 @@ class Memory:
             self._page_hot([f for f, _ in ranked])
         return ranked, diag
 
-    def procedural(self, user_id: str = "default") -> list[Fact]:
+    def procedural(self, user_id: str = "default", as_of: Optional[float] = None) -> list[Fact]:
         """Standing instructions / how-to facts for this user (procedural memory)."""
         user = self.resolver.resolve(user_id)
         return [f for f in self._all_facts()
-                if f.user_id == user and f.is_live()
+                if f.user_id == user and f.is_live(as_of)
                 and (f.predicate.lower() in self._INSTRUCTION_PREDS
                      or any(f.predicate.lower().startswith(p + "_") for p in ("wants", "prefers", "remind")))]
+
+    def _is_procedural_fact(self, f: Fact) -> bool:
+        pred = f.predicate.lower()
+        return pred in self._INSTRUCTION_PREDS or any(
+            pred.startswith(p + "_") for p in ("wants", "prefers", "remind")
+        )
+
+    def _procedural_source_label(self, f: Fact) -> str:
+        sessions: list[str] = []
+        seen: set[str] = set()
+        for ep_id in f.provenance:
+            ep = self.episodes_doc.get(ep_id)
+            if ep is None or ep.session_id in seen:
+                continue
+            seen.add(ep.session_id)
+            sessions.append(ep.session_id)
+        if sessions:
+            return "sessions: " + ", ".join(sessions[:3])
+        return f"fact: {f.id}"
+
+    def _procedural_candidates(
+        self,
+        query: str,
+        user: str,
+        as_of: Optional[float] = None,
+        limit: Optional[int] = None,
+    ) -> list[Fact]:
+        if not self.config.procedural_memory:
+            return []
+        k = max(1, int(limit or getattr(self.config, "procedural_memory_k", 6) or 6))
+        q_is_proc = bool(_PROCEDURAL_QUERY_RE.search(query))
+        rows: list[tuple[int, float, Fact]] = []
+        for f in self._all_facts():
+            if f.user_id != user or not f.is_live(as_of) or not self._is_procedural_fact(f):
+                continue
+            text = " ".join(
+                part for part in (
+                    f.subject,
+                    f.predicate.replace("_", " "),
+                    f.object,
+                    f.display,
+                )
+                if part
+            )
+            exact = overlap_terms(query, text) - _GENERIC_ATTR_TERMS
+            object_hits = overlap_terms(query, f.object)
+            subject_hits = overlap_terms(query, f.subject)
+            if not exact and not q_is_proc:
+                continue
+            if q_is_proc and not (exact or subject_hits or object_hits):
+                continue
+            score = len(exact) + (3 if object_hits else 0) + (2 if subject_hits else 0)
+            if f.provenance:
+                score += 1
+            rows.append((score, f.valid_at, f))
+        rows.sort(key=lambda row: (-row[0], -row[1], row[2].text.lower()))
+        return [f for _, _, f in rows[:k]]
+
+    def _procedural_memory_block(
+        self,
+        query: str,
+        user: str,
+        as_of: Optional[float] = None,
+        limit: Optional[int] = None,
+    ) -> str:
+        rows = self._procedural_candidates(query, user, as_of, limit=limit)
+        if not rows:
+            return ""
+        lines = []
+        for f in rows:
+            source = self._procedural_source_label(f)
+            pred = f.predicate.replace("_", " ")
+            lines.append(
+                f"- [{fmt_date(f.valid_at)}] ({source}) {f.subject} {pred}: {f.object}"
+            )
+        return "PROCEDURAL MEMORY (standing rules/how-to, source-backed):\n" + "\n".join(lines)
 
     def structured_profile(self, user_id: str = "default") -> dict:
         """L2 structured profile: the user's live facts grouped into basic info / preferences / habits,
@@ -1602,6 +1684,8 @@ class Memory:
             return "current_state"
         if title.startswith("PREFERENCE RECORDS"):
             return "preference"
+        if title.startswith("PROCEDURAL MEMORY"):
+            return "procedural"
         if title.startswith("FACTS"):
             return "facts"
         if title.startswith("SESSION SUMMARIES"):
@@ -1630,6 +1714,7 @@ class Memory:
             "working": 95,
             "facts": 90,
             "current_state": 88,
+            "procedural": 86,
             "provenance": 82,
             "raw": 78,
             "graph": 76,
@@ -1655,6 +1740,8 @@ class Memory:
             score += {"duration": 55, "raw": 35, "timeline": 25, "summaries": 15}.get(kind, 0)
         if need.history:
             score += {"history": 55, "evolution": 40, "timeline": 20, "facts": 15}.get(kind, 0)
+        if getattr(need, "procedural", False):
+            score += {"procedural": 55, "facts": 18, "provenance": 15, "raw": 12, "summaries": 8}.get(kind, 0)
         if need.current_state:
             score += {"current_state": 45, "facts": 20, "evolution": 20}.get(kind, 0)
         if need.preference:
@@ -1676,6 +1763,7 @@ class Memory:
             "timeline": 0.35,
             "summaries": 0.35,
             "current_state": 0.35,
+            "procedural": 0.38,
             "preference": 0.35,
             "working": 0.25,
             "profile": 0.18,
@@ -1881,6 +1969,21 @@ class Memory:
                 if evo:
                     blocks.append(evo)
 
+        if (
+            self.config.procedural_memory
+            and not redact_sensitive
+            and need is not None
+            and getattr(need, "procedural", False)
+        ):
+            proc = self._procedural_memory_block(
+                query,
+                user,
+                as_of,
+                limit=getattr(self.config, "procedural_memory_k", 6),
+            )
+            if proc:
+                blocks.append(proc)
+
         if need is not None and need.history and self.config.temporal_history_queries:
             hist = self._history_block(user, query, as_of, redact_sensitive=redact_sensitive)
             if hist:
@@ -2047,7 +2150,14 @@ class Memory:
         if hist is not None:
             return hist
 
-        # 3. hybrid retrieval
+        # 3. typed procedural memory: for rule/how-to queries, prefer the source-backed procedural view over
+        # a generic fact answer. This keeps standing instructions auditable and still falls through for
+        # ordinary lookup questions.
+        proc = self._procedural_fallback(query, user, as_of=as_of)
+        if proc is not None:
+            return proc
+
+        # 4. hybrid retrieval
         ranked, diag = self.retriever.retrieve(query, user, as_of, top_k)
         via = "hybrid"
         if not ranked:
@@ -2055,6 +2165,9 @@ class Memory:
             if ranked:
                 via = "cold"
         if not ranked:
+            proc = self._procedural_fallback(query, user, as_of=as_of)
+            if proc is not None:
+                return proc
             summ = self._summary_fallback(query, user_id, as_of=as_of)
             if summ is not None:
                 return summ
@@ -2091,6 +2204,9 @@ class Memory:
                     return SearchResult(query=query, facts=facts, scores=scores, via="cold")
             # #3b: the answer may live only in a session SUMMARY (a how-to, a rule, an install command) the
             # extractor never atomized into a fact. Fall back to the most relevant summary before abstaining.
+            proc = self._procedural_fallback(query, user, as_of=as_of)
+            if proc is not None:
+                return proc
             summ = self._summary_fallback(query, user_id, as_of=as_of)
             if summ is not None:
                 return summ
@@ -2379,3 +2495,25 @@ class Memory:
             dated = f"[{ep.metadata.get('date') or fmt_date(ep.event_time)}] (session: {ep.session_id}) {text}"
             return SearchResult(query=query, via="summary", _answer=dated)
         return None
+
+    def _procedural_fallback(
+        self,
+        query: str,
+        user: str,
+        as_of: Optional[float] = None,
+    ) -> Optional[SearchResult]:
+        """Typed fallback for standing instructions/how-to facts.
+
+        Hybrid retrieval may abstain when a procedural fact's predicate is generic ("procedure", "rule")
+        and only the object carries the useful steps. Before falling back to free-text summaries, answer
+        from the source-backed procedural view so durable rules stay typed and auditable.
+        """
+        rows = self._procedural_candidates(query, user, as_of, limit=1)
+        if not rows:
+            return None
+        f = rows[0]
+        reinforce(f, self.config.access_boost)
+        source = self._procedural_source_label(f)
+        pred = f.predicate.replace("_", " ")
+        answer = f"[{fmt_date(f.valid_at)}] ({source}) {f.subject} {pred}: {f.object}"
+        return SearchResult(query=query, facts=[f], scores=[1.0], via="procedural", _answer=answer)

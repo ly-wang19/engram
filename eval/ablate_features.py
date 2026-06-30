@@ -82,6 +82,37 @@ def _summary_fallback_context(enabled: bool) -> str:
     return f"{res.via}\n{res.answer()}"
 
 
+def _procedural_memory_context(enabled: bool) -> str:
+    mem = Memory(config=Config(procedural_memory=enabled, abstain_threshold=2.0))
+    ep = mem.add(
+        "PAT runbook source: rotate the PAT by opening security settings, regenerating the token, "
+        "then updating CI secrets.",
+        user_id="u1",
+        session_id="pat-runbook",
+        event_time=BASE,
+    )
+    fact = Fact(
+        subject="PAT",
+        predicate="procedure",
+        object="open security settings, regenerate the token, then update CI secrets",
+        user_id=mem.resolver.resolve("u1"),
+        valid_at=BASE,
+        provenance=[ep.id],
+    )
+    fact.embedding = mem.embedder.embed(fact.text)
+    mem.fact_store.upsert(fact.id, fact.embedding, fact)
+    ctx = mem.lean_context(
+        "What is the PAT runbook?",
+        user_id="u1",
+        persona=False,
+        n_summaries=0,
+        n_chunks=0,
+        char_budget=10_000,
+    )
+    res = mem.search("What is the PAT runbook?", user_id="u1")
+    return f"{ctx}\n\nSEARCH {res.via}\n{res.answer()}"
+
+
 def _raw_context(enabled: bool) -> str:
     mem = Memory(config=Config(evidence_planner=False, provenance_evidence=enabled))
     ep = mem.add(
@@ -285,6 +316,17 @@ def run_ablation() -> tuple[list[AblationResult], dict]:
             _summary_fallback_context,
             lambda answer: "summary" in answer and "security settings" in answer and "pat-runbook" in answer,
             "derived session summary answers fact-miss how-to query",
+        ),
+        (
+            "procedural_memory",
+            _procedural_memory_context,
+            lambda ctx: (
+                "PROCEDURAL MEMORY" in ctx
+                and "security settings" in ctx
+                and "sessions: pat-runbook" in ctx
+                and "SEARCH procedural" in ctx
+            ),
+            "typed procedural memory surfaces source-backed runbook",
         ),
         (
             "provenance_evidence",
