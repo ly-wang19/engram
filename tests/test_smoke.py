@@ -383,6 +383,31 @@ def test_first_person_fan_of_is_preference_not_occupation():
     assert "occupation" not in {p for _, p, _ in facts}
 
 
+def test_explicit_preference_verbs_extract_profile_facts():
+    mem = Memory()
+    mem.add("I prefer aisle seats and avoid red-eye flights.", user_id="u1", event_time=BASE)
+    mem.add("I don't like crowded lounges.", user_id="u1", event_time=BASE + DAY)
+    mem.consolidate()
+
+    facts = {(f.subject, f.predicate, f.object) for f in mem.fact_store.values()}
+    assert ("u1", "prefers", "aisle seats") in facts
+    assert ("u1", "avoids", "red-eye flights") in facts
+    assert ("u1", "dislikes", "crowded lounges") in facts
+
+
+def test_explicit_preference_does_not_use_polluted_name_guess():
+    mem = Memory()
+    mem.add("I'm pretty sure I love retro-style diners.", user_id="u1", event_time=BASE)
+    mem.add("My name is Wei.", user_id="u1", event_time=BASE + DAY)
+    mem.add("I like jazz.", user_id="u1", event_time=BASE + 2 * DAY)
+    mem.consolidate()
+
+    facts = {(f.subject, f.predicate, f.object) for f in mem.fact_store.values()}
+    assert ("pretty", "loves", "retro-style diners") not in facts
+    assert ("u1", "likes", "jazz") in facts
+    assert mem.engine.self_name("u1") == "Wei"
+
+
 def test_import_style_moving_and_dietary_restrictions_extract_cleanly():
     mem = Memory()
     mem.add("I'm moving to Berlin next month for a job at Acme.", user_id="u1", event_time=BASE)

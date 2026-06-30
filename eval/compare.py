@@ -155,8 +155,8 @@ def format_pair_compare(
         lines.append(f"  disagreement ({a} vs {b}):")
         lines.append(f"    both right:  {both_right}")
         lines.append(f"    both wrong:  {both_wrong}")
-        lines.append(f"    {a.split('.')[0]:<30s} only: {a_only}")
-        lines.append(f"    {b.split('.')[0]:<30s} only: {b_only}")
+        lines.append(f"    {a.split('.')[0]} only: {a_only}")
+        lines.append(f"    {b.split('.')[0]} only: {b_only}")
         lines.append(
             f"    oracle (per-q max): {oracle}/{len(shared)} = {100*oracle/len(shared):.1f}%   "
             f"[{100*both_right/len(shared):.1f}% agreement, {100*(a_only+b_only)/len(shared):.1f}% disagreement]"

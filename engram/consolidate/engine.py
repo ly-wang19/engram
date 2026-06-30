@@ -19,6 +19,7 @@ from .graph_builder import GraphBuilder
 from .summarizer import ProfileBuilder
 
 _PROCEDURAL_EXTRACTED_PREDS = {"procedure", "how_to", "routine"}
+_EXPLICIT_PREFERENCE_PREDS = {"likes", "loves", "enjoys", "prefers", "dislikes", "hates", "avoids"}
 
 
 class ConsolidationEngine:
@@ -40,7 +41,7 @@ class ConsolidationEngine:
 
             self.extractor = LLMExtractor(llm)
         else:
-            self.extractor = RuleExtractor()
+            self.extractor = RuleExtractor(config.explicit_preference_extraction)
         self.graph_builder = GraphBuilder(graph, embedder)
         # Semantic conflict detection needs a real (semantic) embedder; the offline HashingEmbedder
         # produces meaningless cosines, so we gate it off there → exact-slot only, fully deterministic.
@@ -85,6 +86,11 @@ class ConsolidationEngine:
                 if (
                     not self.config.procedural_extraction
                     and fact.predicate.lower() in _PROCEDURAL_EXTRACTED_PREDS
+                ):
+                    continue
+                if (
+                    not self.config.explicit_preference_extraction
+                    and fact.predicate.lower() in _EXPLICIT_PREFERENCE_PREDS
                 ):
                     continue
                 fact.embedding = self.embedder.embed(fact.text)

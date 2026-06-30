@@ -39,6 +39,7 @@ class Config:
     abstain_threshold: float = 0.45  # abstain if no attribute match AND best semantic sim below this
     evidence_planner: bool = True  # benchmark-neutral query -> evidence-shape routing for lean_context
     evidence_budgeting: bool = True  # intent-aware context packing instead of equal/raw truncation
+    explicit_preference_extraction: bool = True  # extract I like/prefer/avoid style preference facts
     procedural_extraction: bool = True  # extract durable runbooks/how-to steps into typed procedure facts
     summary_fallback: bool = True  # answer from derived session summaries when facts cannot answer
     summary_fallback_k: int = 6  # candidate summaries inspected by the fallback before abstaining

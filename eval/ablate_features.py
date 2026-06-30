@@ -135,6 +135,27 @@ def _procedural_extraction_context(enabled: bool) -> str:
     return f"{ctx}\n\nSEARCH {res.via}\n{res.answer()}"
 
 
+def _explicit_preference_extraction_context(enabled: bool) -> str:
+    mem = Memory(config=Config(explicit_preference_extraction=enabled))
+    mem.add(
+        "I prefer aisle seats and avoid red-eye flights.",
+        user_id="u1",
+        session_id="travel-prefs",
+        event_time=BASE,
+    )
+    mem.consolidate()
+    profile = mem.structured_profile("u1")
+    ctx = mem.lean_context(
+        "What travel preferences should you remember?",
+        user_id="u1",
+        persona=False,
+        n_summaries=0,
+        n_chunks=0,
+        char_budget=10_000,
+    )
+    return f"{json.dumps(profile, ensure_ascii=False, sort_keys=True)}\n\n{ctx}"
+
+
 def _raw_context(enabled: bool) -> str:
     mem = Memory(config=Config(evidence_planner=False, provenance_evidence=enabled))
     ep = mem.add(
@@ -360,6 +381,16 @@ def run_ablation() -> tuple[list[AblationResult], dict]:
                 and "SEARCH procedural" in ctx
             ),
             "rule extractor promotes runbook source into procedural memory",
+        ),
+        (
+            "explicit_preference_extraction",
+            _explicit_preference_extraction_context,
+            lambda ctx: (
+                "PREFERENCE RECORDS (current, structured):" in ctx
+                and "aisle seats" in ctx
+                and "red-eye flights" in ctx
+            ),
+            "rule extractor promotes explicit prefer/avoid statements into profile memory",
         ),
         (
             "provenance_evidence",

@@ -212,6 +212,19 @@ def test_procedural_extraction_can_be_disabled_for_ablation():
     assert [f for f in mem.fact_store.values() if f.predicate == "procedure"] == []
 
 
+def test_explicit_preference_extraction_can_be_disabled_for_ablation():
+    from engram.config import Config
+
+    mem = Memory(config=Config(explicit_preference_extraction=False))
+    mem.add("I prefer aisle seats and avoid red-eye flights.", user_id="u1")
+    mem.consolidate()
+
+    assert [
+        f for f in mem.fact_store.values()
+        if f.predicate in {"prefers", "avoids"}
+    ] == []
+
+
 # ---------------- #7 profile authority ----------------
 def test_profile_build_prefers_authoritative_and_recent():
     from engram.consolidate.summarizer import ProfileBuilder
