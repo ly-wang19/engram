@@ -1868,7 +1868,14 @@ class Memory:
         `char_budget` hard-caps the assembled context so it can never approach the full-history size."""
         user = self.resolver.resolve(user_id)
         blocks: list[str] = []
-        need = plan_evidence(query) if self.config.evidence_planner else None
+        need = (
+            plan_evidence(
+                query,
+                aggregation_recall_expansion=self.config.aggregation_recall_expansion,
+            )
+            if self.config.evidence_planner
+            else None
+        )
         if need is not None:
             n_facts = max(n_facts, need.n_facts)
             n_summaries = max(n_summaries, need.n_summaries)

@@ -44,6 +44,7 @@ class Config:
     preference_object_normalization: bool = True  # canonicalize "sound/idea of X" preference objects to X
     preference_reversal_extraction: bool = True  # extract high-confidence "no longer like X" preference updates
     numeric_aggregation_candidates: bool = True  # extract money/hour/page rows for count/sum questions
+    aggregation_recall_expansion: bool = True  # expand count/sum queries into high-recall evidence lookups
     procedural_extraction: bool = True  # extract durable runbooks/how-to steps into typed procedure facts
     summary_fallback: bool = True  # answer from derived session summaries when facts cannot answer
     summary_fallback_k: int = 6  # candidate summaries inspected by the fallback before abstaining
