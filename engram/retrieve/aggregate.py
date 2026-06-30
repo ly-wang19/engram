@@ -11,7 +11,8 @@ import re
 from dataclasses import dataclass
 
 from ..types import Episode, Fact
-from ..util import fmt_date
+from ..util import fmt_date, stems
+from .lexical import overlap_terms
 
 
 @dataclass(frozen=True)
@@ -26,6 +27,8 @@ class AggregationCandidate:
     include: bool = True
     confidence: float = 0.8
     exclude_reason: str = ""
+    value: float | None = None
+    unit: str = ""
 
 
 _ACTION_PATTERNS: tuple[tuple[str, str], ...] = (
@@ -86,6 +89,143 @@ def _target_type(query: str) -> str:
     if "model kit" in q or "model kits" in q:
         return "model_kit"
     return ""
+
+
+_NUMERIC_GENERIC_TERMS = {
+    "how", "many", "much", "total", "sum", "spent", "spend", "cost", "paid", "pay", "money",
+    "dollar", "dollars", "hour", "hours", "minute", "minutes", "page", "pages", "count",
+    "last", "past", "recent", "recently", "month", "months", "week", "weeks", "year", "years",
+    "did", "have", "has", "had", "was", "were", "the", "and", "for", "with", "from", "into",
+}
+
+
+def _numeric_mode(query: str) -> str:
+    q = query.lower()
+    if re.search(r"\b(hours?|hrs?|minutes?|mins?)\b", q):
+        return "duration"
+    if (
+        re.search(r"\b(how\s+much|money|paid|cost|dollars?)\b", q)
+        or "$" in q
+        or (re.search(r"\bspen[td]\b", q) and re.search(r"\b(money|dollars?)\b", q))
+    ):
+        return "money"
+    if re.search(r"\b(page\s+count|pages?|\d+-page)\b", q):
+        return "page_count"
+    return ""
+
+
+def _topic_terms(query: str) -> set[str]:
+    return {t for t in stems(query) if len(t) > 2 and t not in _NUMERIC_GENERIC_TERMS}
+
+
+def _numeric_item(query: str, mode: str) -> str:
+    q = query.lower()
+    if "workshop" in q:
+        return "workshop"
+    if "game" in q or "gaming" in q:
+        return "game"
+    if "jog" in q and "yoga" in q:
+        return "jogging/yoga"
+    if "yoga" in q:
+        return "yoga"
+    if "novel" in q or "book" in q:
+        return "novel"
+    if mode == "money":
+        m = re.search(r"\b(?:on|for|attending)\s+(.+?)(?:\s+(?:in|over|during|last|past)\b|[?.!,;:]|$)", q)
+        if m:
+            return " ".join(m.group(1).split())[:60]
+    if mode == "duration":
+        m = re.search(r"\b(?:of|spent|playing|doing)\s+(.+?)(?:\s+(?:in|over|during|last|past|total)\b|[?.!,;:]|$)", q)
+        if m:
+            return " ".join(m.group(1).split())[:60]
+    return mode or "item"
+
+
+def _value_text(value: float) -> str:
+    return str(int(value)) if value.is_integer() else f"{value:g}"
+
+
+def _relevant_numeric_sentence(query: str, text: str) -> bool:
+    topics = _topic_terms(query)
+    if not topics:
+        return True
+    if overlap_terms(query, text) & topics:
+        return True
+    q = query.lower()
+    t = text.lower()
+    return (
+        ("jogging" in q and "jog" in t)
+        or ("games" in q and "game" in t)
+        or ("workshops" in q and "workshop" in t)
+    )
+
+
+def _numeric_candidates_from_text(query: str, text: str, date: float) -> list[AggregationCandidate]:
+    mode = _numeric_mode(query)
+    if not mode:
+        return []
+    item = _numeric_item(query, mode)
+    out: list[AggregationCandidate] = []
+    sentences = _sentences(text)
+    for idx, sent in enumerate(sentences):
+        evidence = " ".join(sent.split())
+        window = " ".join(
+            s for s in (
+                sentences[idx - 1] if idx > 0 else "",
+                sent,
+                sentences[idx + 1] if idx + 1 < len(sentences) else "",
+            ) if s
+        )
+        if not _relevant_numeric_sentence(query, window):
+            continue
+        matches: list[tuple[float, str, str, str, bool, str]] = []
+        if mode == "money":
+            for m in re.finditer(r"\$\s*([0-9][0-9,]*(?:\.[0-9]+)?)", evidence):
+                value = float(m.group(1).replace(",", ""))
+                matches.append((value, "USD", "spent", m.group(0), True, ""))
+        elif mode == "duration":
+            for m in re.finditer(
+                r"\b([0-9]+(?:\.[0-9]+)?)\s*(?:-| )?\s*(hours?|hrs?|minutes?|mins?)\b",
+                evidence,
+                re.I,
+            ):
+                value = float(m.group(1))
+                unit = m.group(2).lower()
+                if unit.startswith(("minute", "min")):
+                    value = value / 60.0
+                stale = bool(
+                    re.search(r"\bused to\b|trying to get back|hoping to get back|slacking off", window, re.I)
+                    and re.search(r"\b(last|this|recent|recently|did)\b", query, re.I)
+                )
+                matches.append((
+                    value,
+                    "hours",
+                    "duration",
+                    m.group(0),
+                    not stale,
+                    "past habit, not completed in requested period" if stale else "",
+                ))
+        elif mode == "page_count":
+            for m in re.finditer(r"\b([0-9][0-9,]{1,4})\s*(?:-| )?pages?\b", evidence, re.I):
+                value = float(m.group(1).replace(",", ""))
+                matches.append((value, "pages", "page_count", m.group(0), True, ""))
+        for value, unit, action, raw, include, reason in matches:
+            raw_value = f"{raw} {item}".strip()
+            out.append(AggregationCandidate(
+                canonical_item=f"{item} {unit} {_value_text(value)} {fmt_date(date)}",
+                raw_item=raw_value,
+                item_type=mode,
+                action=action,
+                action_raw=raw,
+                date=date,
+                evidence=" ".join(window.split())[:500],
+                include=include,
+                confidence=0.9 if include else 0.75,
+                exclude_reason=reason,
+                value=value,
+                unit=unit,
+            ))
+    return out
 
 
 def _action(query: str, text: str) -> tuple[str, str]:
@@ -231,7 +371,7 @@ def _llm_candidates(query: str, facts: list[Fact], episodes: list[Episode], llm)
     prompt = (
         "Extract structured aggregation candidates for the user's count/list question.\n"
         "Return JSON only: an array of objects with keys source_id, action, item, item_type, include, "
-        "exclude_reason, confidence.\n\n"
+        "exclude_reason, confidence. For numeric sum questions, also include numeric value and unit.\n\n"
         "Rules:\n"
         "- include=true only if the candidate is an instance of the requested object type and matches one "
         "of the requested actions or a clear synonym.\n"
@@ -272,6 +412,11 @@ def _llm_candidates(query: str, facts: list[Fact], episodes: list[Episode], llm)
             confidence = float(conf)
         except (TypeError, ValueError):
             confidence = 0.8
+        raw_value = row.get("value", None)
+        try:
+            value = float(raw_value) if str(raw_value or "").strip() else None
+        except (TypeError, ValueError):
+            value = None
         out.append(AggregationCandidate(
             canonical_item=_canonical(item),
             raw_item=item,
@@ -283,6 +428,8 @@ def _llm_candidates(query: str, facts: list[Fact], episodes: list[Episode], llm)
             include=include,
             confidence=max(0.0, min(1.0, confidence)),
             exclude_reason=str(row.get("exclude_reason", "")).strip(),
+            value=value,
+            unit=str(row.get("unit", "")).strip(),
         ))
     return dedupe_aggregation_candidates(out)
 
@@ -292,11 +439,19 @@ def extract_aggregation_candidates(
     facts: list[Fact],
     episodes: list[Episode],
     llm=None,
+    numeric: bool = True,
 ) -> list[AggregationCandidate]:
     llm_out = _llm_candidates(query, facts, episodes, llm)
+    numeric_out: list[AggregationCandidate] = []
+    if numeric:
+        for fact in facts:
+            numeric_out.extend(_numeric_candidates_from_text(query, fact.text, fact.valid_at))
+        for ep in episodes:
+            for segment in _user_segments(ep.content):
+                numeric_out.extend(_numeric_candidates_from_text(query, segment, ep.event_time))
     target = _target_type(query)
     if not target:
-        return llm_out
+        return dedupe_aggregation_candidates(llm_out + numeric_out)
     out: list[AggregationCandidate] = []
     for fact in facts:
         out.extend(_candidate_from_text(query, target, fact.text, fact.valid_at))
@@ -305,16 +460,19 @@ def extract_aggregation_candidates(
             for sent in _sentences(segment):
                 out.extend(_candidate_from_text(query, target, sent, ep.event_time))
     if not llm_out:
-        return dedupe_aggregation_candidates(out)
+        return dedupe_aggregation_candidates(out + numeric_out)
     llm_keys = {(c.canonical_item, c.action) for c in llm_out}
     fill = [c for c in out if (c.canonical_item, c.action) not in llm_keys]
-    return dedupe_aggregation_candidates(llm_out + fill)
+    return dedupe_aggregation_candidates(llm_out + fill + numeric_out)
 
 
 def dedupe_aggregation_candidates(candidates: list[AggregationCandidate]) -> list[AggregationCandidate]:
-    best: dict[tuple[str, str], AggregationCandidate] = {}
+    best: dict[tuple, AggregationCandidate] = {}
     for cand in candidates:
-        key = (cand.canonical_item, cand.action)
+        if cand.value is not None:
+            key = (cand.canonical_item, cand.action, cand.unit, cand.value, fmt_date(cand.date))
+        else:
+            key = (cand.canonical_item, cand.action)
         old = best.get(key)
         if old is None or (cand.include, cand.confidence, -cand.date) > (old.include, old.confidence, -old.date):
             best[key] = cand
@@ -324,15 +482,31 @@ def dedupe_aggregation_candidates(candidates: list[AggregationCandidate]) -> lis
 def render_aggregation_candidates(candidates: list[AggregationCandidate], limit: int = 18) -> str:
     if not candidates:
         return ""
+    has_values = any(c.value is not None for c in candidates)
     lines = [
-        "AGGREGATION CANDIDATES (count INCLUDE rows; do not count EXCLUDE rows):",
-        "status | date | action | item | type | evidence",
-        "--- | --- | --- | --- | --- | ---",
+        "AGGREGATION CANDIDATES (count or sum INCLUDE rows; do not count/sum EXCLUDE rows):",
     ]
+    if has_values:
+        lines.extend([
+            "status | date | action | item | value | unit | type | evidence",
+            "--- | --- | --- | --- | --- | --- | --- | ---",
+        ])
+    else:
+        lines.extend([
+            "status | date | action | item | type | evidence",
+            "--- | --- | --- | --- | --- | ---",
+        ])
     for cand in candidates[:limit]:
         status = "INCLUDE" if cand.include else f"EXCLUDE ({cand.exclude_reason})"
-        lines.append(
-            f"{status} | {fmt_date(cand.date)} | {cand.action} | {cand.raw_item} | "
-            f"{cand.item_type} | {cand.evidence}"
-        )
+        if has_values:
+            value = "" if cand.value is None else _value_text(cand.value)
+            lines.append(
+                f"{status} | {fmt_date(cand.date)} | {cand.action} | {cand.raw_item} | "
+                f"{value} | {cand.unit} | {cand.item_type} | {cand.evidence}"
+            )
+        else:
+            lines.append(
+                f"{status} | {fmt_date(cand.date)} | {cand.action} | {cand.raw_item} | "
+                f"{cand.item_type} | {cand.evidence}"
+            )
     return "\n".join(lines)

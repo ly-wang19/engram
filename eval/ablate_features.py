@@ -227,6 +227,37 @@ def _preference_reversal_extraction_context(enabled: bool) -> str:
     return f"FACTS={json.dumps(facts, ensure_ascii=False, sort_keys=True)}\n\n{ctx}"
 
 
+def _numeric_aggregation_candidates_context(enabled: bool) -> str:
+    mem = Memory(config=Config(numeric_aggregation_candidates=enabled))
+    mem.add(
+        "I attended a mindfulness workshop. I paid $20 to attend.",
+        user_id="u1",
+        session_id="workshop-mindfulness",
+        event_time=BASE,
+    )
+    mem.add(
+        "I attended a writing workshop at a festival. I paid $200 to attend.",
+        user_id="u1",
+        session_id="workshop-writing",
+        event_time=BASE + DAY,
+    )
+    mem.add(
+        "I attended a digital marketing workshop. I paid $500 to attend.",
+        user_id="u1",
+        session_id="workshop-marketing",
+        event_time=BASE + 2 * DAY,
+    )
+    return mem.lean_context(
+        "How much total money did I spend on attending workshops?",
+        user_id="u1",
+        persona=False,
+        n_facts=0,
+        n_summaries=0,
+        n_chunks=0,
+        char_budget=20_000,
+    )
+
+
 def _raw_context(enabled: bool) -> str:
     mem = Memory(config=Config(evidence_planner=False, provenance_evidence=enabled))
     ep = mem.add(
@@ -487,6 +518,18 @@ def run_ablation() -> tuple[list[AblationResult], dict]:
                 and '"invalidated": true' in ctx
             ),
             "high-confidence reversal phrase invalidates the old preference",
+        ),
+        (
+            "numeric_aggregation_candidates",
+            _numeric_aggregation_candidates_context,
+            lambda ctx: (
+                "AGGREGATION CANDIDATES" in ctx
+                and "$20 workshop" in ctx
+                and "$200 workshop" in ctx
+                and "$500 workshop" in ctx
+                and "value | unit" in ctx
+            ),
+            "deterministic numeric candidates expose money rows for sum questions",
         ),
         (
             "provenance_evidence",
