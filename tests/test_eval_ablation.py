@@ -38,6 +38,9 @@ def test_engram_config_applies_algorithm_ablation_flags():
     preference_reversal_cfg = engram_config(ablations=("preference_reversal_extraction",))
     assert preference_reversal_cfg.preference_reversal_extraction is False
 
+    numeric_agg_cfg = engram_config(ablations=("numeric_aggregation_candidates",))
+    assert numeric_agg_cfg.numeric_aggregation_candidates is False
+
     temporal_cfg = engram_config(ablations=("temporal_history",))
     assert temporal_cfg.temporal_history_queries is False
 
@@ -85,6 +88,7 @@ def test_bench_exposes_named_lean_ablation_systems():
         "engram_lean_no_preference_object_filter",
         "engram_lean_no_preference_object_normalization",
         "engram_lean_no_preference_reversal_extraction",
+        "engram_lean_no_numeric_aggregation_candidates",
         "engram_lean_no_temporal_history",
         "engram_lean_no_graph",
         "engram_lean_no_graph_relation",
@@ -115,6 +119,9 @@ def test_bench_exposes_named_lean_ablation_systems():
     assert SYSTEMS["engram_lean_no_preference_reversal_extraction"].ablations == (
         "preference_reversal_extraction",
     )
+    assert SYSTEMS["engram_lean_no_numeric_aggregation_candidates"].ablations == (
+        "numeric_aggregation_candidates",
+    )
     assert SYSTEMS["engram_lean_no_temporal_history"].ablations == ("temporal_history",)
     assert SYSTEMS["engram_lean_no_graph"].ablations == ("graph",)
     assert SYSTEMS["engram_lean_no_graph_relation"].ablations == ("graph_relation",)
@@ -130,8 +137,8 @@ def test_bench_exposes_named_lean_ablation_systems():
 def test_offline_feature_ablation_proves_each_enabled_feature_changes_target_evidence():
     rows, summary = run_ablation()
 
-    assert summary["n"] == 20
-    assert summary["improved"] == 20
+    assert summary["n"] == 21
+    assert summary["improved"] == 21
     assert {row.feature for row in rows} == {
         "chain_evidence",
         "temporal_history_queries",
@@ -142,6 +149,7 @@ def test_offline_feature_ablation_proves_each_enabled_feature_changes_target_evi
         "preference_object_filter",
         "preference_object_normalization",
         "preference_reversal_extraction",
+        "numeric_aggregation_candidates",
         "provenance_evidence",
         "provenance_chunk_promotion",
         "evidence_budgeting",

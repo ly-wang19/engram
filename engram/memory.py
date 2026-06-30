@@ -1504,6 +1504,8 @@ class Memory:
         seen: set[tuple[str, str]] = set()
 
         def add_row(t: float, source: str, evidence: str) -> None:
+            if source in {"conversation", "summary"} and query:
+                evidence = self._snippet_for_evidence(evidence, query, max_chars=520)
             text = " ".join(evidence.split())
             if not text:
                 return
@@ -1518,7 +1520,7 @@ class Memory:
                 score += 2
             elif source == "conversation":
                 score += 1
-            rows.append((score, t, source, text[:260]))
+            rows.append((score, t, source, text[:520]))
 
         for f in facts:
             add_row(f.valid_at, "fact", f.text)
@@ -1537,7 +1539,13 @@ class Memory:
             "attributes in the answer):\n" + "\n".join(lines)
         )
         candidates = render_aggregation_candidates(
-            extract_aggregation_candidates(query, facts, summaries + detail_eps, llm=self.llm)
+            extract_aggregation_candidates(
+                query,
+                facts,
+                summaries + detail_eps,
+                llm=self.llm,
+                numeric=self.config.numeric_aggregation_candidates,
+            )
         )
         return f"{candidates}\n\n{evidence}" if candidates else evidence
 

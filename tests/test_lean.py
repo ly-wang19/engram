@@ -5,7 +5,7 @@ L2 summaries get built and indexed, L3 persona is synthesized, and lean_context 
 with dedup + a hard size cap."""
 from __future__ import annotations
 
-from engram import Memory
+from engram import Config, Memory
 from engram.types import Episode
 from engram.util import DAY
 
@@ -500,6 +500,56 @@ def test_lean_context_renders_structured_aggregation_candidates():
     assert "AGGREGATION CANDIDATES" in ctx
     assert "INCLUDE" in ctx and "coffee table" in ctx and "mattress" in ctx
     assert "EXCLUDE" in ctx and "scratch guards" in ctx
+
+
+def test_numeric_aggregation_candidates_extract_money_and_hours():
+    from engram.retrieve.aggregate import extract_aggregation_candidates, render_aggregation_candidates
+
+    money_eps = [
+        Episode("I attended a mindfulness workshop. I paid $20 to attend.", event_time=BASE),
+        Episode("I attended a writing workshop at a festival. I paid $200 to attend.", event_time=BASE + DAY),
+        Episode("I attended a digital marketing workshop. I paid $500 to attend.", event_time=BASE + 2 * DAY),
+    ]
+    money = extract_aggregation_candidates(
+        "How much total money did I spend on attending workshops?",
+        [],
+        money_eps,
+    )
+
+    assert sum(c.value or 0 for c in money if c.include) == 720
+    rendered = render_aggregation_candidates(money)
+    assert "value | unit" in rendered
+    assert "$500 workshop" in rendered
+
+    duration_eps = [
+        Episode("I went for a 30-minute jog around the neighborhood.", event_time=BASE),
+        Episode("I used to practice yoga three times a week, each time for 2 hours.", event_time=BASE + DAY),
+    ]
+    duration = extract_aggregation_candidates(
+        "How many hours of jogging and yoga did I do last week?",
+        [],
+        duration_eps,
+    )
+
+    assert sum(c.value or 0 for c in duration if c.include) == 0.5
+    assert any(not c.include and "past habit" in c.exclude_reason for c in duration)
+
+
+def test_numeric_aggregation_candidates_can_be_disabled():
+    mem = Memory(config=Config(numeric_aggregation_candidates=False))
+    mem.add("I attended a digital marketing workshop. I paid $500 to attend.", user_id="u1", event_time=BASE)
+
+    ctx = mem.lean_context(
+        "How much total money did I spend on attending workshops?",
+        user_id="u1",
+        persona=False,
+        n_facts=0,
+        n_summaries=0,
+        n_chunks=0,
+        char_budget=10_000,
+    )
+
+    assert "AGGREGATION CANDIDATES" not in ctx
 
 
 def test_lean_context_auto_adds_duration_evidence_for_time_totals():
