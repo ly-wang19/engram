@@ -41,6 +41,7 @@ class Config:
     evidence_budgeting: bool = True  # intent-aware context packing instead of equal/raw truncation
     explicit_preference_extraction: bool = True  # extract I like/prefer/avoid style preference facts
     preference_object_filter: bool = True  # suppress weak explicit preference objects like "it"/"these ideas"
+    preference_object_normalization: bool = True  # canonicalize "sound/idea of X" preference objects to X
     procedural_extraction: bool = True  # extract durable runbooks/how-to steps into typed procedure facts
     summary_fallback: bool = True  # answer from derived session summaries when facts cannot answer
     summary_fallback_k: int = 6  # candidate summaries inspected by the fallback before abstaining

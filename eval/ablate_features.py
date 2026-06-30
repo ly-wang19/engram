@@ -179,6 +179,28 @@ def _preference_object_filter_context(enabled: bool) -> str:
     return f"FACTS={json.dumps(facts, ensure_ascii=False, sort_keys=True)}\n{json.dumps(profile, ensure_ascii=False, sort_keys=True)}\n\n{ctx}"
 
 
+def _preference_object_normalization_context(enabled: bool) -> str:
+    mem = Memory(config=Config(preference_object_normalization=enabled))
+    mem.add(
+        "I like the sound of the avocado sauce. I like the idea of fruit kebabs.",
+        user_id="u1",
+        session_id="pref-normalization",
+        event_time=BASE,
+    )
+    mem.consolidate()
+    profile = mem.structured_profile("u1")
+    facts = [f.text for f in mem.fact_store.values() if f.user_id == "u1" and f.is_live()]
+    ctx = mem.lean_context(
+        "What food preferences should you remember?",
+        user_id="u1",
+        persona=False,
+        n_summaries=0,
+        n_chunks=0,
+        char_budget=10_000,
+    )
+    return f"FACTS={json.dumps(facts, ensure_ascii=False, sort_keys=True)}\n{json.dumps(profile, ensure_ascii=False, sort_keys=True)}\n\n{ctx}"
+
+
 def _raw_context(enabled: bool) -> str:
     mem = Memory(config=Config(evidence_planner=False, provenance_evidence=enabled))
     ep = mem.add(
@@ -420,6 +442,14 @@ def run_ablation() -> tuple[list[AblationResult], dict]:
             _preference_object_filter_context,
             lambda ctx: "retro-style diners" in ctx and "loves it" not in ctx,
             "weak-object filter drops generic 'it' preference while preserving specific preference",
+        ),
+        (
+            "preference_object_normalization",
+            _preference_object_normalization_context,
+            lambda ctx: (
+                'FACTS=["u1 likes avocado sauce", "u1 likes fruit kebabs"]' in ctx
+            ),
+            "preference object normalization canonicalizes sound/idea wrappers",
         ),
         (
             "provenance_evidence",
