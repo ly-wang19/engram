@@ -101,10 +101,12 @@ _NUMERIC_GENERIC_TERMS = {
 
 def _numeric_mode(query: str) -> str:
     q = query.lower()
+    if re.search(r"\b(miles?\s+per\s+gallon|mpg)\b", q):
+        return ""
     if re.search(r"\b(hours?|hrs?|minutes?|mins?)\b", q):
         return "duration"
     if (
-        re.search(r"\b(how\s+much|money|paid|cost|dollars?)\b", q)
+        re.search(r"\b(money|paid|cost|costs|saving|savings|save|dollars?)\b", q)
         or "$" in q
         or (re.search(r"\bspen[td]\b", q) and re.search(r"\b(money|dollars?)\b", q))
     ):

@@ -258,6 +258,25 @@ def _numeric_aggregation_candidates_context(enabled: bool) -> str:
     )
 
 
+def _aggregation_recall_expansion_context(enabled: bool) -> str:
+    from engram.retrieve.evidence import plan_evidence
+
+    need = plan_evidence(
+        "How many hours of jogging and yoga did I do last week?",
+        aggregation_recall_expansion=enabled,
+    )
+    return json.dumps(
+        {
+            "aggregation": need.aggregation,
+            "subqueries": need.subqueries,
+            "has_workout": "workout" in need.subqueries,
+            "has_track_workouts": "track workouts" in need.subqueries,
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+
+
 def _raw_context(enabled: bool) -> str:
     mem = Memory(config=Config(evidence_planner=False, provenance_evidence=enabled))
     ep = mem.add(
@@ -530,6 +549,12 @@ def run_ablation() -> tuple[list[AblationResult], dict]:
                 and "value | unit" in ctx
             ),
             "deterministic numeric candidates expose money rows for sum questions",
+        ),
+        (
+            "aggregation_recall_expansion",
+            _aggregation_recall_expansion_context,
+            lambda ctx: '"has_workout": true' in ctx and '"has_track_workouts": true' in ctx,
+            "aggregation planner adds high-recall activity subqueries",
         ),
         (
             "provenance_evidence",

@@ -323,6 +323,14 @@ def test_evidence_planner_is_query_based_not_benchmark_based():
     kits = plan_evidence("How many model kits have I worked on or bought?")
     assert any("model kit" in q for q in kits.subqueries)
 
+    jog = plan_evidence("How many hours of jogging and yoga did I do last week?")
+    assert jog.aggregation and "workout" in jog.subqueries and "track workouts" in jog.subqueries
+    jog_no_expand = plan_evidence(
+        "How many hours of jogging and yoga did I do last week?",
+        aggregation_recall_expansion=False,
+    )
+    assert "workout" not in jog_no_expand.subqueries
+
     freq = plan_evidence("How often do I practice yoga now?")
     assert freq.current_state and not freq.aggregation and not freq.subqueries
 
@@ -503,7 +511,7 @@ def test_lean_context_renders_structured_aggregation_candidates():
 
 
 def test_numeric_aggregation_candidates_extract_money_and_hours():
-    from engram.retrieve.aggregate import extract_aggregation_candidates, render_aggregation_candidates
+    from engram.retrieve.aggregate import _numeric_mode, extract_aggregation_candidates, render_aggregation_candidates
 
     money_eps = [
         Episode("I attended a mindfulness workshop. I paid $20 to attend.", event_time=BASE),
@@ -533,6 +541,7 @@ def test_numeric_aggregation_candidates_extract_money_and_hours():
 
     assert sum(c.value or 0 for c in duration if c.include) == 0.5
     assert any(not c.include and "past habit" in c.exclude_reason for c in duration)
+    assert _numeric_mode("How much more miles per gallon was my car getting?") == ""
 
 
 def test_numeric_aggregation_candidates_can_be_disabled():
@@ -1432,6 +1441,45 @@ def test_bench_preconsolidation_uses_multi_hop_subqueries():
         use_planner=False,
     )
     assert [e.id for e in baseline] == ["noise"]
+
+
+def test_bench_preconsolidation_uses_aggregation_recall_expansion():
+    from engram.config import Config
+    from engram.types import Episode
+    from eval.bench import retrieve_evidence_episodes
+
+    jog = Episode("I went for a 30-minute jog around the neighborhood.", id="jog", user_id="u1")
+    yoga = Episode("I used to practice yoga three times a week, each time for 2 hours.", id="yoga", user_id="u1")
+    noise = Episode("A generic wellness article mentioned hours and routines.", id="noise", user_id="u1")
+
+    class FakeMem:
+        def __init__(self, enabled=True):
+            self.config = Config(aggregation_recall_expansion=enabled)
+
+        def retrieve_episodes(self, query, user_id, k):
+            q = query.lower()
+            if "workout" in q:
+                return [jog]
+            if "hours of jogging" in q or "yoga" in q:
+                return [yoga]
+            return [noise]
+
+    eps = retrieve_evidence_episodes(
+        FakeMem(True),
+        "How many hours of jogging and yoga did I do last week?",
+        "u1",
+        2,
+    )
+    assert {e.id for e in eps} == {"jog", "yoga"}
+
+    baseline = retrieve_evidence_episodes(
+        FakeMem(False),
+        "How many hours of jogging and yoga did I do last week?",
+        "u1",
+        2,
+    )
+    assert "yoga" in {e.id for e in baseline}
+    assert "jog" not in {e.id for e in baseline}
 
 
 def test_cascade_coarse_to_fine_assembles():

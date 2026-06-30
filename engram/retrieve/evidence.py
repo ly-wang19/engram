@@ -35,6 +35,19 @@ class EvidenceNeed:
 
 
 _AGG_TERMS = {"count", "counts", "many", "much", "total", "sum", "all", "every", "each", "list"}
+_AGG_STOP_TERMS = {
+    "how", "many", "much", "total", "sum", "count", "counts", "all", "every", "each", "list",
+    "hour", "hours", "minute", "minutes", "money", "amount", "page", "pages", "piece", "pieces",
+    "type", "types", "kind", "kinds", "number", "session", "sessions", "last", "past", "recent",
+    "recently", "week", "weeks", "month", "months", "year", "years", "have", "did", "do", "does",
+    "i", "me", "my", "the", "and", "or", "of", "on", "for", "in", "to", "with", "from",
+}
+_AGG_ALIAS_EXPANSIONS: tuple[tuple[tuple[str, ...], tuple[str, ...]], ...] = (
+    (("jog", "jogging", "run", "running", "yoga", "fitness", "workout", "workouts"),
+     ("workout", "track workouts", "jog", "jogging", "yoga")),
+    (("game", "games", "gaming"), ("playing games", "completed games", "finished games", "game")),
+    (("workshop", "workshops"), ("paid workshop", "attended workshop", "workshop")),
+)
 _AGG_OBJECT_TERMS = {"sessions", "times", "cities", "places", "trips", "events"}
 _TEMPORAL_TERMS = {
     "when", "date", "day", "before", "after", "during", "between", "first", "last", "latest",
@@ -124,7 +137,37 @@ def _quoted_phrases(query: str) -> list[str]:
     return phrases
 
 
-def _aggregation_subqueries(query: str) -> tuple[str, ...]:
+def _aggregation_recall_subqueries(query: str, obj: str = "") -> list[str]:
+    q = query.lower()
+    hay = f"{q} {obj.lower()}"
+    candidates: list[str] = []
+
+    for keywords, expansions in _AGG_ALIAS_EXPANSIONS:
+        if any(k in hay for k in keywords):
+            candidates.extend(expansions)
+
+    topic_source = obj or q
+    topic_source = re.sub(
+        r"\b(hours?|minutes?|money|amount|page\s+count|pages?|pieces?|types?|kinds?|number)\s+(?:of|on|for)?\b",
+        " ",
+        topic_source,
+        flags=re.I,
+    )
+    for part in re.split(r"\band\b|\bor\b|/|,", topic_source, flags=re.I):
+        toks = [t for t in stems(part) if len(t) > 2 and t not in _AGG_STOP_TERMS]
+        if not toks:
+            continue
+        phrase = " ".join(toks)
+        candidates.append(phrase)
+        if phrase.endswith("ing") and len(phrase) > 5:
+            base = phrase[:-3]
+            if len(base) > 2 and base[-1] == base[-2]:
+                base = base[:-1]
+            candidates.append(base)
+    return candidates
+
+
+def _aggregation_subqueries(query: str, recall_expansion: bool = True) -> tuple[str, ...]:
     """Deterministic recall expansion for count/list/sum questions.
 
     It turns one broad aggregation question into evidence lookups for the counted object and any quoted
@@ -141,6 +184,9 @@ def _aggregation_subqueries(query: str) -> tuple[str, ...]:
     m = re.search(r"\bhow\s+many\s+(.+?)\s+(?:have|did|do|are|were|was|is)\b", q)
     if m:
         obj = m.group(1).strip()
+    if recall_expansion and re.search(r"\bhow\s+(?:many|much)\b|\b(?:total|sum)\b", q):
+        candidates.extend(_aggregation_recall_subqueries(query, obj))
+    if obj:
         candidates.append(obj)
 
     verb_map = (
@@ -208,7 +254,7 @@ def _multi_hop_subqueries(query: str) -> tuple[str, ...]:
     return _dedupe(candidates, query)
 
 
-def plan_evidence(query: str) -> EvidenceNeed:
+def plan_evidence(query: str, aggregation_recall_expansion: bool = True) -> EvidenceNeed:
     """Return the evidence structure a question needs, using only question text.
 
     The output is deliberately coarse and explainable; it never inspects benchmark labels or gold answers.
@@ -303,7 +349,7 @@ def plan_evidence(query: str) -> EvidenceNeed:
     n_chunks = 2 if (preference or procedural or exact_lookup or multi_hop or duration) else (1 if aggregation or timeline else 0)
     subquery_items: list[str] = []
     if aggregation:
-        subquery_items.extend(_aggregation_subqueries(query))
+        subquery_items.extend(_aggregation_subqueries(query, recall_expansion=aggregation_recall_expansion))
     if multi_hop:
         subquery_items.extend(_multi_hop_subqueries(query))
     subqueries = _dedupe(subquery_items, query)
