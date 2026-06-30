@@ -19,6 +19,11 @@ _NON_OCCUPATIONS = {
     "awesome", "cool", "exciting", "fine", "fun", "good", "great", "nice", "noted", "ok", "okay",
     "wonderful",
 }
+_NON_NAMES = {
+    "a", "an", "the", "not", "working", "going", "moving", "relocating", "into", "fond", "fan",
+    "vegetarian", "particularly", "especially", "interested", "looking", "planning", "thinking",
+    "trying", "getting", "glad", "happy", "sure", "always", "also", "still", "really",
+}
 
 _CLAUSE_SPLIT = re.compile(r"\n+|[.!?。！？]+(?:\s+|$)|,|;| and | but |—|--|\bthen\b", re.I)
 _FAMILY = "sister|brother|mother|father|parent|child|spouse|wife|husband|partner"
@@ -54,6 +59,13 @@ def _clean_procedure_steps(s: str) -> str:
     return " ".join(_clean_obj(s).split())
 
 
+def _clean_preference_obj(s: str) -> str:
+    text = _clean_obj(s)
+    text = re.split(r"\b(?:over|rather than|instead of|because|when|while)\b", text, 1, flags=re.I)[0]
+    text = re.sub(r"^(?:to|that)\s+", "", text.strip(), flags=re.I)
+    return _clean_obj(text)
+
+
 def _procedure_subject(action: str) -> str:
     """Pick a stable slot subject from a how-to action: 'rotate the PAT' -> 'PAT'."""
     text = _clean_obj(action)
@@ -85,16 +97,26 @@ def _slug(s: str) -> str:
 
 
 class RuleExtractor:
-    def __init__(self) -> None:
+    def __init__(self, explicit_preference_extraction: bool = True) -> None:
         # learned per-user self name, so "I work at X" can be attributed to "Wei", not a pronoun.
         self.self_name: dict[str, str] = {}
+        self.explicit_preference_extraction = explicit_preference_extraction
 
     def extract(self, ep: Episode) -> list[Fact]:
         facts: list[Fact] = self._episode_procedures(ep)
+        previous_preference = False
         for raw in _CLAUSE_SPLIT.split(ep.content):
             clause = raw.strip()
             if clause:
+                if (
+                    self.explicit_preference_extraction
+                    and previous_preference
+                    and clause[:1].islower()
+                    and re.match(r"(?:like|love|enjoy|prefer|dislike|hate|avoid)s?\s+.+", clause, re.I)
+                ):
+                    clause = f"I {clause}"
                 facts.extend(self._clause(clause, ep))
+                previous_preference = self._is_first_person_preference_clause(clause)
         return facts
 
     def self_of(self, user_id: str) -> str:
@@ -192,15 +214,17 @@ class RuleExtractor:
             return out
 
         # 3. name -> just register identity, emit no SPO fact
-        m = (
-            re.search(r"\bmy name is (\w[\w'-]*)", clause, re.I)
-            or re.search(r"\bi am (\w[\w'-]*)\b", clause, re.I)
-            or re.search(r"\bi'?m (\w[\w'-]*)\b", clause, re.I)
-        )
-        if m and m.group(1).lower() not in {
-            "a", "an", "the", "not", "working", "going", "moving", "relocating", "into", "fond", "fan",
-            "vegetarian",
-        }:
+        m = re.search(r"\bmy name is (\w[\w'-]*)", clause, re.I)
+        if m and m.group(1).lower() not in _NON_NAMES:
+            self.self_name[ep.user_id] = m.group(1)
+            return out
+        m = re.search(r"\bi am (\w[\w'-]*)\b", clause, re.I) or re.search(r"\bi'?m (\w[\w'-]*)\b", clause, re.I)
+        if (
+            m
+            and m.group(1).lower() not in _NON_NAMES
+            and m.group(1)[:1].isupper()
+            and len(clause.split()) <= 3
+        ):
             self.self_name[ep.user_id] = m.group(1)
             return out
 
@@ -254,7 +278,15 @@ class RuleExtractor:
             out.append(self._mk(self._subject(clause, ep), "likes", _clean_obj(m.group(1)), ep))
             return out
 
-        # 11. "Maya is a pediatrician" / "I work as a designer" -> occupation
+        # 11. Explicit preference verbs. This fills the zero-dep gap for common profile statements
+        # ("I prefer aisle seats", "I avoid red-eyes") without invoking an LLM on the write path.
+        if self.explicit_preference_extraction:
+            pref = self._explicit_preference(clause, ep)
+            if pref is not None:
+                out.append(pref)
+                return out
+
+        # 12. "Maya is a pediatrician" / "I work as a designer" -> occupation
         m = (
             re.search(r"\bworks? as (?:an? |the )?(.+)", clause, re.I)
             or re.search(r"\bi am (?:an? |the )(.+)", clause, re.I)
@@ -271,16 +303,69 @@ class RuleExtractor:
                 out.append(self._mk(self._subject(clause, ep), "occupation", role, ep))
                 return out
 
-        # 12. "<subj> works at Y"
+        # 13. "<subj> works at Y"
         m = re.search(r"\bworks? (?:at|for) (.+)", clause, re.I)
         if m:
             out.append(self._mk(self._subject(clause, ep), "works_at", _clean_obj(m.group(1)), ep))
             return out
 
-        # 13. "<subj> lives in Y"
+        # 14. "<subj> lives in Y"
         m = re.search(r"\blives? in (.+)", clause, re.I)
         if m:
             out.append(self._mk(self._subject(clause, ep), "lives_in", _clean_obj(m.group(1)), ep))
             return out
 
         return out
+
+    def _explicit_preference(self, clause: str, ep: Episode) -> Fact | None:
+        # Negated positive verbs are negative preference facts.
+        m = re.search(
+            r"\b(?:i|we)\s+(?:do\s+not|don't|dont)\s+(?:like|love|enjoy|prefer)\s+(.+)",
+            clause,
+            re.I,
+        ) or re.search(rf"\b{_I_AM}\s+not\s+into\s+(.+)", clause, re.I)
+        if m:
+            obj = _clean_preference_obj(m.group(1))
+            return self._mk(ep.user_id, "dislikes", obj, ep) if obj else None
+
+        m = re.search(
+            r"\b(?:i|we)\s+(?:try\s+to\s+|really\s+|strongly\s+)?"
+            r"(like|love|enjoy|prefer|dislike|hate|avoid)s?\s+(.+)",
+            clause,
+            re.I,
+        )
+        if not m:
+            return None
+
+        verb = m.group(1).lower()
+        obj = _clean_preference_obj(m.group(2))
+        if not obj:
+            return None
+        pred = {
+            "like": "likes",
+            "love": "loves",
+            "enjoy": "enjoys",
+            "prefer": "prefers",
+            "dislike": "dislikes",
+            "hate": "hates",
+            "avoid": "avoids",
+        }[verb]
+        return self._mk(ep.user_id, pred, obj, ep)
+
+    def _is_first_person_preference_clause(self, clause: str) -> bool:
+        if re.match(r"\s*(?:assistant|system)\s*:", clause, re.I):
+            return False
+        return bool(
+            re.search(
+                r"\b(?:i|we)\s+(?:do\s+not|don't|dont)\s+(?:like|love|enjoy|prefer)\s+",
+                clause,
+                re.I,
+            )
+            or re.search(
+                r"\b(?:i|we)\s+(?:try\s+to\s+|really\s+|strongly\s+)?"
+                r"(?:like|love|enjoy|prefer|dislike|hate|avoid)s?\s+",
+                clause,
+                re.I,
+            )
+            or re.search(rf"\b{_I_AM}\s+not\s+into\s+", clause, re.I)
+        )

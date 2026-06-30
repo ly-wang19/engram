@@ -363,6 +363,18 @@ def test_lean_context_auto_adds_preference_records():
     assert "favorite language" in ctx.lower()
 
 
+def test_lean_context_auto_adds_explicit_preference_records():
+    mem = Memory()
+    mem.add("I prefer aisle seats and avoid red-eye flights.", user_id="u1", event_time=BASE)
+    mem.consolidate()
+
+    ctx = mem.lean_context("What travel preferences should you remember?", user_id="u1", n_chunks=0)
+
+    assert "PREFERENCE RECORDS (current, structured):" in ctx
+    assert "prefers" in ctx and "aisle seats" in ctx
+    assert "avoids" in ctx and "red-eye flights" in ctx
+
+
 def test_lean_context_auto_adds_procedural_memory_block():
     from engram.types import Fact
 

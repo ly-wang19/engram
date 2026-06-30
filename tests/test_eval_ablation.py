@@ -26,6 +26,9 @@ def test_engram_config_applies_algorithm_ablation_flags():
     procedural_extraction_cfg = engram_config(ablations=("procedural_extraction",))
     assert procedural_extraction_cfg.procedural_extraction is False
 
+    preference_extraction_cfg = engram_config(ablations=("explicit_preference_extraction",))
+    assert preference_extraction_cfg.explicit_preference_extraction is False
+
     temporal_cfg = engram_config(ablations=("temporal_history",))
     assert temporal_cfg.temporal_history_queries is False
 
@@ -69,6 +72,7 @@ def test_bench_exposes_named_lean_ablation_systems():
         "engram_lean_no_summary_fallback",
         "engram_lean_no_procedural_memory",
         "engram_lean_no_procedural_extraction",
+        "engram_lean_no_explicit_preference_extraction",
         "engram_lean_no_temporal_history",
         "engram_lean_no_graph",
         "engram_lean_no_graph_relation",
@@ -89,6 +93,9 @@ def test_bench_exposes_named_lean_ablation_systems():
     assert SYSTEMS["engram_lean_no_summary_fallback"].ablations == ("summary_fallback",)
     assert SYSTEMS["engram_lean_no_procedural_memory"].ablations == ("procedural_memory",)
     assert SYSTEMS["engram_lean_no_procedural_extraction"].ablations == ("procedural_extraction",)
+    assert SYSTEMS["engram_lean_no_explicit_preference_extraction"].ablations == (
+        "explicit_preference_extraction",
+    )
     assert SYSTEMS["engram_lean_no_temporal_history"].ablations == ("temporal_history",)
     assert SYSTEMS["engram_lean_no_graph"].ablations == ("graph",)
     assert SYSTEMS["engram_lean_no_graph_relation"].ablations == ("graph_relation",)
@@ -104,14 +111,15 @@ def test_bench_exposes_named_lean_ablation_systems():
 def test_offline_feature_ablation_proves_each_enabled_feature_adds_evidence():
     rows, summary = run_ablation()
 
-    assert summary["n"] == 16
-    assert summary["improved"] == 16
+    assert summary["n"] == 17
+    assert summary["improved"] == 17
     assert {row.feature for row in rows} == {
         "chain_evidence",
         "temporal_history_queries",
         "summary_fallback",
         "procedural_memory",
         "procedural_extraction",
+        "explicit_preference_extraction",
         "provenance_evidence",
         "provenance_chunk_promotion",
         "evidence_budgeting",
