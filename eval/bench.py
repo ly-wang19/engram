@@ -163,6 +163,11 @@ def engram_config(evidence_planner: bool = True, ablations: tuple[str, ...] = ()
             and "weak_preference_filter" not in disabled
             and "preference_specificity_filter" not in disabled
         ),
+        preference_object_normalization=(
+            "preference_object_normalization" not in disabled
+            and "preference_normalization" not in disabled
+            and "preference_object_canonicalization" not in disabled
+        ),
         chain_evidence="chain" not in disabled,
         temporal_history_queries=(
             "temporal_history" not in disabled
@@ -559,6 +564,13 @@ class EngramLeanNoPreferenceObjectFilterSystem(EngramLeanSystem):
     ablations = ("preference_object_filter",)
 
 
+class EngramLeanNoPreferenceObjectNormalizationSystem(EngramLeanSystem):
+    """A/B baseline: lean system without preference object canonicalization."""
+
+    name = "engram_lean_no_preference_object_normalization"
+    ablations = ("preference_object_normalization",)
+
+
 class EngramLeanNoTemporalHistorySystem(EngramLeanSystem):
     """A/B baseline: lean system without natural-language history/supersession queries."""
 
@@ -642,6 +654,7 @@ SYSTEMS = {"engram": EngramSystem, "full_context": FullContextSystem, "rag": RAG
            "engram_lean_no_procedural_extraction": EngramLeanNoProceduralExtractionSystem,
            "engram_lean_no_explicit_preference_extraction": EngramLeanNoExplicitPreferenceExtractionSystem,
            "engram_lean_no_preference_object_filter": EngramLeanNoPreferenceObjectFilterSystem,
+           "engram_lean_no_preference_object_normalization": EngramLeanNoPreferenceObjectNormalizationSystem,
            "engram_lean_no_temporal_history": EngramLeanNoTemporalHistorySystem,
            "engram_lean_no_graph": EngramLeanNoGraphSystem,
            "engram_lean_no_graph_relation": EngramLeanNoGraphRelationSystem,
@@ -793,7 +806,7 @@ def main():
     ap.add_argument("--intent", action="store_true", help="engram: L6 intent hint (benchmark-neutral)")
     ap.add_argument("--ablate", default="",
                     help="comma-separated Engram algorithm switches to disable for all Engram systems in this run: "
-                         "evidence_budget, summary_fallback, procedural_memory, procedural_extraction, explicit_preference_extraction, preference_object_filter, chain, temporal_history, raw/provenance, provenance_chunks, "
+                         "evidence_budget, summary_fallback, procedural_memory, procedural_extraction, explicit_preference_extraction, preference_object_filter, preference_object_normalization, chain, temporal_history, raw/provenance, provenance_chunks, "
                          "graph/graph_proximity, graph_relation, "
                          "graph_reinforcement, graph_self_anchor, graph_entity_alias, graph_negative, "
                          "planner_location, planner_project")

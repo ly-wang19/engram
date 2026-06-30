@@ -431,6 +431,33 @@ def test_preference_object_filter_can_be_disabled():
     assert ("u1", "loves", "retro-style diners") in facts
 
 
+def test_preference_object_normalization_canonicalizes_wrappers():
+    mem = Memory()
+    mem.add(
+        "I like the sound of the avocado sauce. I like the idea of fruit kebabs.",
+        user_id="u1",
+        event_time=BASE,
+    )
+    mem.consolidate()
+
+    facts = {(f.subject, f.predicate, f.object) for f in mem.fact_store.values()}
+    assert ("u1", "likes", "avocado sauce") in facts
+    assert ("u1", "likes", "fruit kebabs") in facts
+    assert ("u1", "likes", "sound of the avocado sauce") not in facts
+    assert ("u1", "likes", "idea of fruit kebabs") not in facts
+
+
+def test_preference_object_normalization_can_be_disabled():
+    from engram.config import Config
+
+    mem = Memory(config=Config(preference_object_normalization=False))
+    mem.add("I like the sound of the avocado sauce.", user_id="u1", event_time=BASE)
+    mem.consolidate()
+
+    facts = {(f.subject, f.predicate, f.object) for f in mem.fact_store.values()}
+    assert ("u1", "likes", "sound of the avocado sauce") in facts
+
+
 def test_import_style_moving_and_dietary_restrictions_extract_cleanly():
     mem = Memory()
     mem.add("I'm moving to Berlin next month for a job at Acme.", user_id="u1", event_time=BASE)

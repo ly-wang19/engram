@@ -14,7 +14,7 @@ from ..types import Episode
 from ..util import DAY
 from .conflict import ConflictResolver
 from .decay import is_durable
-from .extractor import RuleExtractor, is_specific_preference_object
+from .extractor import RuleExtractor, is_specific_preference_object, normalize_preference_object
 from .graph_builder import GraphBuilder
 from .summarizer import ProfileBuilder
 
@@ -41,7 +41,11 @@ class ConsolidationEngine:
 
             self.extractor = LLMExtractor(llm)
         else:
-            self.extractor = RuleExtractor(config.explicit_preference_extraction, config.preference_object_filter)
+            self.extractor = RuleExtractor(
+                config.explicit_preference_extraction,
+                config.preference_object_filter,
+                config.preference_object_normalization,
+            )
         self.graph_builder = GraphBuilder(graph, embedder)
         # Semantic conflict detection needs a real (semantic) embedder; the offline HashingEmbedder
         # produces meaningless cosines, so we gate it off there → exact-slot only, fully deterministic.
@@ -99,6 +103,14 @@ class ConsolidationEngine:
                     and not is_specific_preference_object(fact.object)
                 ):
                     continue
+                if (
+                    self.config.preference_object_normalization
+                    and fact.predicate.lower() in _EXPLICIT_PREFERENCE_PREDS
+                ):
+                    normalized = normalize_preference_object(fact.object)
+                    if normalized != fact.object:
+                        fact.object = normalized
+                        fact.text = f"{fact.subject} {fact.predicate.replace('_', ' ')} {fact.object}".strip()
                 fact.embedding = self.embedder.embed(fact.text)
                 live = [f for f in self.fact_store.values() if f.user_id == fact.user_id and f.is_live()]
                 action, invalidated = self.conflict.reconcile(fact, live)

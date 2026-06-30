@@ -31,6 +31,14 @@ _WEAK_PREFERENCE_OBJECTS = {
 }
 _WEAK_DEICTIC_HEADS = ("these", "those", "this", "that")
 _WEAK_DEICTIC_NOUNS = {"idea", "ideas", "suggestion", "suggestions", "tip", "tips", "option", "options"}
+_PREFERENCE_OBJECT_PREFIXES = (
+    r"(?:i\s+)?(?:really\s+)?(?:like|love|enjoy|prefer)s?\s+(?:the\s+)?sound of\s+",
+    r"(?:the\s+)?sound of\s+",
+    r"(?:i\s+)?(?:really\s+)?(?:like|love|enjoy|prefer)s?\s+(?:the\s+)?idea of\s+",
+    r"(?:the\s+)?idea of\s+",
+    r"(?:my|your|our|their)\s+idea of\s+",
+    r"(?:the\s+)?concept of\s+",
+)
 
 _CLAUSE_SPLIT = re.compile(r"\n+|[.!?。！？]+(?:\s+|$)|,|;| and | but |—|--|\bthen\b", re.I)
 _FAMILY = "sister|brother|mother|father|parent|child|spouse|wife|husband|partner"
@@ -71,6 +79,16 @@ def _clean_preference_obj(s: str) -> str:
     text = re.split(r"\b(?:over|rather than|instead of|because|when|while)\b", text, 1, flags=re.I)[0]
     text = re.sub(r"^(?:to|that)\s+", "", text.strip(), flags=re.I)
     return _clean_obj(text)
+
+
+def normalize_preference_object(obj: str) -> str:
+    text = _clean_obj(obj)
+    for prefix in _PREFERENCE_OBJECT_PREFIXES:
+        new = re.sub(rf"^{prefix}", "", text, flags=re.I).strip()
+        if new != text:
+            text = _clean_obj(new)
+            break
+    return text
 
 
 def is_specific_preference_object(obj: str) -> bool:
@@ -122,11 +140,13 @@ class RuleExtractor:
         self,
         explicit_preference_extraction: bool = True,
         preference_object_filter: bool = True,
+        preference_object_normalization: bool = True,
     ) -> None:
         # learned per-user self name, so "I work at X" can be attributed to "Wei", not a pronoun.
         self.self_name: dict[str, str] = {}
         self.explicit_preference_extraction = explicit_preference_extraction
         self.preference_object_filter = preference_object_filter
+        self.preference_object_normalization = preference_object_normalization
 
     def extract(self, ep: Episode) -> list[Fact]:
         facts: list[Fact] = self._episode_procedures(ep)
@@ -352,6 +372,8 @@ class RuleExtractor:
         ) or re.search(rf"\b{_I_AM}\s+not\s+into\s+(.+)", clause, re.I)
         if m:
             obj = _clean_preference_obj(m.group(1))
+            if self.preference_object_normalization:
+                obj = normalize_preference_object(obj)
             if self.preference_object_filter and not is_specific_preference_object(obj):
                 return None
             return self._mk(ep.user_id, "dislikes", obj, ep) if obj else None
@@ -367,6 +389,8 @@ class RuleExtractor:
 
         verb = m.group(1).lower()
         obj = _clean_preference_obj(m.group(2))
+        if self.preference_object_normalization:
+            obj = normalize_preference_object(obj)
         if not obj:
             return None
         if self.preference_object_filter and not is_specific_preference_object(obj):
