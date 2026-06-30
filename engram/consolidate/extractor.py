@@ -50,6 +50,36 @@ def _clean_location(s: str) -> str:
     )[0])
 
 
+def _clean_procedure_steps(s: str) -> str:
+    return " ".join(_clean_obj(s).split())
+
+
+def _procedure_subject(action: str) -> str:
+    """Pick a stable slot subject from a how-to action: 'rotate the PAT' -> 'PAT'."""
+    text = _clean_obj(action)
+    text = re.sub(
+        r"^(?:how\s+to|to)\s+",
+        "",
+        text,
+        flags=re.I,
+    )
+    text = re.sub(
+        r"^(?:rotate|reset|update|deploy|install|renew|refresh|regenerate|open|create|start|stop|"
+        r"restart|configure|setup|set\s+up|run|use|change|replace)\s+",
+        "",
+        text,
+        flags=re.I,
+    )
+    text = re.sub(r"^(?:the|a|an)\s+", "", text, flags=re.I).strip()
+    return text or "procedure"
+
+
+_PROCEDURE_ACTION = (
+    r"rotate|reset|update|deploy|install|renew|refresh|regenerate|create|start|stop|restart|"
+    r"configure|setup|set\s+up|change|replace|revoke|enable|disable"
+)
+
+
 def _slug(s: str) -> str:
     return re.sub(r"\s+", "_", s.strip().lower())
 
@@ -60,7 +90,7 @@ class RuleExtractor:
         self.self_name: dict[str, str] = {}
 
     def extract(self, ep: Episode) -> list[Fact]:
-        facts: list[Fact] = []
+        facts: list[Fact] = self._episode_procedures(ep)
         for raw in _CLAUSE_SPLIT.split(ep.content):
             clause = raw.strip()
             if clause:
@@ -91,6 +121,39 @@ class RuleExtractor:
             created_at=ep.ingested_at,
             provenance=[ep.id],
         )
+
+    def _episode_procedures(self, ep: Episode) -> list[Fact]:
+        text = " ".join(ep.content.split())
+        out: list[Fact] = []
+
+        # "PAT runbook source: rotate the PAT by opening settings, regenerating token, then updating CI".
+        # The anchor is deliberate: imported conversations contain "assistant:"/"user:" role labels, so a
+        # loose colon rule would promote ordinary advice into durable procedures.
+        m = re.search(
+            r"^\s*(?P<subject>[A-Za-z0-9][A-Za-z0-9 _./-]{0,48}?)\s+"
+            r"(?:runbook|procedure|workflow|checklist)(?:\s+source)?\s*:\s*(?P<steps>.+)",
+            text,
+            re.I,
+        )
+        if m:
+            subject = re.sub(r"^(?:the|a|an)\s+", "", _clean_obj(m.group("subject")), flags=re.I)
+            steps = _clean_procedure_steps(m.group("steps"))
+            if subject and steps:
+                out.append(self._mk(subject, "procedure", steps, ep))
+                return out
+
+        # "To rotate the PAT: open settings, regenerate token, then update CI"
+        m = re.search(
+            rf"^\s*(?:to|how to)\s+(?P<action>(?:{_PROCEDURE_ACTION})\b[^:]{{0,90}})\s*:\s*(?P<steps>.+)",
+            text,
+            re.I,
+        )
+        if m:
+            subject = _procedure_subject(m.group("action"))
+            steps = _clean_procedure_steps(m.group("steps"))
+            if subject and steps:
+                out.append(self._mk(subject, "procedure", steps, ep))
+        return out
 
     def _clause(self, clause: str, ep: Episode) -> list[Fact]:
         out: list[Fact] = []

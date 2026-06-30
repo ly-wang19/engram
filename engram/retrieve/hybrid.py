@@ -142,7 +142,7 @@ def _entity_anchor_terms(name: str, aliases: list[str]) -> set[str]:
 
 
 def _entity_name_mentions(text: str, name: str) -> list[re.Match]:
-    if not name.strip():
+    if not name.strip() or len(name) > 96 or len(tokenize(name)) > 12:
         return []
     escaped = re.escape(name.lower())
     if name.isascii():

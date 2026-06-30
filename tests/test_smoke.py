@@ -197,6 +197,44 @@ def test_project_rules_are_structured_multi_value_memory():
     assert len(live) == 2
 
 
+def test_runbook_source_extracts_procedural_fact_with_full_steps():
+    mem = Memory()
+    mem.add(
+        "PAT runbook source: rotate the PAT by opening security settings, regenerating the token, "
+        "then updating CI secrets.",
+        user_id="u1",
+        session_id="pat-runbook",
+        event_time=BASE,
+    )
+    mem.consolidate()
+
+    facts = [f for f in mem.fact_store.values() if f.predicate == "procedure"]
+    assert len(facts) == 1
+    fact = facts[0]
+    assert fact.subject == "PAT"
+    assert "security settings" in fact.object
+    assert "regenerating the token" in fact.object
+    assert "updating CI secrets" in fact.object
+    assert all("security settings" not in ent.name for ent in mem.graph.entities.values())
+
+
+def test_to_colon_howto_extracts_procedural_fact():
+    mem = Memory()
+    mem.add(
+        "To rotate the PAT: open security settings, regenerate the token, then update CI secrets.",
+        user_id="u1",
+        session_id="pat-runbook",
+        event_time=BASE,
+    )
+    mem.consolidate()
+
+    res = mem.search("How do I rotate the PAT?", user_id="u1")
+
+    assert res.via == "procedural"
+    assert "security settings" in res.answer()
+    assert "sessions: pat-runbook" in res.answer()
+
+
 def test_short_project_rule_context_preserves_key_constraint():
     mem = Memory()
     user = "codex-e2e"

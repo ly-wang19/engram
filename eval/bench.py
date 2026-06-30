@@ -148,6 +148,11 @@ def engram_config(evidence_planner: bool = True, ablations: tuple[str, ...] = ()
             and "procedural_memory" not in disabled
             and "derived_procedural" not in disabled
         ),
+        procedural_extraction=(
+            "procedural_extraction" not in disabled
+            and "procedure_extraction" not in disabled
+            and "derived_procedural_extraction" not in disabled
+        ),
         chain_evidence="chain" not in disabled,
         temporal_history_queries=(
             "temporal_history" not in disabled
@@ -523,6 +528,13 @@ class EngramLeanNoProceduralMemorySystem(EngramLeanSystem):
     ablations = ("procedural_memory",)
 
 
+class EngramLeanNoProceduralExtractionSystem(EngramLeanSystem):
+    """A/B baseline: lean system without rule/runbook procedure extraction."""
+
+    name = "engram_lean_no_procedural_extraction"
+    ablations = ("procedural_extraction",)
+
+
 class EngramLeanNoTemporalHistorySystem(EngramLeanSystem):
     """A/B baseline: lean system without natural-language history/supersession queries."""
 
@@ -603,6 +615,7 @@ SYSTEMS = {"engram": EngramSystem, "full_context": FullContextSystem, "rag": RAG
            "engram_lean_no_evidence_budget": EngramLeanNoEvidenceBudgetSystem,
            "engram_lean_no_summary_fallback": EngramLeanNoSummaryFallbackSystem,
            "engram_lean_no_procedural_memory": EngramLeanNoProceduralMemorySystem,
+           "engram_lean_no_procedural_extraction": EngramLeanNoProceduralExtractionSystem,
            "engram_lean_no_temporal_history": EngramLeanNoTemporalHistorySystem,
            "engram_lean_no_graph": EngramLeanNoGraphSystem,
            "engram_lean_no_graph_relation": EngramLeanNoGraphRelationSystem,
@@ -754,7 +767,7 @@ def main():
     ap.add_argument("--intent", action="store_true", help="engram: L6 intent hint (benchmark-neutral)")
     ap.add_argument("--ablate", default="",
                     help="comma-separated Engram algorithm switches to disable for all Engram systems in this run: "
-                         "evidence_budget, summary_fallback, procedural_memory, chain, temporal_history, raw/provenance, provenance_chunks, "
+                         "evidence_budget, summary_fallback, procedural_memory, procedural_extraction, chain, temporal_history, raw/provenance, provenance_chunks, "
                          "graph/graph_proximity, graph_relation, "
                          "graph_reinforcement, graph_self_anchor, graph_entity_alias, graph_negative, "
                          "planner_location, planner_project")

@@ -5,6 +5,8 @@ from ..embed import Embedder
 from ..store import GraphStore
 from ..types import Entity, Fact, Relation
 
+_TEXTUAL_OBJECT_PREDICATES = {"procedure", "how_to", "routine", "instruction", "agent_instruction"}
+
 
 class GraphBuilder:
     def __init__(self, graph: GraphStore, embedder: Embedder) -> None:
@@ -12,6 +14,8 @@ class GraphBuilder:
         self.embedder = embedder
 
     def add_fact(self, fact: Fact) -> None:
+        if fact.predicate.lower() in _TEXTUAL_OBJECT_PREDICATES:
+            return
         subj = self.graph.upsert_entity(Entity(name=fact.subject, user_id=fact.user_id))
         obj = self.graph.upsert_entity(Entity(name=fact.object, user_id=fact.user_id))
         self.graph.add_relation(

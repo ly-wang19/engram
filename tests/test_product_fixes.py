@@ -198,6 +198,20 @@ def test_procedural_memory_can_be_disabled_for_ablation():
     assert res.via == "abstain"
 
 
+def test_procedural_extraction_can_be_disabled_for_ablation():
+    from engram.config import Config
+
+    mem = Memory(config=Config(procedural_extraction=False))
+    mem.add(
+        "PAT runbook source: rotate the PAT by opening security settings and updating CI secrets.",
+        user_id="u1",
+        session_id="pat-runbook",
+    )
+    mem.consolidate()
+
+    assert [f for f in mem.fact_store.values() if f.predicate == "procedure"] == []
+
+
 # ---------------- #7 profile authority ----------------
 def test_profile_build_prefers_authoritative_and_recent():
     from engram.consolidate.summarizer import ProfileBuilder
