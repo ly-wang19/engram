@@ -1,7 +1,8 @@
 """Offline algorithm ablations for the newest read-path evidence features.
 
-This is not a public benchmark claim. It is a zero-key smoke proof that each feature adds evidence the
-disabled variant cannot surface:
+This is not a public benchmark claim. It is a zero-key smoke proof that each feature changes the targeted
+evidence behavior: recall features add evidence the disabled variant cannot surface, while precision
+guards remove known-bad evidence without losing the target signal.
 
     python eval/ablate_features.py
 
@@ -154,6 +155,28 @@ def _explicit_preference_extraction_context(enabled: bool) -> str:
         char_budget=10_000,
     )
     return f"{json.dumps(profile, ensure_ascii=False, sort_keys=True)}\n\n{ctx}"
+
+
+def _preference_object_filter_context(enabled: bool) -> str:
+    mem = Memory(config=Config(preference_object_filter=enabled))
+    mem.add(
+        "I love it. I love retro-style diners.",
+        user_id="u1",
+        session_id="pref-specificity",
+        event_time=BASE,
+    )
+    mem.consolidate()
+    profile = mem.structured_profile("u1")
+    facts = [f.text for f in mem.fact_store.values() if f.user_id == "u1" and f.is_live()]
+    ctx = mem.lean_context(
+        "What food or place preferences should you remember?",
+        user_id="u1",
+        persona=False,
+        n_summaries=0,
+        n_chunks=0,
+        char_budget=10_000,
+    )
+    return f"FACTS={json.dumps(facts, ensure_ascii=False, sort_keys=True)}\n{json.dumps(profile, ensure_ascii=False, sort_keys=True)}\n\n{ctx}"
 
 
 def _raw_context(enabled: bool) -> str:
@@ -391,6 +414,12 @@ def run_ablation() -> tuple[list[AblationResult], dict]:
                 and "red-eye flights" in ctx
             ),
             "rule extractor promotes explicit prefer/avoid statements into profile memory",
+        ),
+        (
+            "preference_object_filter",
+            _preference_object_filter_context,
+            lambda ctx: "retro-style diners" in ctx and "loves it" not in ctx,
+            "weak-object filter drops generic 'it' preference while preserving specific preference",
         ),
         (
             "provenance_evidence",

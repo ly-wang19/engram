@@ -14,7 +14,7 @@ from ..types import Episode
 from ..util import DAY
 from .conflict import ConflictResolver
 from .decay import is_durable
-from .extractor import RuleExtractor
+from .extractor import RuleExtractor, is_specific_preference_object
 from .graph_builder import GraphBuilder
 from .summarizer import ProfileBuilder
 
@@ -41,7 +41,7 @@ class ConsolidationEngine:
 
             self.extractor = LLMExtractor(llm)
         else:
-            self.extractor = RuleExtractor(config.explicit_preference_extraction)
+            self.extractor = RuleExtractor(config.explicit_preference_extraction, config.preference_object_filter)
         self.graph_builder = GraphBuilder(graph, embedder)
         # Semantic conflict detection needs a real (semantic) embedder; the offline HashingEmbedder
         # produces meaningless cosines, so we gate it off there → exact-slot only, fully deterministic.
@@ -91,6 +91,12 @@ class ConsolidationEngine:
                 if (
                     not self.config.explicit_preference_extraction
                     and fact.predicate.lower() in _EXPLICIT_PREFERENCE_PREDS
+                ):
+                    continue
+                if (
+                    self.config.preference_object_filter
+                    and fact.predicate.lower() in _EXPLICIT_PREFERENCE_PREDS
+                    and not is_specific_preference_object(fact.object)
                 ):
                     continue
                 fact.embedding = self.embedder.embed(fact.text)

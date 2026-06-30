@@ -408,6 +408,29 @@ def test_explicit_preference_does_not_use_polluted_name_guess():
     assert mem.engine.self_name("u1") == "Wei"
 
 
+def test_explicit_preference_skips_weak_objects_by_default():
+    mem = Memory()
+    mem.add("I love it. I love retro-style diners. I like these ideas.", user_id="u1", event_time=BASE)
+    mem.consolidate()
+
+    facts = {(f.subject, f.predicate, f.object) for f in mem.fact_store.values()}
+    assert ("u1", "loves", "retro-style diners") in facts
+    assert ("u1", "loves", "it") not in facts
+    assert ("u1", "likes", "these ideas") not in facts
+
+
+def test_preference_object_filter_can_be_disabled():
+    from engram.config import Config
+
+    mem = Memory(config=Config(preference_object_filter=False))
+    mem.add("I love it. I love retro-style diners.", user_id="u1", event_time=BASE)
+    mem.consolidate()
+
+    facts = {(f.subject, f.predicate, f.object) for f in mem.fact_store.values()}
+    assert ("u1", "loves", "it") in facts
+    assert ("u1", "loves", "retro-style diners") in facts
+
+
 def test_import_style_moving_and_dietary_restrictions_extract_cleanly():
     mem = Memory()
     mem.add("I'm moving to Berlin next month for a job at Acme.", user_id="u1", event_time=BASE)
