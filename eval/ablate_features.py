@@ -113,6 +113,28 @@ def _procedural_memory_context(enabled: bool) -> str:
     return f"{ctx}\n\nSEARCH {res.via}\n{res.answer()}"
 
 
+def _procedural_extraction_context(enabled: bool) -> str:
+    mem = Memory(config=Config(procedural_extraction=enabled, abstain_threshold=2.0))
+    mem.add(
+        "PAT runbook source: rotate the PAT by opening security settings, regenerating the token, "
+        "then updating CI secrets.",
+        user_id="u1",
+        session_id="pat-runbook",
+        event_time=BASE,
+    )
+    mem.consolidate()
+    ctx = mem.lean_context(
+        "What is the PAT runbook?",
+        user_id="u1",
+        persona=False,
+        n_summaries=0,
+        n_chunks=0,
+        char_budget=10_000,
+    )
+    res = mem.search("What is the PAT runbook?", user_id="u1")
+    return f"{ctx}\n\nSEARCH {res.via}\n{res.answer()}"
+
+
 def _raw_context(enabled: bool) -> str:
     mem = Memory(config=Config(evidence_planner=False, provenance_evidence=enabled))
     ep = mem.add(
@@ -327,6 +349,17 @@ def run_ablation() -> tuple[list[AblationResult], dict]:
                 and "SEARCH procedural" in ctx
             ),
             "typed procedural memory surfaces source-backed runbook",
+        ),
+        (
+            "procedural_extraction",
+            _procedural_extraction_context,
+            lambda ctx: (
+                "PROCEDURAL MEMORY" in ctx
+                and "security settings" in ctx
+                and "sessions: pat-runbook" in ctx
+                and "SEARCH procedural" in ctx
+            ),
+            "rule extractor promotes runbook source into procedural memory",
         ),
         (
             "provenance_evidence",

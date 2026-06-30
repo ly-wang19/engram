@@ -18,6 +18,8 @@ from .extractor import RuleExtractor
 from .graph_builder import GraphBuilder
 from .summarizer import ProfileBuilder
 
+_PROCEDURAL_EXTRACTED_PREDS = {"procedure", "how_to", "routine"}
+
 
 class ConsolidationEngine:
     def __init__(
@@ -80,6 +82,11 @@ class ConsolidationEngine:
         # Step 2: reconcile conflicts in chronological order — ordering matters for "supersedes" chains.
         for ep in chrono:
             for fact in ep_facts.get(ep.id, []):
+                if (
+                    not self.config.procedural_extraction
+                    and fact.predicate.lower() in _PROCEDURAL_EXTRACTED_PREDS
+                ):
+                    continue
                 fact.embedding = self.embedder.embed(fact.text)
                 live = [f for f in self.fact_store.values() if f.user_id == fact.user_id and f.is_live()]
                 action, invalidated = self.conflict.reconcile(fact, live)
