@@ -69,6 +69,19 @@ def _temporal_history_context(enabled: bool) -> str:
     return res.answer()
 
 
+def _summary_fallback_context(enabled: bool) -> str:
+    mem = Memory(config=Config(summary_fallback=enabled))
+    ep = mem.add(
+        "To rotate the PAT: open security settings, regenerate the token, then update CI secrets.",
+        user_id="u1",
+        session_id="pat-runbook",
+        event_time=BASE,
+    )
+    mem.summarize_episodes([ep])
+    res = mem.search("How do I rotate the PAT?", user_id="u1")
+    return f"{res.via}\n{res.answer()}"
+
+
 def _raw_context(enabled: bool) -> str:
     mem = Memory(config=Config(evidence_planner=False, provenance_evidence=enabled))
     ep = mem.add(
@@ -266,6 +279,12 @@ def run_ablation() -> tuple[list[AblationResult], dict]:
             _temporal_history_context,
             lambda answer: "Tencent" in answer,
             "natural-language previous-value query reads supersession history",
+        ),
+        (
+            "summary_fallback",
+            _summary_fallback_context,
+            lambda answer: "summary" in answer and "security settings" in answer and "pat-runbook" in answer,
+            "derived session summary answers fact-miss how-to query",
         ),
         (
             "provenance_evidence",

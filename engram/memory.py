@@ -2363,9 +2363,19 @@ class Memory:
         overlaps the query (the info may live only in a summary — a how-to, a rule, an install command — that
         the extractor never distilled into a fact). Conservative: requires a non-generic lexical overlap, so
         it never returns a vaguely-similar summary as if it were the answer."""
-        for ep in self.retrieve_summaries(query, user_id, k=2, as_of=as_of):
+        if not self.config.summary_fallback:
+            return None
+        candidates: list[tuple[int, int, float, Episode, str]] = []
+        k = max(1, int(getattr(self.config, "summary_fallback_k", 6) or 6))
+        for ep in self.retrieve_summaries(query, user_id, k=k, as_of=as_of):
             text = (ep.summary or ep.content or "").strip()
-            if text and (overlap_terms(query, text) - _GENERIC_ATTR_TERMS):
-                dated = f"[{ep.metadata.get('date') or fmt_date(ep.event_time)}] {text}"
-                return SearchResult(query=query, via="summary", _answer=dated)
+            if not text:
+                continue
+            exact = overlap_terms(query, text) - _GENERIC_ATTR_TERMS
+            if exact:
+                candidates.append((len(exact), len(overlap_terms(query, text)), ep.event_time, ep, text))
+        if candidates:
+            _, _, _, ep, text = max(candidates, key=lambda row: (row[0], row[1], row[2]))
+            dated = f"[{ep.metadata.get('date') or fmt_date(ep.event_time)}] (session: {ep.session_id}) {text}"
+            return SearchResult(query=query, via="summary", _answer=dated)
         return None

@@ -39,6 +39,8 @@ class Config:
     abstain_threshold: float = 0.45  # abstain if no attribute match AND best semantic sim below this
     evidence_planner: bool = True  # benchmark-neutral query -> evidence-shape routing for lean_context
     evidence_budgeting: bool = True  # intent-aware context packing instead of equal/raw truncation
+    summary_fallback: bool = True  # answer from derived session summaries when facts cannot answer
+    summary_fallback_k: int = 6  # candidate summaries inspected by the fallback before abstaining
     chain_evidence: bool = True  # include bounded supersedes/evolution chains for retrieved facts
     temporal_history_queries: bool = True  # answer before/previous/former queries from supersession chains
     provenance_chunk_promotion: bool = True  # promote retrieved facts' source episodes into raw chunks

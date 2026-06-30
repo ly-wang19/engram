@@ -98,6 +98,36 @@ def test_search_uses_summary_fallback_when_no_fact_ranked():
     res = mem.search("How do I reset the PAT?", user_id="u1")
     assert res.via == "summary"
     assert "token" in res.answer().lower()
+    assert "(session: s1)" in res.answer()
+
+
+def test_summary_fallback_can_be_disabled_for_ablation():
+    from engram.config import Config
+
+    mem = Memory(config=Config(summary_fallback=False))
+    ep = mem.add("To reset the PAT: open settings, regenerate the token, then update CI.",
+                 user_id="u1", session_id="s1")
+    mem.summarize_episodes([ep])
+
+    res = mem.search("How do I reset the PAT?", user_id="u1")
+
+    assert res.abstained
+    assert res.via == "abstain"
+
+
+def test_summary_fallback_selects_best_source_backed_summary():
+    mem = Memory()
+    weak = mem.add("PAT policy note: keep credentials private.",
+                   user_id="u1", session_id="weak")
+    strong = mem.add("To reset the PAT: open settings, regenerate the token, then update CI.",
+                     user_id="u1", session_id="strong")
+    mem.summarize_episodes([weak, strong])
+
+    res = mem._summary_fallback("How do I reset the PAT?", "u1")
+
+    assert res is not None
+    assert "(session: strong)" in res.answer()
+    assert "regenerate the token" in res.answer().lower()
 
 
 def test_summary_fallback_respects_as_of():
