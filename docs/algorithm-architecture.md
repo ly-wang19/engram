@@ -1,5 +1,9 @@
 # Engram Algorithm Architecture
 
+中文架构优化地图见
+[`docs/architecture-optimization-map.zh-CN.md`](architecture-optimization-map.zh-CN.md)。那份文档记录
+AI/人类每次算法改动落在架构的哪个模块、优化了什么、验收日志在哪里。
+
 Engram's algorithmic bet is architectural, not a single retriever trick. The system is built so each
 memory layer contributes a different kind of evidence, and every claim can be checked in the same eval
 harness.
