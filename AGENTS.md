@@ -266,6 +266,9 @@ extras that slot in behind the same interfaces. We never break the zero-setup de
   Chinese when the user has not requested another language; keep code identifiers, API names,
   commands, filenames, benchmark names, and public English-facing artifacts in their appropriate
   original language or bilingual form.
+- **Architecture change visibility.** Agent-generated algorithm or architecture changes must update
+  [`docs/architecture-optimization-map.zh-CN.md`](docs/architecture-optimization-map.zh-CN.md) so the
+  owner can see which memory layer changed, why it changed, and which result logs prove it.
 - **Numbers, public messaging, commits, and privacy follow [`CONTRIBUTING.md`](CONTRIBUTING.md)** (applies
   to agents too): every published number traces to a committed `results/*.jsonl` log and stays consistent
   across README ×2 + RESULTS.md + the landing page; don't name-drop competitors or make unbenchmarked
