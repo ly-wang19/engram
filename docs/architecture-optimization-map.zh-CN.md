@@ -12,6 +12,21 @@
 这不是公开营销稿。任何对外性能主张仍以 `RESULTS.md`、`README.md`、`README.zh-CN.md`
 和已提交的 `results/*.jsonl` 原始日志为准。
 
+## 如何使用这组架构文档
+
+本文件是“驾驶舱”：看最近改了哪一层、为什么改、验收日志在哪里、下一步按计划做什么。
+
+完整工程说明书见
+[`docs/engram-full-architecture-report.zh-CN.md`](engram-full-architecture-report.zh-CN.md)。那份报告更细，
+覆盖从消息写入、Episode/Fact/Graph 生成、读路径证据规划、上下文装配、服务接口到 eval harness 的全链路数据流。
+
+建议阅读顺序：
+
+1. 先读完整报告，掌握整个系统的数据流和模块边界。
+2. 再回到本文件，看最近 AI/人类具体改了哪些架构层。
+3. 做算法 PR 前检查“当前重点区域”和“验收分层规则”。
+4. 合并后把改动、日志和下一步影响写回本文件；如果改了数据流或对象生命周期，也同步更新完整报告。
+
 ## 总览图
 
 ```mermaid
@@ -127,6 +142,7 @@ flowchart TD
 - 架构目标与原则：`AGENTS.md`, `CLAUDE.md`
 - 外部参考雷达：`specs/002-memory-reference-radar/research.md`
 - 中文技术报告：`specs/002-memory-reference-radar/technical-report.zh-CN.md`
+- 全链路架构报告：`docs/engram-full-architecture-report.zh-CN.md`
 - 算法说明：`docs/algorithm-architecture.md`
 - 结果日志规则：`results/README.md`
 - 公开结果：`RESULTS.md`
