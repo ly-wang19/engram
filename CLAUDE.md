@@ -268,7 +268,10 @@ extras that slot in behind the same interfaces. We never break the zero-setup de
   original language or bilingual form.
 - **Architecture change visibility.** Agent-generated algorithm or architecture changes must update
   [`docs/architecture-optimization-map.zh-CN.md`](docs/architecture-optimization-map.zh-CN.md) so the
-  owner can see which memory layer changed, why it changed, and which result logs prove it.
+  owner can see which memory layer changed, why it changed, and which result logs prove it. If the
+  change alters data flow, object lifecycle, storage shape, service/API surface, evaluation flow, or
+  module boundaries, also update
+  [`docs/engram-full-architecture-report.zh-CN.md`](docs/engram-full-architecture-report.zh-CN.md).
 - **Numbers, public messaging, commits, and privacy follow [`CONTRIBUTING.md`](CONTRIBUTING.md)** (applies
   to agents too): every published number traces to a committed `results/*.jsonl` log and stays consistent
   across README ×2 + RESULTS.md + the landing page; don't name-drop competitors or make unbenchmarked
