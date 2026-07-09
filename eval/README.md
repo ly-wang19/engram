@@ -32,7 +32,8 @@ python eval/ablate_features.py
 ```
 
 This command toggles the newest evidence features one at a time and checks whether the enabled path
-surfaces evidence that the disabled path cannot: supersedes-chain context, natural-language previous-value
+surfaces evidence that the disabled path cannot: supersedes-chain context, chain-aware provenance chunk
+promotion for previous-value questions, natural-language previous-value
 answers from supersession history, derived-summary fallback for fact-miss how-to queries, source-backed
 procedural memory for runbook/rule queries, rule-based procedure extraction from runbook/how-to text,
 provenance-backed
