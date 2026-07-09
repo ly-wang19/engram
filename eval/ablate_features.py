@@ -371,6 +371,37 @@ def _provenance_chunk_context(enabled: bool) -> str:
     )
 
 
+def _chain_provenance_context(enabled: bool) -> str:
+    mem = Memory(
+        config=Config(
+            chain_evidence=enabled,
+            provenance_evidence=False,
+            provenance_chunk_promotion=True,
+        )
+    )
+    mem.add(
+        "Wei works at Tencent and keeps a blue employee badge.",
+        user_id="u1",
+        session_id="old-source",
+        event_time=BASE,
+    )
+    mem.add(
+        "Wei works at Moonshot AI on agent memory.",
+        user_id="u1",
+        session_id="new-source",
+        event_time=BASE + 30 * DAY,
+    )
+    mem.consolidate()
+    return mem.lean_context(
+        "Where did Wei work before Moonshot AI?",
+        user_id="u1",
+        persona=False,
+        n_summaries=0,
+        n_chunks=1,
+        char_budget=10_000,
+    )
+
+
 def _evidence_budget_context(enabled: bool) -> str:
     mem = Memory(config=Config(evidence_budgeting=enabled))
     ep = mem.add(
@@ -603,6 +634,12 @@ def run_ablation() -> tuple[list[AblationResult], dict]:
             _provenance_chunk_context,
             _contains("RELEVANT CONVERSATIONS (full detail):", "blue binder"),
             "source episode promoted into full-detail raw chunk",
+        ),
+        (
+            "chain_provenance_promotion",
+            _chain_provenance_context,
+            _contains("RELEVANT CONVERSATIONS (full detail):", "blue employee badge"),
+            "superseded fact source promoted for previous-value questions",
         ),
         (
             "evidence_budgeting",

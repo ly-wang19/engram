@@ -1,6 +1,6 @@
 # Engram 全链路架构与数据流报告
 
-最后更新：2026-07-02
+最后更新：2026-07-09
 
 本文是 Engram 当前实现的中文工程说明书，目标是让项目负责人不用逐行读代码，也能完整掌握：
 
@@ -475,6 +475,7 @@ Raw evidence 来源：
 | --- | --- | --- |
 | query 直接检索 Episode | `retrieve_episodes` | 找原始细节 |
 | fact provenance | `_provenance_detail_chunks` | 命中 fact 后回到源会话补细节 |
+| chain provenance | `_chain_facts_for_seeds` -> `_provenance_detail_chunks` | previous-value / current-vs-past 问题中，把 `supersedes` 链上的旧事实来源也纳入 raw chunk promotion |
 | provenance raw block | `_provenance_raw_block` | 给 answerer 看事实来源上下文 |
 | session summaries | `retrieve_summaries` | raw 太长时给 source-backed 摘要 |
 | aggregation raw episodes | `_aggregation_block` | 数值/列表问题从源文本抽候选 |
@@ -586,7 +587,7 @@ flowchart TD
 | `procedural_extraction` | true | Extraction | 从 runbook/how-to 抽过程事实 |
 | `procedural_memory` | true | Read path | 过程记忆独立读层 |
 | `summary_fallback` | true | Search/read fallback | fact miss 时查 source-backed summaries |
-| `chain_evidence` | true | Temporal/history | 展开 bounded supersedes chain |
+| `chain_evidence` | true | Temporal/history + Raw evidence fusion | 展开 bounded supersedes chain，并让 chain facts 可作为 provenance raw chunk promotion 的种子 |
 | `temporal_history_queries` | true | Temporal | 自然语言历史问题 |
 | `provenance_chunk_promotion` | true | Raw evidence fusion | fact 命中后提升源 Episode chunk |
 | `provenance_evidence` | true | Context | 带来源证据块 |
@@ -702,6 +703,7 @@ python eval/validate_results.py
 | preference extraction/filter/normalization/reversal | 让画像偏好更准，并能处理“不再喜欢” | `docs/architecture-optimization-map.zh-CN.md` |
 | summary fallback | fact miss 时不直接丢失 session 层证据 | `results/summary_fallback_experiments.md` |
 | provenance chunk promotion | 命中 fact 后回源 Episode 补 raw detail | `results/provenance_chunk_promotion_experiments.md` |
+| chain provenance promotion | previous-value 问题中，`supersedes` 链上的旧事实来源也能提升为 raw detail chunk | `results/chain_provenance_promotion_experiments.md` |
 | procedural memory/extraction | 把规则、流程、runbook 从普通语义事实中分层 | `results/procedural_memory_experiments.md` |
 | numeric aggregation candidates | 对金额/页数/小时等聚合问题给结构化候选 | `results/numeric_aggregation_candidates_experiments.md` |
 | aggregation recall expansion | 提升聚合问题 raw/fact 召回 | `results/aggregation_recall_expansion_experiments.md` |
@@ -715,8 +717,8 @@ python eval/validate_results.py
 
 | 优先级 | 方向 | 主要代码 | 为什么是下一步 |
 | --- | --- | --- | --- |
-| P0 | Raw evidence fusion hardening | `Memory.lean_context`, `_provenance_detail_chunks`, `retrieve_episodes` | facts-only 已被真实数据证明不够，raw + facts 是主路径 |
-| P0 | Chain-aware retrieval | `_chain_facts_for_seeds`, `_fact_evolution_block`, `HybridRetriever` | knowledge-update/current-vs-past 是 Engram 的差异化 |
+| P0 | Raw evidence fusion hardening | `Memory.lean_context`, `_provenance_detail_chunks`, `retrieve_episodes` | facts-only 已被真实数据证明不够；已开始把 chain facts 接入 raw promotion，下一步继续类型化和去重 |
+| P0 | Chain-aware retrieval | `_chain_facts_for_seeds`, `_fact_evolution_block`, `HybridRetriever` | knowledge-update/current-vs-past 是 Engram 的差异化；下一步扩展多段演化链和 profile-level chain |
 | P1 | Graph proximity / multi-hop retriever | `HybridRetriever._graph_scores`, `MultiHopPlanner`, `_graph_paths_block` | multi-hop/multi-session 是长期记忆系统最难类别 |
 | P1 | Temporal interval reasoning | temporal/history blocks, aggregation/duration | duration 和区间问题仍需要更强结构化 |
 | P2 | Runtime profiles | `Config`, `eval/bench.py` | 让用户按 lite/standard/graph 选择可测 tradeoff |

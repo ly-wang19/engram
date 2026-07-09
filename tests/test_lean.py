@@ -945,6 +945,52 @@ def test_provenance_source_episode_is_promoted_into_detail_chunks():
     assert "apollo-distractor" in disabled_detail
 
 
+def test_chain_provenance_promotes_superseded_source_for_history_query():
+    from engram.config import Config
+
+    def make(enabled: bool) -> str:
+        mem = Memory(
+            config=Config(
+                chain_evidence=enabled,
+                provenance_evidence=False,
+                provenance_chunk_promotion=True,
+            )
+        )
+        mem.add(
+            "Wei works at Tencent and keeps a blue employee badge.",
+            user_id="u1",
+            session_id="old-source",
+            event_time=BASE,
+        )
+        mem.add(
+            "Wei works at Moonshot AI on agent memory.",
+            user_id="u1",
+            session_id="new-source",
+            event_time=BASE + 30 * DAY,
+        )
+        mem.consolidate()
+        return mem.lean_context(
+            "Where did Wei work before Moonshot AI?",
+            user_id="u1",
+            persona=False,
+            n_summaries=0,
+            n_chunks=1,
+            char_budget=10_000,
+        )
+
+    enabled = make(True)
+    disabled = make(False)
+    enabled_detail = enabled.split("RELEVANT CONVERSATIONS (full detail):", 1)[1]
+    disabled_detail = disabled.split("RELEVANT CONVERSATIONS (full detail):", 1)[1]
+
+    assert "FACT HISTORY (supersession chain" in enabled
+    assert "Tencent" in enabled
+    assert "old-source" in enabled_detail
+    assert "blue employee badge" in enabled_detail
+    assert "new-source" in disabled_detail
+    assert "blue employee badge" not in disabled_detail
+
+
 def test_provenance_raw_evidence_is_hidden_in_redacted_context():
     from engram.config import Config
     from engram.types import Fact

@@ -1428,7 +1428,13 @@ class Memory:
         rows: list[str] = []
         seen_eps: set[str] = set(exclude_episode_ids)
         view_time = now() if as_of is None else as_of
-        for fact in sorted(facts, key=lambda f: f.valid_at, reverse=True):
+        history_query = bool(_TEMPORAL_HISTORY_RE.search(query or ""))
+
+        def fact_order(f: Fact) -> tuple[int, float]:
+            past = int(history_query and f.valid_at <= view_time and not f.is_live(as_of))
+            return (past, f.valid_at)
+
+        for fact in sorted(facts, key=fact_order, reverse=True):
             if getattr(fact, "sensitive", False):
                 continue
             if query and not overlap_terms(query, self._chain_terms(fact)):
@@ -1469,6 +1475,7 @@ class Memory:
         if limit <= 0 or redact_sensitive or not facts:
             return []
         view_time = now() if as_of is None else as_of
+        history_query = bool(_TEMPORAL_HISTORY_RE.search(query or ""))
         scored: dict[str, tuple[int, int, float, Episode]] = {}
         for fact_rank, fact in enumerate(facts):
             if getattr(fact, "sensitive", False):
@@ -1484,6 +1491,8 @@ class Memory:
                 ep_overlap = len(overlap_terms(query, ep.content)) if query else 0
                 support_overlap = len(overlap_terms(fact.text, ep.content))
                 score = fact_overlap * 8 + support_overlap * 3 + ep_overlap * 2
+                if history_query and fact.valid_at <= view_time and not fact.is_live(as_of):
+                    score += 96
                 prev = scored.get(ep.id)
                 item = (score, fact_rank, ep.event_time, ep)
                 if prev is None or (score, -fact_rank, ep.event_time) > (prev[0], -prev[1], prev[2]):
@@ -1985,6 +1994,20 @@ class Memory:
                 if evo:
                     blocks.append(evo)
 
+        provenance_facts = list(all_facts)
+        if self.config.chain_evidence and all_facts:
+            seen_chain_facts = {f.id for f in provenance_facts}
+            for f in self._chain_facts_for_seeds(
+                all_facts,
+                user,
+                as_of,
+                limit=max(8, min(18, n_facts + 3)),
+                redact_sensitive=redact_sensitive,
+            ):
+                if f.id not in seen_chain_facts:
+                    seen_chain_facts.add(f.id)
+                    provenance_facts.append(f)
+
         if (
             self.config.procedural_memory
             and not redact_sensitive
@@ -2048,7 +2071,7 @@ class Memory:
         detail_ids = {e.id for e in detail_eps}
         if self.config.provenance_chunk_promotion and n_chunks and not redact_sensitive:
             promoted = self._provenance_detail_chunks(
-                all_facts,
+                provenance_facts,
                 " ".join(queries),
                 user,
                 as_of,
@@ -2103,7 +2126,7 @@ class Memory:
 
         if self.config.provenance_evidence:
             raw_prov = self._provenance_raw_block(
-                all_facts,
+                provenance_facts,
                 query,
                 user,
                 as_of,
