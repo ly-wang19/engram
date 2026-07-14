@@ -111,6 +111,14 @@ documents a clean-room plan.
 | memU | Public repository and docs; external claims only | License review required before any code reuse |
 | Memobase | Public repository and docs; external claims only | License review required before any code reuse |
 | agentmemory | Public repository candidate; external claims only | License review and repository verification required |
+| LongMemEval-V2 | Public benchmark page; external claims only | Benchmark terms and dataset license review required before reuse |
+| BEAM | Public benchmark repository; external claims only | License review required before benchmark artifact reuse |
+| LOCOMO | Public benchmark page and dataset; external claims only | Dataset terms and license review required before reuse |
+| Agent Memory Benchmark | Public leaderboard; external claims only | Research-only; leaderboard terms review required |
+| mem0 memory-benchmarks | Public benchmark repository; external claims only | Architecture-only until license and harness review |
+| Awesome Agent Memory | Public literature radar; external claims only | Architecture-only; linked sources require their own license review |
+| Awesome GraphMemory | Public graph-memory radar; external claims only | Architecture-only; linked sources require their own license review |
+| Awesome Memory for Agents | Public literature radar; external claims only | Architecture-only; linked sources require their own license review |
 
 ## P0 References: Study First
 

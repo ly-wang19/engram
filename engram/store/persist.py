@@ -11,6 +11,7 @@ from contextlib import contextmanager
 from dataclasses import fields
 from typing import Any, Iterable
 
+from .. import __version__
 from ..ingest import IdentityResolver
 from ..types import Conflict, Entity, Episode, Fact, Relation, WorkingMemory
 from ..util import now
@@ -188,7 +189,7 @@ def save_memory(mem: Any, path: str, backend: str = "durable") -> None:
                 pass
         manifest = {
             "schema_version": SCHEMA_VERSION,
-            "engram_version": "0.0.1",
+            "engram_version": __version__,
             "embedder_id": _embedder_id(mem.embedder),
             "embedding_dim": _embedder_dim(mem.embedder),
             "backend": backend,

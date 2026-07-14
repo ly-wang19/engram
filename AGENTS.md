@@ -294,5 +294,5 @@ extras that slot in behind the same interfaces. We never break the zero-setup de
 <!-- SPECKIT START -->
 For additional context about technologies to be used, project structure,
 shell commands, and other important information, read the current plan
-at specs/002-memory-reference-radar/plan.md
+at specs/003-commercial-release/plan.md
 <!-- SPECKIT END -->

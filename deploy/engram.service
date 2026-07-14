@@ -5,19 +5,33 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=ubuntu
-WorkingDirectory=/home/ubuntu/engram-memory
-Environment=PYTHONPATH=/home/ubuntu/engram-memory
+DynamicUser=yes
+StateDirectory=engram
+WorkingDirectory=/opt/engram
+Environment=PYTHONPATH=/opt/engram
 Environment=PYTHONUNBUFFERED=1
-EnvironmentFile=-/home/ubuntu/engram-memory/.env
-ExecStart=/home/ubuntu/engram-memory/.venv/bin/python -m uvicorn engram.server.app:app --host 0.0.0.0 --port 8456
+Environment=ENGRAM_DATA_DIR=/var/lib/engram
+EnvironmentFile=/etc/engram/engram.env
+ExecStart=/opt/engram/.venv/bin/python -m uvicorn engram.server.app:app --host 127.0.0.1 --port 8000 --workers 1
 Restart=on-failure
 RestartSec=5
 KillSignal=SIGINT
 TimeoutStopSec=30
 NoNewPrivileges=true
-StandardOutput=append:/home/ubuntu/engram-memory/engram.log
-StandardError=append:/home/ubuntu/engram-memory/engram.log
+PrivateDevices=true
+PrivateTmp=true
+ProtectControlGroups=true
+ProtectHome=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+ProtectSystem=strict
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictSUIDSGID=true
+LockPersonality=true
+SystemCallArchitectures=native
+UMask=0077
+StandardOutput=journal
+StandardError=journal
 
 [Install]
 WantedBy=multi-user.target

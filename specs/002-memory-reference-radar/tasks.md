@@ -21,14 +21,14 @@ tests.
 
 **Purpose**: Prepare the Spec-Kit feature folder and active feature pointer.
 
-- [ ] T001 Confirm `.specify/feature.json` points to `specs/002-memory-reference-radar`
-- [ ] T002 Create `specs/002-memory-reference-radar/plan.md` from the Spec-Kit plan template
-- [ ] T003 [P] Create `specs/002-memory-reference-radar/contracts/radar-entry.md`
-- [ ] T004 [P] Create `specs/002-memory-reference-radar/contracts/adoption-candidate.md`
-- [ ] T005 [P] Create `specs/002-memory-reference-radar/data-model.md`
-- [ ] T006 [P] Create `specs/002-memory-reference-radar/quickstart.md`
-- [ ] T007 Update `AGENTS.md` Spec-Kit managed block to point at `specs/002-memory-reference-radar/plan.md`
-- [ ] T008 Update `CLAUDE.md` Spec-Kit managed block to point at `specs/002-memory-reference-radar/plan.md`
+- [x] T001 Confirm `.specify/feature.json` points to `specs/002-memory-reference-radar`
+- [x] T002 Create `specs/002-memory-reference-radar/plan.md` from the Spec-Kit plan template
+- [x] T003 [P] Create `specs/002-memory-reference-radar/contracts/radar-entry.md`
+- [x] T004 [P] Create `specs/002-memory-reference-radar/contracts/adoption-candidate.md`
+- [x] T005 [P] Create `specs/002-memory-reference-radar/data-model.md`
+- [x] T006 [P] Create `specs/002-memory-reference-radar/quickstart.md`
+- [x] T007 Update `AGENTS.md` Spec-Kit managed block to point at `specs/002-memory-reference-radar/plan.md`
+- [x] T008 Update `CLAUDE.md` Spec-Kit managed block to point at `specs/002-memory-reference-radar/plan.md`
 
 ---
 
@@ -38,11 +38,11 @@ tests.
 
 **CRITICAL**: No user story work should be promoted until this phase is complete.
 
-- [ ] T009 Add Phase 0 decisions to `specs/002-memory-reference-radar/research.md` covering internal-use scope, Engram-native candidates, raw evidence plus consolidated memory, clean-room status, and benchmark-prioritized promotion
-- [ ] T010 Define Reference Source, Capability Pattern, Adoption Candidate, Evidence Record, and Messaging Guardrail entities in `specs/002-memory-reference-radar/data-model.md`
-- [ ] T011 Define required radar-entry fields and acceptance checks in `specs/002-memory-reference-radar/contracts/radar-entry.md`
-- [ ] T012 Define required adoption-candidate fields and promotion rules in `specs/002-memory-reference-radar/contracts/adoption-candidate.md`
-- [ ] T013 Add validation commands for artifact presence, placeholder scans, governance keyword checks, and link checks in `specs/002-memory-reference-radar/quickstart.md`
+- [x] T009 Add Phase 0 decisions to `specs/002-memory-reference-radar/research.md` covering internal-use scope, Engram-native candidates, raw evidence plus consolidated memory, clean-room status, and benchmark-prioritized promotion
+- [x] T010 Define Reference Source, Capability Pattern, Adoption Candidate, Evidence Record, and Messaging Guardrail entities in `specs/002-memory-reference-radar/data-model.md`
+- [x] T011 Define required radar-entry fields and acceptance checks in `specs/002-memory-reference-radar/contracts/radar-entry.md`
+- [x] T012 Define required adoption-candidate fields and promotion rules in `specs/002-memory-reference-radar/contracts/adoption-candidate.md`
+- [x] T013 Add validation commands for artifact presence, placeholder scans, governance keyword checks, and link checks in `specs/002-memory-reference-radar/quickstart.md`
 
 **Checkpoint**: Foundation ready. The radar can now be populated and candidates can be promoted using consistent gates.
 
@@ -59,17 +59,17 @@ minutes.
 
 ### Validation for User Story 1
 
-- [ ] T014 [P] [US1] Verify all public reference links in `specs/002-memory-reference-radar/research.md` using the link-check command in `specs/002-memory-reference-radar/quickstart.md`
-- [ ] T015 [P] [US1] Verify every source in `specs/002-memory-reference-radar/research.md` has evidence status and clean-room/license status matching `specs/002-memory-reference-radar/contracts/radar-entry.md`
+- [x] T014 [P] [US1] Verify all public reference links in `specs/002-memory-reference-radar/research.md` using the link-check command in `specs/002-memory-reference-radar/quickstart.md`
+- [x] T015 [P] [US1] Verify every source in `specs/002-memory-reference-radar/research.md` has evidence status and clean-room/license status matching `specs/002-memory-reference-radar/contracts/radar-entry.md`
 
 ### Implementation for User Story 1
 
-- [ ] T016 [US1] Add or update the Review Status by Source table in `specs/002-memory-reference-radar/research.md`
-- [ ] T017 [US1] Add or update the P0 References table in `specs/002-memory-reference-radar/research.md` for direct memory systems
-- [ ] T018 [US1] Add or update the P1 References table in `specs/002-memory-reference-radar/research.md` for algorithm, graph, and knowledge-compilation sources
-- [ ] T019 [US1] Add or update the P2 References table in `specs/002-memory-reference-radar/research.md` for product surfaces and deployment patterns
-- [ ] T020 [US1] Add or update the Benchmark and Radar Sources table in `specs/002-memory-reference-radar/research.md`
-- [ ] T021 [US1] Ensure `specs/002-memory-reference-radar/spec.md` includes knowledge-compilation systems in the radar scope
+- [x] T016 [US1] Add or update the Review Status by Source table in `specs/002-memory-reference-radar/research.md`
+- [x] T017 [US1] Add or update the P0 References table in `specs/002-memory-reference-radar/research.md` for direct memory systems
+- [x] T018 [US1] Add or update the P1 References table in `specs/002-memory-reference-radar/research.md` for algorithm, graph, and knowledge-compilation sources
+- [x] T019 [US1] Add or update the P2 References table in `specs/002-memory-reference-radar/research.md` for product surfaces and deployment patterns
+- [x] T020 [US1] Add or update the Benchmark and Radar Sources table in `specs/002-memory-reference-radar/research.md`
+- [x] T021 [US1] Ensure `specs/002-memory-reference-radar/spec.md` includes knowledge-compilation systems in the radar scope
 
 **Checkpoint**: User Story 1 is complete when the radar is current, categorized, link-checked, and marked with evidence and license status.
 
@@ -86,17 +86,17 @@ and rollback criterion.
 
 ### Validation for User Story 2
 
-- [ ] T022 [P] [US2] Verify each row in the Capability Patterns table in `specs/002-memory-reference-radar/research.md` maps to at least one strategic bet described in `specs/002-memory-reference-radar/plan.md`
-- [ ] T023 [P] [US2] Verify every item in the Initial Priority Queue in `specs/002-memory-reference-radar/research.md` can satisfy `specs/002-memory-reference-radar/contracts/adoption-candidate.md`
+- [x] T022 [P] [US2] Verify each row in the Capability Patterns table in `specs/002-memory-reference-radar/research.md` maps to at least one strategic bet described in `specs/002-memory-reference-radar/plan.md`
+- [x] T023 [P] [US2] Verify every item in the Initial Priority Queue in `specs/002-memory-reference-radar/research.md` can satisfy `specs/002-memory-reference-radar/contracts/adoption-candidate.md`
 
 ### Implementation for User Story 2
 
-- [ ] T024 [US2] Add or update the Capability Patterns to Absorb table in `specs/002-memory-reference-radar/research.md`
-- [ ] T025 [US2] Add or update the Staged Assimilation Path in `specs/002-memory-reference-radar/research.md`
-- [ ] T026 [US2] Add or update the Promotion Checklist for Any Candidate in `specs/002-memory-reference-radar/research.md`
-- [ ] T027 [US2] Add or update the Initial Priority Queue in `specs/002-memory-reference-radar/research.md` with chain-aware retrieval, raw evidence fusion hardening, derived memory layers, memory workspace diagnostics, graph proximity retrieval, reflection/experience memory, and runtime profiles
-- [ ] T028 [US2] Add chain-aware retrieval as the first planning-ready candidate example in `specs/002-memory-reference-radar/contracts/adoption-candidate.md`
-- [ ] T029 [US2] Ensure `specs/002-memory-reference-radar/plan.md` names the first planning-ready candidates and their high-level evaluation gate
+- [x] T024 [US2] Add or update the Capability Patterns to Absorb table in `specs/002-memory-reference-radar/research.md`
+- [x] T025 [US2] Add or update the Staged Assimilation Path in `specs/002-memory-reference-radar/research.md`
+- [x] T026 [US2] Add or update the Promotion Checklist for Any Candidate in `specs/002-memory-reference-radar/research.md`
+- [x] T027 [US2] Add or update the Initial Priority Queue in `specs/002-memory-reference-radar/research.md` with chain-aware retrieval, raw evidence fusion hardening, derived memory layers, memory workspace diagnostics, graph proximity retrieval, reflection/experience memory, and runtime profiles
+- [x] T028 [US2] Add chain-aware retrieval as the first planning-ready candidate example in `specs/002-memory-reference-radar/contracts/adoption-candidate.md`
+- [x] T029 [US2] Ensure `specs/002-memory-reference-radar/plan.md` names the first planning-ready candidates and their high-level evaluation gate
 
 **Checkpoint**: User Story 2 is complete when every priority candidate can move into a later Spec-Kit feature without relying on external code or unsupported benchmark claims.
 
@@ -112,15 +112,15 @@ competitor comparisons, hidden borrowed claims, or unbenchmarked "world best" la
 
 ### Validation for User Story 3
 
-- [ ] T030 [P] [US3] Verify `specs/002-memory-reference-radar/research.md` labels third-party claims as external-only
-- [ ] T031 [P] [US3] Verify `specs/002-memory-reference-radar/spec.md` success criteria forbid unreproduced competitor comparisons and unbenchmarked "SOTA", "#1", or "world best" claims
+- [x] T030 [P] [US3] Verify `specs/002-memory-reference-radar/research.md` labels third-party claims as external-only
+- [x] T031 [P] [US3] Verify `specs/002-memory-reference-radar/spec.md` success criteria forbid unreproduced competitor comparisons and unbenchmarked "SOTA", "#1", or "world best" claims
 
 ### Implementation for User Story 3
 
-- [ ] T032 [US3] Add or update Messaging Guardrail rules in `specs/002-memory-reference-radar/data-model.md`
-- [ ] T033 [US3] Add public-messaging acceptance checks to `specs/002-memory-reference-radar/contracts/radar-entry.md`
-- [ ] T034 [US3] Add public-messaging impact requirements to `specs/002-memory-reference-radar/contracts/adoption-candidate.md`
-- [ ] T035 [US3] Ensure `specs/002-memory-reference-radar/plan.md` records Constitution Check PASS status for reproducibility and honest public messaging
+- [x] T032 [US3] Add or update Messaging Guardrail rules in `specs/002-memory-reference-radar/data-model.md`
+- [x] T033 [US3] Add public-messaging acceptance checks to `specs/002-memory-reference-radar/contracts/radar-entry.md`
+- [x] T034 [US3] Add public-messaging impact requirements to `specs/002-memory-reference-radar/contracts/adoption-candidate.md`
+- [x] T035 [US3] Ensure `specs/002-memory-reference-radar/plan.md` records Constitution Check PASS status for reproducibility and honest public messaging
 
 **Checkpoint**: User Story 3 is complete when the radar can be used for internal learning without weakening Engram's reproducibility and messaging discipline.
 
@@ -131,13 +131,13 @@ competitor comparisons, hidden borrowed claims, or unbenchmarked "world best" la
 **Purpose**: Validate formatting, consistency, and readiness for downstream `/speckit-analyze` or
 feature-specific implementation specs.
 
-- [ ] T036 [P] Run placeholder scan from `specs/002-memory-reference-radar/quickstart.md` against `specs/002-memory-reference-radar/spec.md`, `specs/002-memory-reference-radar/plan.md`, `specs/002-memory-reference-radar/research.md`, `specs/002-memory-reference-radar/data-model.md`, and `specs/002-memory-reference-radar/contracts/`
-- [ ] T037 [P] Run governance keyword check from `specs/002-memory-reference-radar/quickstart.md` against `specs/002-memory-reference-radar/`
-- [ ] T038 [P] Run `git diff --check -- AGENTS.md CLAUDE.md .specify/feature.json specs/002-memory-reference-radar`
-- [ ] T039 Confirm `AGENTS.md` and `CLAUDE.md` have matching Spec-Kit managed blocks pointing to `specs/002-memory-reference-radar/plan.md`
-- [ ] T040 Update `specs/002-memory-reference-radar/checklists/requirements.md` notes after final validation
-- [ ] T041 Review `specs/002-memory-reference-radar/tasks.md` for strict checklist format, sequential IDs, story labels, and exact file paths
-- [ ] T042 [P] Review `specs/002-memory-reference-radar/technical-report.zh-CN.md` for Chinese-first internal documentation, reproducibility discipline, clean-room boundaries, and alignment with `specs/002-memory-reference-radar/research.md`
+- [x] T036 [P] Run placeholder scan from `specs/002-memory-reference-radar/quickstart.md` against `specs/002-memory-reference-radar/spec.md`, `specs/002-memory-reference-radar/plan.md`, `specs/002-memory-reference-radar/research.md`, `specs/002-memory-reference-radar/data-model.md`, and `specs/002-memory-reference-radar/contracts/`
+- [x] T037 [P] Run governance keyword check from `specs/002-memory-reference-radar/quickstart.md` against `specs/002-memory-reference-radar/`
+- [x] T038 [P] Run `git diff --check -- AGENTS.md CLAUDE.md .specify/feature.json specs/002-memory-reference-radar`
+- [x] T039 Confirm `AGENTS.md` and `CLAUDE.md` have matching Spec-Kit managed blocks pointing to `specs/002-memory-reference-radar/plan.md`
+- [x] T040 Update `specs/002-memory-reference-radar/checklists/requirements.md` notes after final validation
+- [x] T041 Review `specs/002-memory-reference-radar/tasks.md` for strict checklist format, sequential IDs, story labels, and exact file paths
+- [x] T042 [P] Review `specs/002-memory-reference-radar/technical-report.zh-CN.md` for Chinese-first internal documentation, reproducibility discipline, clean-room boundaries, and alignment with `specs/002-memory-reference-radar/research.md`
 
 ---
 

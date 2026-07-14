@@ -1,6 +1,6 @@
 {
   "name": "engram-memory",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "Official TypeScript/JavaScript SDK for Engram — open-source long-term memory for LLM agents (with an OpenAI-compatible chat surface).",
   "license": "AGPL-3.0-only",
   "type": "module",

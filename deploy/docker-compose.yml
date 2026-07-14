@@ -1,0 +1,41 @@
+services:
+  engram:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: engram-memory:0.1.0
+    init: true
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${ENGRAM_PORT:-8000}:8000"
+    environment:
+      ENGRAM_API_KEYS: "${ENGRAM_API_KEYS:?set ENGRAM_API_KEYS in deploy/.env}"
+      ENGRAM_DATA_DIR: /data
+      ENGRAM_EMBEDDER: "${ENGRAM_EMBEDDER:-hashing}"
+      ENGRAM_LLM: "${ENGRAM_LLM:-}"
+      ENGRAM_ANSWERER: "${ENGRAM_ANSWERER:-}"
+      ENGRAM_MAX_REQUEST_BYTES: "${ENGRAM_MAX_REQUEST_BYTES:-2097152}"
+      ENGRAM_MAX_HOT_USERS: "${ENGRAM_MAX_HOT_USERS:-64}"
+      ENGRAM_MAX_HOT_FACTS: "${ENGRAM_MAX_HOT_FACTS:-10000}"
+    volumes:
+      - engram_data:/data
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import json,urllib.request; r=urllib.request.urlopen('http://127.0.0.1:8000/ready', timeout=3); assert r.status == 200 and json.load(r)['ready']"
+      interval: 15s
+      timeout: 5s
+      start_period: 20s
+      retries: 4
+
+volumes:
+  engram_data:

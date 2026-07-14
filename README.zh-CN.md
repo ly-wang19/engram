@@ -8,14 +8,16 @@
 
 **🎬 [在线动画演示 →](https://ly-wang19.github.io/engram/)** —— 60 秒看懂它怎么工作(小白友好)。
 
-**🔌 [在线控制台 →](http://42.193.220.197:8456/ui)** —— 打开后输入体验 key `1`,即可端到端浏览一份完整的公开记忆(画像、事实、时间线、图谱、问答)。
+**🔌 [在线控制台 →](http://42.193.220.197:8456/ui)** —— 打开后输入体验 key `1`,即可端到端浏览一份完整的公开记忆(画像、事实、时间线、图谱、问答)。这是公开演示，请勿提交隐私数据。
 
 Engram 让 LLM 智能体拥有跨会话的、可查询的持久记忆：它记录发生过什么、提炼出原子事实、追踪这些事实
 随时间的变化（双时间轴 bi-temporal）、在不丢历史的前提下解决矛盾，并用「语义 + 词法 + 图 + 时近」的
 混合检索把最相关的上下文取出来。
 
-> 状态：**alpha**。端到端流程**零配置**即可跑（不需要 API key，不需要任何服务）。下面的基准数字跑在真实
-> 模型上，一行命令即可复现。完整方法与原始日志见 [`RESULTS.md`](RESULTS.md)。
+> 状态：**0.1.0 beta · 单节点自托管交付版**。端到端流程**零配置**即可跑（不需要 API key，不需要任何
+> 服务），生产部署则在未配置凭据时默认失败关闭。交付边界见
+> [`docs/commercial-release-0.1.0.zh-CN.md`](docs/commercial-release-0.1.0.zh-CN.md)，安全策略见
+> [`SECURITY.md`](SECURITY.md)，基准方法与原始日志见 [`RESULTS.md`](RESULTS.md)。
 
 ## 为什么要再造一个记忆系统？
 
@@ -140,7 +142,8 @@ print(mem.search("Where does Wei work?", user_id="u1").answer())
 ## 怎么调用 / 接入你的应用
 
 Engram 自带完整**接入层**:HTTP API + MCP + JS/TS SDK + OpenAI 兼容,都走同一个多租户核心
-（`MemoryService`），**每个 API key 就是一个互相隔离的记忆空间**。
+（`MemoryService`）。生产模式下，配置的 API key 映射到稳定、互相隔离的租户命名空间；只有显式开发开放
+模式才把 key 文本本身当作命名空间。
 内置控制台 `/ui` 也体现同一条产品闭环：不含正文的 session status、带 `scope=auto|long|working`
 的会话写入、结束会话、session report 审计、分页记忆管理、安全导出和显式确认清空。
 跨 Claude Code / Codex / Cursor / 自研 agent 的推荐生命周期见
@@ -237,16 +240,17 @@ TypeScript SDK 的 `engram.export()` 默认走这个安全导出；只有用户�
 ### 自部署（数据完全在你自己机器上）
 
 ```bash
-pip install "engram-memory[serve]"
-export ENGRAM_OPEN=1                # 开发：Bearer 文本即命名空间；匿名需显式 ENGRAM_ALLOW_ANONYMOUS=1
-export ENGRAM_EMBEDDER=hashing      # 零下载默认；用 bge-small 可获得更好的本地嵌入
-export ENGRAM_MAX_HOT_FACTS=10000   # 热层事实上限；冷层事实会在热 miss 时回温
-export ENGRAM_LLM=deepseek          # 可选：启用 /v1/chat/completions 生成
-uvicorn engram.server.app:app --port 8000        # HTTP API + 控制台在 /ui
+cp deploy/.env.example deploy/.env              # 把示例 key 换成强随机密钥
+docker compose --env-file deploy/.env -f deploy/docker-compose.yml up -d --build
+curl -fsS http://127.0.0.1:8000/ready
 ```
 
-`GET /health` 可用于 readiness 与安全的部署排错：它返回鉴权模式、是否允许匿名、嵌入器、LLM 是否已配置、
-存储模式和热用户数，不暴露 key、路径或用户内容。
+标准容器以非 root 运行、根文件系统只读、只把 `/data` 作为持久卷、仅绑定本机端口且不默认开放访问。
+TLS 网关、备份恢复、升级回滚和密钥轮换见 [`deploy/README.md`](deploy/README.md)。`GET /health` 用于
+liveness/排错，`GET /ready` 在鉴权或存储未就绪时返回 503；两者都不暴露 key、路径或用户内容。
+
+直接使用 Python 部署时，安装 `engram-memory[serve]`，设置
+`ENGRAM_API_KEYS="tenant-a:<强随机密钥>"` 后运行 Uvicorn。`ENGRAM_OPEN=1` 仅用于显式本地开发。
 
 批量导入见 [`examples/batch_import.py`](examples/batch_import.py)，完整接口文档见 [`API.md`](API.md)。
 

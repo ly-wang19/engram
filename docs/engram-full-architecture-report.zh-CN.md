@@ -1,6 +1,6 @@
 # Engram 全链路架构与数据流报告
 
-最后更新：2026-07-09
+最后更新：2026-07-14
 
 本文是 Engram 当前实现的中文工程说明书，目标是让项目负责人不用逐行读代码，也能完整掌握：
 
@@ -59,11 +59,12 @@ flowchart TD
         HTTP["HTTP API\nengram/server/app.py"]
         MCP["MCP tools\nengram/mcp/server.py"]
         EVAL["Eval harness\neval/bench.py"]
-        SDK["未来 SDK / Agent adapter"]
+        SDK["TypeScript SDK / Agent adapter"]
     end
 
     subgraph SVC["服务与多租户层"]
-        MS["MemoryService\nnamespace/user isolation\nLRU hot users\nfile lock"]
+        AUTH["Service security\nkey -> tenant + request limits\nliveness / readiness"]
+        MS["MemoryService\nsafe digest namespace\nLRU hot users + file lock"]
     end
 
     subgraph CORE["Memory 核心编排层"]
@@ -110,9 +111,10 @@ flowchart TD
     end
 
     API --> MEM
-    HTTP --> MS
-    MCP --> MS
-    SDK --> MS
+    HTTP --> AUTH
+    MCP --> AUTH
+    SDK --> AUTH
+    AUTH --> MS
     EVAL --> MEM
     MS --> MEM
     MEM --> CFG
@@ -629,12 +631,41 @@ flowchart TD
 
 服务层职责：
 
-1. user/namespace 隔离。
-2. 懒加载 Memory。
-3. LRU 控制 hot users。
-4. 读写锁和文件锁。
-5. 自动保存到用户数据目录。
-6. 给 HTTP/MCP/未来 SDK 提供稳定管理面。
+1. API key 解析为稳定 tenant_id；生产无凭据时失败关闭。
+2. tenant_id 通过“可读前缀 + 原始 UTF-8 SHA-256 摘要”映射到数据根目录直接子项，避免路径穿越和字符过滤碰撞。
+3. 仅对完全安全、未被旧 sanitizer 改写的历史 ID 回退读取旧目录/pickle。
+4. 删除前重新验证真实路径，绝不删除数据根目录、父目录或其他租户。
+5. 懒加载 Memory，并用 LRU 控制 hot users。
+6. 读写锁和文件锁避免同租户并发写坏。
+7. 自动保存到用户数据目录。
+8. 给 HTTP/MCP/TypeScript SDK 提供稳定管理面。
+
+### 10.1 商业自托管请求与落盘数据流
+
+```mermaid
+flowchart LR
+    C["Client"] --> G["TLS Proxy / Gateway"]
+    G --> LIM["Request size + field bounds"]
+    LIM --> KEY["Constant-time Bearer match"]
+    KEY --> T["Stable tenant_id"]
+    T --> D["prefix--sha256 digest directory"]
+    D --> LOCK["thread lock + file lock"]
+    LOCK --> MEM["Memory.open / operation / save"]
+    MEM --> JSONL["manifest + JSONL collections"]
+```
+
+| 环节 | 0.1.0 规则 | 失败行为 |
+| --- | --- | --- |
+| 鉴权配置 | `tenant:key`；同租户可多 key；同 key 不可多租户 | 配置歧义时业务 503、`/ready` 503 |
+| 开放模式 | 仅显式 `ENGRAM_OPEN=1`；匿名还需第二个显式开关 | 默认所有 `/v1/*` 返回 401 |
+| 请求体 | 默认 2 MiB，可配置正整数；同时校验声明长度并按实际流式字节计数，常用字符串与 `n_chunks` 另有字段边界 | 413/422，省略或伪造 `Content-Length` 也会在进入记忆写入前终止 |
+| 命名空间目录 | 摘要决定唯一性，可读前缀只用于排障 | 路径不是数据根直接子项则拒绝 |
+| 健康 | `/health` 是 liveness/诊断；`/ready` 是业务 readiness | 鉴权禁用、配置错误或目录不可写时 ready=false |
+| 容器 | 非 root、只读根、cap drop、只写 `/data`、本机端口 | healthcheck 不通过，不接生产流量 |
+| 发布 | 版本/许可/文档/证据/构建统一门禁 | 任一必需检查失败则不合并/不发布 |
+
+这条链路没有改变 `Memory` 内部的抽取、冲突、图构建或检索算法。工程发布结果记录到
+`results/commercial_release_0_1_0_validation.jsonl`，不能被当作算法效果提升证据。
 
 ## 11. Eval harness 数据流
 
@@ -754,6 +785,9 @@ python eval/validate_results.py
 | HTTP API | `engram/server/app.py` |
 | MCP tools | `engram/mcp/server.py` |
 | 持久化格式 | `engram/store/persist.py` |
+| 命名空间安全映射 | `engram/service.py::_safe_user`, `_contained_child`, `_legacy_paths` |
+| 容器与单节点部署 | `Dockerfile`, `deploy/docker-compose.yml`, `deploy/engram.service` |
+| 版本与发布门禁 | `engram/__init__.py::__version__`, `scripts/check_release.py` |
 | benchmark | `eval/bench.py` |
 
 ## 16. 架构不变量
@@ -769,6 +803,8 @@ python eval/validate_results.py
 7. 不把 ephemeral/working memory 静默写成长期画像。
 8. 不新增不可 ablate 的算法路径。
 9. 不在公开文案里使用未经可复现验证的 “SOTA/#1/1M” 等主张。
+10. 不把原始 tenant/user 文本直接拼进文件路径；删除目标必须是数据根目录的已验证子项。
+11. 生产 HTTP 服务不默认开启 open/anonymous；liveness 不能替代 readiness。
 
 ## 17. 以后如何维护这份报告
 
@@ -780,6 +816,7 @@ python eval/validate_results.py
 | 改写写入/整理/读取数据流 | 本文 |
 | 新增数据对象或 store | 本文第 3、6、15 节 |
 | 新增服务/API/MCP 能力 | 本文第 10、15 节 |
+| 修改鉴权、租户路径、部署或发布门禁 | 本文第 10.1、15、16 节 + `docs/commercial-release-0.1.0.zh-CN.md` |
 | 新增 benchmark 系统或 ablation | 本文第 11、12 节 |
 | 改公开数字 | `RESULTS.md`, `README.md`, `README.zh-CN.md`, 对应 `results/*.jsonl` |
 

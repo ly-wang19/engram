@@ -1,7 +1,7 @@
-# Specification Quality Checklist: Memory Reference Radar
+# Specification Quality Checklist: Engram 0.1.0 商业交付版
 
 **Purpose**: Validate specification completeness and quality before proceeding to planning
-**Created**: 2026-06-29
+**Created**: 2026-07-14
 **Feature**: [spec.md](../spec.md)
 
 ## Content Quality
@@ -31,8 +31,5 @@
 
 ## Notes
 
-- Validation pass 1 completed on 2026-06-29.
-- The companion `research.md` is intentionally more concrete than `spec.md` because it records the
-  current architecture radar and candidate backlog. Implementation still requires a later Spec-Kit plan.
-- Final implementation validation completed on 2026-07-14: links, source status, placeholders,
-  governance terms, managed context blocks, task format, and Chinese technical report all passed.
+- Validation pass 1 completed on 2026-07-14.
+- “商业可用”在本规格中明确限定为单节点自托管 0.1.0，不包含未经证明的企业级扩展或合规承诺。

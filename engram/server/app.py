@@ -21,28 +21,58 @@ put it behind your auth/gateway to scale to a public service.
 """
 from __future__ import annotations
 
+import hmac
 import os
 from contextlib import asynccontextmanager
 from typing import Optional
 
 try:
     from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Request
-    from pydantic import BaseModel, ConfigDict
+    from fastapi.responses import JSONResponse
+    from pydantic import BaseModel, ConfigDict, Field
 except Exception as exc:  # noqa: BLE001
     raise SystemExit("the server needs FastAPI — `pip install \"engram-memory[server]\"`") from exc
 
+from .. import __version__
 from ..service import MemoryService
 
 
+DEFAULT_MAX_REQUEST_BYTES = 2 * 1024 * 1024
+
+
+class AuthConfigError(ValueError):
+    """The static API-key mapping is ambiguous or malformed."""
+
+
 def _load_keys() -> dict[str, str]:
-    """Map API key -> user_id from ENGRAM_API_KEYS ('alice:sk-a,bob:sk-b'). Empty => open mode."""
+    """Map API key -> user_id from ENGRAM_API_KEYS ('alice:sk-a,bob:sk-b')."""
     out: dict[str, str] = {}
-    for pair in os.environ.get("ENGRAM_API_KEYS", "").split(","):
+    raw = os.environ.get("ENGRAM_API_KEYS", "").strip()
+    if not raw:
+        return out
+    for index, pair in enumerate(raw.split(","), start=1):
         pair = pair.strip()
-        if ":" in pair:
-            user, key = pair.split(":", 1)
-            out[key.strip()] = user.strip()
+        if ":" not in pair:
+            raise AuthConfigError(f"ENGRAM_API_KEYS entry {index} must use tenant:key")
+        user, key = (part.strip() for part in pair.split(":", 1))
+        if not user or not key:
+            raise AuthConfigError(f"ENGRAM_API_KEYS entry {index} has an empty tenant or key")
+        previous = out.get(key)
+        if previous is not None and previous != user:
+            raise AuthConfigError("one API key cannot map to multiple tenants")
+        out[key] = user
     return out
+
+
+def _max_request_bytes() -> int:
+    raw = os.environ.get("ENGRAM_MAX_REQUEST_BYTES", str(DEFAULT_MAX_REQUEST_BYTES)).strip()
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise AuthConfigError("ENGRAM_MAX_REQUEST_BYTES must be a positive integer") from exc
+    if value <= 0:
+        raise AuthConfigError("ENGRAM_MAX_REQUEST_BYTES must be a positive integer")
+    return value
 
 
 def _env_flag(name: str) -> bool:
@@ -81,35 +111,92 @@ async def _lifespan(_app: FastAPI):
 
 app = FastAPI(
     title="Engram Memory Service",
-    version="0.1.0",
+    version=__version__,
     description="Multi-tenant long-term memory — connect with a Bearer key and manage your own memory.",
     lifespan=_lifespan,
 )
 
 
-@app.middleware("http")
-async def cache_headers(request: Request, call_next):
-    response = await call_next(request)
-    path = request.url.path
+def _apply_security_headers(response, path: str):
     if path.startswith("/v1/"):
         response.headers["Cache-Control"] = "no-store"
     elif path.startswith("/ui/assets/"):
         response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
     elif path == "/ui" or path.startswith("/ui/") or path == "/":
         response.headers["Cache-Control"] = "no-cache"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    response.headers["Content-Security-Policy"] = (
+        "default-src 'self'; script-src 'self' 'unsafe-inline'; "
+        "style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
+        "connect-src 'self'; frame-ancestors 'none'; base-uri 'self'"
+    )
     return response
+
+
+@app.middleware("http")
+async def request_limits_and_security_headers(request: Request, call_next):
+    path = request.url.path
+    try:
+        max_bytes = _max_request_bytes()
+    except AuthConfigError:
+        return _apply_security_headers(
+            JSONResponse({"detail": "invalid server request-limit configuration"}, status_code=503),
+            path,
+        )
+    content_length = request.headers.get("content-length")
+    if content_length:
+        try:
+            declared = int(content_length)
+        except ValueError:
+            return _apply_security_headers(
+                JSONResponse({"detail": "invalid Content-Length"}, status_code=400), path
+            )
+        if declared < 0:
+            return _apply_security_headers(
+                JSONResponse({"detail": "invalid Content-Length"}, status_code=400), path
+            )
+        if declared > max_bytes:
+            return _apply_security_headers(
+                JSONResponse({"detail": "request body too large"}, status_code=413), path
+            )
+
+    # Count the bytes actually received as well as the declared size. Caching the bounded body lets
+    # Starlette replay it to FastAPI while preventing chunked or dishonest requests from bypassing the
+    # limit and reaching a memory write.
+    if request.method not in {"GET", "HEAD", "OPTIONS"}:
+        chunks: list[bytes] = []
+        received = 0
+        async for chunk in request.stream():
+            received += len(chunk)
+            if received > max_bytes:
+                return _apply_security_headers(
+                    JSONResponse({"detail": "request body too large"}, status_code=413), path
+                )
+            chunks.append(chunk)
+        request._body = b"".join(chunks)
+
+    return _apply_security_headers(await call_next(request), path)
 
 
 def auth(authorization: str = Header(default="")) -> str:
     """Resolve the caller's user_id from the Bearer key. Dev open mode uses the key text itself as the
     namespace, so anyone can try it without pre-provisioned keys while still avoiding shared anonymous
     memory unless it is explicitly enabled."""
-    keys = _load_keys()
+    try:
+        keys = _load_keys()
+    except AuthConfigError as exc:
+        raise HTTPException(503, "invalid API key configuration") from exc
     token = _bearer_token(authorization)
     if keys:
-        if token not in keys:
+        matched_user = None
+        for key, user in keys.items():
+            if hmac.compare_digest(token, key):
+                matched_user = user
+        if matched_user is None:
             raise HTTPException(401, "invalid or missing API key")
-        return keys[token]
+        return matched_user
     if _env_flag("ENGRAM_OPEN"):
         if token:
             return token
@@ -124,22 +211,22 @@ def auth(authorization: str = Header(default="")) -> str:
 
 
 class RememberReq(BaseModel):
-    content: str
-    session_id: str = "default"
+    content: str = Field(min_length=1, max_length=1_000_000)
+    session_id: str = Field(default="default", min_length=1, max_length=512)
     scope: str = "auto"  # auto (route by ephemerality) | long (force long-term) | working (force ephemeral)
 
 
 class RecallReq(BaseModel):
-    query: str
+    query: str = Field(min_length=1, max_length=32_768)
     lean: bool = True
-    n_chunks: int = 6
-    session_id: Optional[str] = None  # when set, recall also surfaces this session's working memory
+    n_chunks: int = Field(default=6, ge=0, le=50)
+    session_id: Optional[str] = Field(default=None, max_length=512)
     as_of: Optional[float] = None  # epoch seconds: point-in-time memory view
     redact_sensitive: bool = False  # hide facts tagged sensitive from the returned context/fact list
 
 
 class CloseSessionReq(BaseModel):
-    session_id: str = "default"
+    session_id: str = Field(default="default", min_length=1, max_length=512)
     summarize: bool = True
     clear_working: bool = True
 
@@ -147,12 +234,25 @@ class CloseSessionReq(BaseModel):
 @app.get("/health")
 def health():
     service = svc()
-    keys = _load_keys()
-    auth_mode = "api_keys" if keys else ("open" if _env_flag("ENGRAM_OPEN") else "disabled")
+    config_error = False
+    try:
+        keys = _load_keys()
+        _max_request_bytes()
+    except AuthConfigError:
+        keys = {}
+        config_error = True
+    auth_mode = (
+        "invalid"
+        if config_error
+        else ("api_keys" if keys else ("open" if _env_flag("ENGRAM_OPEN") else "disabled"))
+    )
+    data_ready = os.path.isdir(service.data_dir) and os.access(service.data_dir, os.W_OK)
+    ready = auth_mode in {"api_keys", "open"} and data_ready
     return {
         "ok": True,
-        "ready": True,
+        "ready": ready,
         "service": "engram",
+        "version": __version__,
         "auth_mode": auth_mode,
         "anonymous_allowed": auth_mode == "open" and _env_flag("ENGRAM_ALLOW_ANONYMOUS"),
         "embedder": service.embedder.__class__.__name__,
@@ -163,6 +263,12 @@ def health():
         "max_hot_users": service.max_hot_users,
         "max_hot_facts": service.config.max_hot_facts,
     }
+
+
+@app.get("/ready")
+def ready():
+    payload = health()
+    return JSONResponse(payload, status_code=200 if payload["ready"] else 503)
 
 
 # The production console (the React app in frontend/) is served at /ui once built; "/" redirects
