@@ -151,10 +151,11 @@ def test_bench_exposes_named_lean_ablation_systems():
 def test_offline_feature_ablation_proves_each_enabled_feature_changes_target_evidence():
     rows, summary = run_ablation()
 
-    assert summary["n"] == 23
-    assert summary["improved"] == 23
+    assert summary["n"] == 24
+    assert summary["improved"] == 24
     assert {row.feature for row in rows} == {
         "chain_evidence",
+        "chain_provenance_promotion",
         "temporal_history_queries",
         "summary_fallback",
         "procedural_memory",

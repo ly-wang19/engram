@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import multiprocessing
+import os
 import queue
+import shutil
+from pathlib import Path
 
 from engram import Memory
 from engram.embed import HashingEmbedder
@@ -38,8 +41,51 @@ def test_service_reads_max_hot_facts_env(tmp_path, monkeypatch):
 def test_service_uses_directory_namespace_path(tmp_path):
     svc = MemoryService(data_dir=str(tmp_path), embedder_name="hashing")
     path = svc._path("alice@example.com")
-    assert path == str(tmp_path / "aliceexample.com")
+    assert Path(path).parent == tmp_path
+    assert Path(path).name.startswith("alice-example-com--")
     assert not path.endswith(".pkl")
+
+
+def test_namespace_paths_are_unique_deterministic_and_contained(tmp_path):
+    data = tmp_path / "data"
+    svc = MemoryService(data_dir=str(data), embedder_name="hashing")
+    users = (
+        "a/b",
+        "ab",
+        ".",
+        "..",
+        "../outside",
+        str(tmp_path / "absolute"),
+        "中文租户",
+        "e\u0301",
+        "é",
+        "x" * 1024,
+    )
+
+    first = [Path(svc._path(user)) for user in users]
+    second = [Path(svc._path(user)) for user in users]
+
+    assert first == second
+    assert len(set(first)) == len(users)
+    assert all(path.parent == data for path in first)
+    assert all(path.name not in {"", ".", ".."} for path in first)
+    assert Path(svc._path("a/b")) != Path(svc._path("ab"))
+    assert Path(svc._path("e\u0301")) != Path(svc._path("é"))
+
+
+def test_forget_never_targets_data_root_or_parent(tmp_path, monkeypatch):
+    data = tmp_path / "data"
+    data.mkdir()
+    svc = MemoryService(data_dir=str(data), embedder_name="hashing")
+    removed: list[Path] = []
+
+    monkeypatch.setattr(shutil, "rmtree", lambda path: removed.append(Path(path).resolve()))
+    monkeypatch.setattr(os, "remove", lambda path: removed.append(Path(path).resolve()))
+
+    assert svc.forget("..") == {"ok": True, "message": "all memory for '..' erased"}
+    root = data.resolve()
+    assert removed
+    assert all(path != root and root in path.parents for path in removed)
 
 
 def test_service_loads_legacy_pkl_named_store_and_forget_removes_both(tmp_path):
@@ -359,7 +405,7 @@ def test_service_fact_edit_delete_persists_clean_graph_files(tmp_path):
     assert svc.update_fact("u", edited, object="Moonshot AI")["ok"] is True
     assert svc.delete_fact("u", deleted)["ok"] is True
 
-    store = tmp_path / "u"
+    store = Path(svc._path("u"))
     entities_jsonl = (store / "entities.jsonl").read_text(encoding="utf-8")
     relations_jsonl = (store / "relations.jsonl").read_text(encoding="utf-8")
     assert "diabetes" not in entities_jsonl.lower()

@@ -1,6 +1,6 @@
 # Engram 架构优化地图
 
-最后更新：2026-07-09
+最后更新：2026-07-14
 
 用途：这是给项目负责人和后续 AI/人类贡献者看的本地中文驾驶舱。它回答四个问题：
 
@@ -31,7 +31,9 @@
 
 ```mermaid
 flowchart TD
-    U["用户/Agent 消息"] --> S1["System-1 快写路径\nengram/memory.py add()\nengram/ingest/"]
+    U["用户/Agent/SDK"] --> AUTH["服务安全边界\nBearer key -> tenant_id\nrequest limits + readiness"]
+    AUTH --> NS["安全命名空间\nreadable prefix + SHA-256\nlegacy-safe fallback"]
+    NS --> S1["System-1 快写路径\nengram/memory.py add()\nengram/ingest/"]
     S1 --> E["Episode 原始事件\nappend-only, event_time + ingested_at"]
     E --> Q["异步 consolidation 队列"]
 
@@ -60,6 +62,7 @@ flowchart TD
     HI --> CA
 
     CA --> ANS["Answerer / Judge\neval/bench.py + eval/longmemeval.py"]
+    CA --> SOUT["HTTP / MCP / SDK 响应\nno-store + security headers"]
     ANS --> LOG["可复现实验日志\nresults/*.jsonl + results/*_experiments.md"]
     LOG --> PLAN["下一轮优化选择"]
     PLAN --> EP
@@ -78,6 +81,7 @@ flowchart TD
 | Raw evidence fusion | 把源会话、summary、fact provenance 合成可读上下文 | `memory.py::lean_context`, `_provenance_detail_chunks`, `_aggregation_block` | 已证明 facts-only 不够，当前持续强化 hybrid |
 | Aggregation evidence | 为 count/sum/page/hour/money 问题生成结构化候选表 | `engram/retrieve/aggregate.py` | 近期重点优化区，已连续合并 3 个小改动 |
 | Evaluation harness | 用统一 answerer/judge/full-context baseline 验收 | `eval/bench.py`, `eval/ablate_features.py`, `eval/longmemeval.py` | 所有算法改动必须有日志和测试 |
+| 商业交付与安全边界 | 鉴权、租户路径、请求边界、健康检查、容器、发布门禁 | `engram/server/app.py`, `engram/service.py`, `Dockerfile`, `deploy/`, `scripts/check_release.py` | 0.1.0 单节点自托管，默认失败关闭；不改变算法主链 |
 
 ## 已落地优化台账
 
@@ -95,6 +99,7 @@ flowchart TD
 | 2026-06-30 | `aggregation_recall_expansion` | Evidence planner / Aggregation recall | 对 `how many/how much/total/sum` 生成高召回 subqueries，补回 jog/workshop/game 等证据 | `results/aggregation_recall_expansion_experiments.md`, `results/aggregation_recall_expansion_lme_s_context30.jsonl` |
 | 2026-06-30 | `aggregation_constraint_filter` | Aggregation evidence / Query constraints | 当题面有月份约束时，排除局部上下文绑定到其他月份的数值候选 | `results/aggregation_constraint_filter_experiments.md`, `results/aggregation_constraint_filter_lme_s_context27.jsonl` |
 | 2026-07-09 | `chain_provenance_promotion` | Chain-aware retrieval / Raw evidence fusion | previous-value 问题中，`supersedes` 链上的旧事实也能作为 provenance raw chunk promotion 的种子，优先提升旧值源会话 | `results/chain_provenance_promotion_experiments.md`, `results/chain_provenance_promotion_ablation.jsonl`, `results/chain_provenance_promotion_context_sample.jsonl` |
+| 2026-07-14 | `commercial_release_0_1_0` | Service boundary / Namespace storage / Deployment / Release gate | 修复命名空间路径穿越与字符过滤碰撞；默认鉴权失败关闭；增加 request limits、liveness/readiness、非 root 容器和统一发布门禁 | `results/commercial_release_0_1_0_validation.jsonl`, `specs/003-commercial-release/` |
 
 ## 最近 PR 对架构的影响
 
@@ -105,6 +110,7 @@ flowchart TD
 | #15 `aggregation_recall_expansion` | 聚合问题增加召回子查询 | 影响 pre-consolidation 和 lean_context 证据覆盖 | 配置开关 + 真实 numeric context30 |
 | #16 `aggregation_constraint_filter` | 候选值按题面月份约束标 EXCLUDE | 影响 aggregation candidate precision | 配置开关 + 真实 numeric context27 |
 | 本次 `chain_provenance_promotion` | `supersedes` 链接入 provenance chunk promotion | 影响 previous/current-vs-past 问题的 raw source evidence | 复用 `chain_evidence` 开关 + 24/24 离线 ablation + LongMemEval sample context 0 errors |
+| 本次 `commercial_release_0_1_0` | 服务安全、租户落盘、部署和发布门禁收束 | 不改变 extraction/retrieval/fusion；影响所有 HTTP 自托管入口和新命名空间目录 | 危险路径/跨租户/鉴权/请求测试 + 全量 pytest + zero-setup + SDK/frontend/package/container 验收 |
 
 ## 当前重点区域
 
@@ -143,6 +149,7 @@ flowchart TD
 
 - 架构目标与原则：`AGENTS.md`, `CLAUDE.md`
 - 外部参考雷达：`specs/002-memory-reference-radar/research.md`
+- 当前商业交付规格：`specs/003-commercial-release/`
 - 中文技术报告：`specs/002-memory-reference-radar/technical-report.zh-CN.md`
 - 全链路架构报告：`docs/engram-full-architecture-report.zh-CN.md`
 - 算法说明：`docs/algorithm-architecture.md`
@@ -162,6 +169,7 @@ lossless episodes
   + source-backed summaries and procedural memory
   + raw evidence fusion
   + structured aggregation candidates
+  + secure tenant namespace and self-hosted release gate
   + reproducible harness
 ```
 

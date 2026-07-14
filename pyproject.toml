@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "engram-memory"
-version = "0.0.1"
+version = "0.1.0"
 description = "Engram — an open-source, reproducible long-term memory engine for LLM agents."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -13,7 +13,7 @@ license-files = ["LICENSE", "COMMERCIAL-LICENSE.md"]
 authors = [{ name = "Engram contributors" }]
 keywords = ["memory", "llm", "agents", "rag", "knowledge-graph", "long-term-memory", "bi-temporal"]
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: GNU Affero General Public License v3",
     "Programming Language :: Python :: 3 :: Only",
@@ -34,7 +34,7 @@ mcp = ["mcp>=1.2", "httpx>=0.27"]                              # the MCP server 
 # One-shot install for running the hosted product: HTTP API + MCP + real embeddings + an LLM backend.
 serve = ["engram-memory[server,mcp,embeddings,llm]"]
 eval = ["numpy>=1.24"]
-dev = ["pytest>=7.0", "pytest-asyncio>=0.23", "ruff>=0.4"]
+dev = ["pytest>=7.0", "pytest-asyncio>=0.23", "ruff>=0.4", "tomli>=2; python_version < '3.11'"]
 all = ["engram-memory[server,mcp,embeddings,backends,llm,eval,dev]"]
 
 [project.scripts]

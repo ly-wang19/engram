@@ -43,7 +43,9 @@ def test_health(client):
     assert data["storage"] == "memory"
     assert data["max_hot_users"] >= data["users_hot"]
     assert data["max_hot_facts"] >= 1
+    assert data["version"] == "0.1.0"
     assert "data_dir" not in data and "api_keys" not in data
+    assert client.get("/ready").status_code == 200
 
 
 def test_private_api_responses_are_not_cacheable(client):
@@ -54,6 +56,11 @@ def test_private_api_responses_are_not_cacheable(client):
 
     assert memories.headers["cache-control"] == "no-store"
     assert exported.headers["cache-control"] == "no-store"
+    for response in (memories, exported):
+        assert response.headers["x-content-type-options"] == "nosniff"
+        assert response.headers["x-frame-options"] == "DENY"
+        assert response.headers["referrer-policy"] == "no-referrer"
+        assert "default-src 'self'" in response.headers["content-security-policy"]
 
 
 def test_remember_recall_roundtrip(client):
@@ -64,6 +71,40 @@ def test_remember_recall_roundtrip(client):
     assert dump["counts"]["episodes"] >= 1
     rec = client.post("/v1/recall", json={"query": "Where does the user live?"}, headers=h).json()
     assert "Shenzhen" in rec["context"] and rec["tokens_est"] > 0
+
+
+def test_tenant_data_rights_operations_remain_isolated(client):
+    tenant_a = hdr("isolation-tenant-a")
+    tenant_b = hdr("isolation-tenant-b")
+    fact_a = client.post(
+        "/v1/facts",
+        json={"predicate": "release_marker", "object": "alpha-private-marker"},
+        headers=tenant_a,
+    ).json()
+    fact_b = client.post(
+        "/v1/facts",
+        json={"predicate": "release_marker", "object": "beta-private-marker"},
+        headers=tenant_b,
+    ).json()
+
+    export_a = client.get("/v1/export", headers=tenant_a).json()
+    export_b = client.get("/v1/export", headers=tenant_b).json()
+    assert "alpha-private-marker" in str(export_a)
+    assert "beta-private-marker" not in str(export_a)
+    assert "beta-private-marker" in str(export_b)
+    assert "alpha-private-marker" not in str(export_b)
+
+    assert client.patch(
+        f"/v1/facts/{fact_b['id']}", json={"object": "cross-tenant-edit"}, headers=tenant_a
+    ).status_code == 404
+    assert client.delete(f"/v1/facts/{fact_b['id']}", headers=tenant_a).json()["ok"] is False
+    assert client.get("/v1/export", headers=tenant_b).json() == export_b
+
+    erased = client.post("/v1/forget", json={"confirm": True}, headers=tenant_a)
+    assert erased.status_code == 200 and erased.json()["ok"] is True
+    assert "alpha-private-marker" not in str(client.get("/v1/export", headers=tenant_a).json())
+    assert "beta-private-marker" in str(client.get("/v1/export", headers=tenant_b).json())
+    assert fact_a["id"] != fact_b["id"]
 
 
 def test_close_session_endpoint_consolidates_summarizes_and_clears_working(client):
@@ -639,6 +680,85 @@ def test_auth_rejects_when_keys_configured():
         # restore open mode for any later modules
         os.environ.pop("ENGRAM_API_KEYS", None)
         os.environ["ENGRAM_OPEN"] = "1"
+        shutil.rmtree(d, ignore_errors=True)
+
+
+def test_api_key_config_supports_rotation_and_rejects_ambiguity(monkeypatch):
+    from engram.server import app as appmod
+
+    monkeypatch.setenv("ENGRAM_API_KEYS", "alice:key-new,alice:key-old,bob:key-b")
+    assert appmod._load_keys() == {
+        "key-new": "alice",
+        "key-old": "alice",
+        "key-b": "bob",
+    }
+
+    for invalid in ("missing-separator", ":empty-user", "empty-key:"):
+        monkeypatch.setenv("ENGRAM_API_KEYS", invalid)
+        with pytest.raises(appmod.AuthConfigError):
+            appmod._load_keys()
+
+    monkeypatch.setenv("ENGRAM_API_KEYS", "alice:shared,bob:shared")
+    with pytest.raises(appmod.AuthConfigError):
+        appmod._load_keys()
+
+
+def test_disabled_auth_is_live_but_not_ready():
+    d = tempfile.mkdtemp(prefix="engram_disabled_auth_")
+    os.environ.update(ENGRAM_DATA_DIR=d, ENGRAM_EMBEDDER="hashing")
+    os.environ.pop("ENGRAM_API_KEYS", None)
+    os.environ.pop("ENGRAM_OPEN", None)
+    os.environ.pop("ENGRAM_ALLOW_ANONYMOUS", None)
+    try:
+        from engram.server import app as appmod
+
+        appmod._svc = None
+        with TestClient(appmod.app) as c:
+            health = c.get("/health")
+            assert health.status_code == 200
+            assert health.json()["ok"] is True
+            assert health.json()["ready"] is False
+            assert health.json()["auth_mode"] == "disabled"
+            assert c.get("/ready").status_code == 503
+            assert c.post("/v1/recall", json={"query": "hi"}).status_code == 401
+    finally:
+        os.environ["ENGRAM_OPEN"] = "1"
+        os.environ.pop("ENGRAM_API_KEYS", None)
+        shutil.rmtree(d, ignore_errors=True)
+
+
+def test_request_limit_rejects_before_memory_write():
+    d = tempfile.mkdtemp(prefix="engram_request_limit_")
+    os.environ.update(
+        ENGRAM_DATA_DIR=d,
+        ENGRAM_EMBEDDER="hashing",
+        ENGRAM_OPEN="1",
+        ENGRAM_MAX_REQUEST_BYTES="128",
+    )
+    os.environ.pop("ENGRAM_API_KEYS", None)
+    try:
+        from engram.server import app as appmod
+
+        appmod._svc = None
+        with TestClient(appmod.app) as c:
+            declared_response = c.post(
+                "/v1/remember",
+                content='{"content":"' + ("x" * 512) + '"}',
+                headers={**hdr("request-limit"), "Content-Type": "application/json"},
+            )
+            chunked_response = c.post(
+                "/v1/remember",
+                content=iter([b'{"content":"', b"y" * 512, b'"}']),
+                headers={**hdr("request-limit"), "Content-Type": "application/json"},
+            )
+            for response in (declared_response, chunked_response):
+                assert response.status_code == 413
+                assert response.headers["cache-control"] == "no-store"
+                assert response.headers["x-content-type-options"] == "nosniff"
+            assert c.get("/v1/stats", headers=hdr("request-limit")).json()["counts"]["episodes"] == 0
+    finally:
+        os.environ["ENGRAM_OPEN"] = "1"
+        os.environ.pop("ENGRAM_MAX_REQUEST_BYTES", None)
         shutil.rmtree(d, ignore_errors=True)
 
 

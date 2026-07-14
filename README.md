@@ -9,15 +9,16 @@ publish, you can reproduce.**
 
 **🎬 [Live demo / 在线动画演示 →](https://ly-wang19.github.io/engram/)** — see how it works in 60 seconds.
 
-**🔌 [Try the live console →](http://42.193.220.197:8456/ui)** — open it, enter the demo key `1`, and browse a fully-loaded public memory end-to-end (profile, facts, timeline, graph, Q&A).
+**🔌 [Try the live console →](http://42.193.220.197:8456/ui)** — open it, enter the demo key `1`, and browse a fully-loaded public memory end-to-end (profile, facts, timeline, graph, Q&A). It is a public demo; do not submit private data.
 
 Engram gives LLM agents durable, queryable memory across sessions: it stores what happened, distills
 atomic facts, tracks how they change over time (bi-temporal), resolves contradictions without losing
 history, and retrieves the right context with a hybrid semantic + lexical + graph + recency search.
 
-> Status: **alpha**. The end-to-end loop runs with **zero setup** (no API keys, no services). The
-> benchmark numbers below run on real models and are reproducible with one command. See
-> [`RESULTS.md`](RESULTS.md) for the complete methodology and raw logs.
+> Status: **0.1.0 beta — self-hosted release**. The end-to-end loop runs with **zero setup** (no API
+> keys, no services), while the production deployment fails closed without configured credentials.
+> See the [0.1.0 delivery scope](docs/commercial-release-0.1.0.zh-CN.md), [security policy](SECURITY.md),
+> and [`RESULTS.md`](RESULTS.md) for benchmark methodology and raw logs.
 
 ## Why another memory system?
 
@@ -110,7 +111,8 @@ print(mem.search("Where does Wei work?", user_id="u1").answer())
 ## Connect it to your agent
 
 Engram ships a full **access layer** so any agent or app can use it — all backed by one multi-tenant
-service (`MemoryService`), where each API key is an isolated memory namespace.
+service (`MemoryService`). In production, configured API keys map to stable isolated tenant namespaces;
+the key text itself is used as a namespace only in explicitly enabled development open mode.
 The bundled console at `/ui` exposes the same product loop for humans: content-free session status,
 session-scoped writes with `scope=auto|long|working`, close-session, session report, paged memory
 management, safe export, and confirmed erase.
@@ -158,16 +160,19 @@ curl -s -X POST $B/v1/recall -H "Authorization: Bearer $K" -H "Content-Type: app
 ### Or self-host (your data, your machine)
 
 ```bash
-pip install "engram-memory[serve]"
-export ENGRAM_OPEN=1                # dev: Bearer text is the namespace; anonymous requires ENGRAM_ALLOW_ANONYMOUS=1
-export ENGRAM_EMBEDDER=hashing      # zero-download default; use bge-small for better local embeddings
-export ENGRAM_MAX_HOT_FACTS=10000   # heat-tier cap; cold facts page back on hot miss
-export ENGRAM_LLM=deepseek          # optional: enables /v1/chat/completions generation
-uvicorn engram.server.app:app --port 8000        # HTTP API + management console at /ui
+cp deploy/.env.example deploy/.env              # replace the sample key with a strong random key
+docker compose --env-file deploy/.env -f deploy/docker-compose.yml up -d --build
+curl -fsS http://127.0.0.1:8000/ready
 ```
 
-Use `GET /health` for readiness and safe deployment introspection. It reports auth mode, anonymous status,
-embedder, LLM readiness, storage, and hot-user counts without exposing keys, paths, or user data.
+The standard container is non-root, uses a read-only root filesystem and persistent `/data` volume,
+binds only to localhost, and does not enable open mode. See [`deploy/README.md`](deploy/README.md) for
+TLS gateway, backup, restore, upgrade, rollback, and key rotation. `GET /health` is liveness/diagnostics;
+`GET /ready` returns 503 until auth and storage are ready. Neither exposes keys, paths, or user data.
+
+For a direct Python deployment, install `engram-memory[serve]`, set
+`ENGRAM_API_KEYS="tenant-a:<strong-random-key>"`, and run Uvicorn. `ENGRAM_OPEN=1` remains available only
+for explicit local development.
 
 **1. MCP server** — give Claude Desktop / Claude Code / Cursor a persistent memory (`engram_recall`,
 `engram_remember`, `engram_close_session`, `engram_agent_status`, `engram_list_facts`,

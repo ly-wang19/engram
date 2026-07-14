@@ -10,7 +10,9 @@ select), so the MCP server and the import CLI can use it without the web stack i
 """
 from __future__ import annotations
 
+import hashlib
 import os
+import re
 import shutil
 import threading
 from collections import OrderedDict
@@ -102,7 +104,9 @@ class MemoryService:
         from .llm.providers import load_dotenv, make_embedder, make_llm
 
         load_dotenv()  # pick up provider keys (ARK_API_KEY, DEEPSEEK_API_KEY, ...) from a local .env
-        self.data_dir = data_dir or os.environ.get("ENGRAM_DATA_DIR", DEFAULT_DATA_DIR)
+        self.data_dir = os.path.abspath(
+            os.path.expanduser(data_dir or os.environ.get("ENGRAM_DATA_DIR", DEFAULT_DATA_DIR))
+        )
         os.makedirs(self.data_dir, exist_ok=True)
         self.max_hot_users = max_hot_users or int(os.environ.get("ENGRAM_MAX_HOT_USERS", "64"))
         self.embedder = make_embedder(embedder_name or os.environ.get("ENGRAM_EMBEDDER", "hashing"))
@@ -128,23 +132,69 @@ class MemoryService:
 
     # --- namespace lifecycle ------------------------------------------------
     def _safe_user(self, user: str) -> str:
-        return "".join(c for c in user if c.isalnum() or c in "-_.") or "default"
+        """Return a deterministic, collision-resistant directory name for a logical namespace.
+
+        The readable prefix is diagnostic only. Identity comes from the digest of the untouched UTF-8
+        namespace, so punctuation removal and Unicode normalization can never merge two tenants.
+        """
+        raw = str(user)
+        prefix = re.sub(r"[^A-Za-z0-9]+", "-", raw).strip("-").lower()[:48]
+        digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
+        return f"{prefix or 'namespace'}--{digest}"
+
+    def _contained_child(self, name: str) -> str:
+        root = os.path.realpath(self.data_dir)
+        path = os.path.realpath(os.path.join(root, name))
+        if os.path.dirname(path) != root or path == root:
+            raise ValueError("namespace path must be a direct child of ENGRAM_DATA_DIR")
+        return path
+
+    def _legacy_safe_user(self, user: str) -> Optional[str]:
+        """Return an old directory name only when the old sanitizer changed nothing at all."""
+        raw = str(user)
+        if not raw or raw in {".", ".."} or os.path.isabs(raw):
+            return None
+        if os.path.basename(raw) != raw:
+            return None
+        if not all(c.isalnum() or c in "-_." for c in raw):
+            return None
+        return raw
+
+    def _secure_path(self, user: str) -> str:
+        return self._contained_child(self._safe_user(user))
+
+    def _legacy_paths(self, user: str) -> tuple[str, ...]:
+        safe = self._legacy_safe_user(user)
+        if safe is None:
+            return ()
+        return (
+            self._contained_child(safe),
+            self._contained_child(f"{safe}.pkl"),
+        )
 
     def _path(self, user: str) -> str:
-        safe = self._safe_user(user)
-        path = os.path.join(self.data_dir, safe)
-        legacy = os.path.join(self.data_dir, f"{safe}.pkl")
-        return legacy if os.path.exists(legacy) and not os.path.exists(path) else path
+        secure = self._secure_path(user)
+        if os.path.exists(secure):
+            return secure
+        legacy_paths = self._legacy_paths(user)
+        if legacy_paths:
+            legacy_dir, legacy_pickle = legacy_paths
+            if os.path.exists(legacy_dir):
+                return legacy_dir
+            if os.path.exists(legacy_pickle):
+                return legacy_pickle
+        return secure
 
     @contextmanager
     def _user_file_lock(self, user: str):
-        safe = self._safe_user(user)
         path = self._path(user)
         if path.endswith(".pkl") or (os.path.exists(path) and not os.path.isdir(path)):
             os.makedirs(self.data_dir, exist_ok=True)
-            lock_path = os.path.join(self.data_dir, f"{safe}.service.lock")
+            lock_path = self._contained_child(f"{self._safe_user(user)}.service.lock")
         else:
             os.makedirs(path, exist_ok=True)
+            if os.path.dirname(os.path.realpath(path)) != os.path.realpath(self.data_dir):
+                raise ValueError("namespace directory escaped ENGRAM_DATA_DIR")
             lock_path = os.path.join(path, ".service.lock")
         with open(lock_path, "a", encoding="utf-8") as fh:
             try:
@@ -213,14 +263,15 @@ class MemoryService:
             with self._g:
                 self._hot.pop(user, None)
                 self._hot_versions.pop(user, None)
-            p = self._path(user)
-            safe = self._safe_user(user)
-            for p in {p, os.path.join(self.data_dir, safe), os.path.join(self.data_dir, f"{safe}.pkl")}:
-                if os.path.exists(p):
-                    if os.path.isdir(p):
-                        shutil.rmtree(p)
+            targets = {self._secure_path(user), *self._legacy_paths(user)}
+            for target in targets:
+                # Re-check immediately before deletion so symlink swaps cannot widen the target.
+                checked = self._contained_child(os.path.basename(target))
+                if os.path.exists(checked):
+                    if os.path.isdir(checked):
+                        shutil.rmtree(checked)
                     else:
-                        os.remove(p)
+                        os.remove(checked)
         return {"ok": True, "message": f"all memory for '{user}' erased"}
 
     @property

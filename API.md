@@ -1,6 +1,7 @@
 # Engram 记忆服务 · 接口文档
 
-一套多租户的长期记忆 HTTP API：**每个 API key 就是一个独立的记忆空间**（互相隔离）。把对话/记忆灌进去，再用检索接口测效果。配套一个浏览器控制台可视化查看。
+一套多租户的长期记忆 HTTP API：生产模式下，**API key 映射到稳定租户命名空间**，同一租户可配置多个 key
+做无停机轮换；不同租户互相隔离。显式开发开放模式才把 Bearer 文本本身当作命名空间。
 
 ---
 
@@ -9,23 +10,18 @@
 **A. 直接用已部署的服务（最快，零搭建）**
 - Base URL：`http://42.193.220.197:8456`
 - 自己起一个 key 当命名空间（例如 `demo-test`），数据互相隔离。
-- 适合快速测；脱敏数据会存在该服务器上。
+- 只适合公开演示；数据会存在该服务器上，请勿发送隐私或生产数据。
 
 **B. 自己部署（数据完全本地）**
 ```bash
-git clone https://github.com/ly-wang19/engram.git
-cd engram
-pip install "engram-memory[server]"          # 或 pip install -e ".[server]"
-export ENGRAM_EMBEDDER=hashing                # 零下载默认；用 bge-small 可获得更好的本地嵌入
-export ENGRAM_MAX_HOT_FACTS=10000             # 热层事实上限；冷层事实会在热 miss 时回温
-export ENGRAM_LLM=volcano:doubao-seed-1-6-flash-250615   # 抽取/答题用，需在 .env 配 ARK_API_KEY
-export ENGRAM_ANSWERER=volcano:doubao-seed-2-0-pro-260215 # 答题模型（可选，默认同上）
-export ENGRAM_OPEN=1                          # 开发开放模式：Bearer key 即命名空间；匿名需显式 ENGRAM_ALLOW_ANONYMOUS=1
-uvicorn engram.server.app:app --host 0.0.0.0 --port 8456
-# 控制台：http://localhost:8456/ui/
+cp deploy/.env.example deploy/.env
+# 把 deploy/.env 的 ENGRAM_API_KEYS 示例值换成 tenant:强随机密钥
+docker compose --env-file deploy/.env -f deploy/docker-compose.yml up -d --build
+curl -fsS http://127.0.0.1:8000/ready
 ```
-> 想做真正的鉴权隔离：去掉 `ENGRAM_OPEN`，改设 `ENGRAM_API_KEYS="alice:sk-a,bob:sk-b"`。
-> 默认不接受无 Bearer 的匿名共享记忆；本地试玩如确实需要匿名，可额外设置 `ENGRAM_ALLOW_ANONYMOUS=1`。
+> 生产不要设置 `ENGRAM_OPEN`/`ENGRAM_ALLOW_ANONYMOUS`。直接 Python 部署可安装
+> `engram-memory[server]`，设置 `ENGRAM_API_KEYS="alice:key-a,bob:key-b"` 后运行 Uvicorn。
+> 同一租户轮换：`alice:key-new,alice:key-old`；一个 key 不允许映射到多个租户。
 
 跨 Claude Code / Codex / Cursor / 自研 agent 的推荐生命周期见
 [`docs/cross-agent-memory.md`](docs/cross-agent-memory.md) 和
@@ -45,14 +41,17 @@ Content-Type: application/json
 健康检查不需要鉴权：
 ```bash
 curl -s $B/health
+curl -f $B/ready
 ```
-返回不含密钥/用户内容的运行形态，可用于 readiness 与部署排错：
+`/health` 是 liveness/诊断，始终返回不含密钥/用户内容的运行形态；`/ready` 只有在鉴权和存储可接流量时
+返回 200，否则返回 503：
 ```json
 {
   "ok": true,
   "ready": true,
   "service": "engram",
-  "auth_mode": "open",
+  "version": "0.1.0",
+  "auth_mode": "api_keys",
   "anonymous_allowed": false,
   "embedder": "HashingEmbedder",
   "llm_configured": false,

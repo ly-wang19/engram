@@ -54,3 +54,10 @@ explicitly as exploratory artifacts before entering the repository.
 
 Plain `.log` files are ignored by `.gitignore`; keep terminal transcripts local unless a paper artifact
 explicitly needs them.
+
+## Release Validation Logs
+
+Engineering release evidence may also be stored here when a specification or release report cites it.
+For example, `commercial_release_0_1_0_validation.jsonl` records security, packaging, SDK, frontend,
+container, and regression gates for the 0.1.0 delivery. These logs prove release readiness only: they
+are not algorithm experiments and must never be cited as benchmark-quality or accuracy evidence.
