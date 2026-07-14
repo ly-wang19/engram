@@ -19,6 +19,7 @@
   "scripts": {
     "build": "tsup",
     "dev": "tsup --watch",
+    "pretest": "npm run build",
     "test": "node --test test/*.test.mjs",
     "typecheck": "tsc --noEmit",
     "prepublishOnly": "npm run typecheck && npm run build && npm test"
