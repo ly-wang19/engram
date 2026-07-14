@@ -3,10 +3,14 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
-import tomllib
 from pathlib import Path
 
 import engram
+
+try:
+    import tomllib
+except ModuleNotFoundError:  # Python 3.10
+    import tomli as tomllib
 
 
 ROOT = Path(__file__).resolve().parents[1]
