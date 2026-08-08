@@ -1,6 +1,7 @@
 from .base import DocStore, GraphStore, VectorStore
 from .memory_store import InMemoryDocStore, InMemoryGraphStore, InMemoryVectorStore
 from .persist import (
+    ConcurrentWriteError,
     DimensionMismatchError,
     EmbedderMismatchError,
     IncompatibleStoreError,
@@ -18,6 +19,7 @@ __all__ = [
     "InMemoryDocStore",
     "InMemoryGraphStore",
     "PersistenceError",
+    "ConcurrentWriteError",
     "IncompatibleStoreError",
     "DimensionMismatchError",
     "EmbedderMismatchError",

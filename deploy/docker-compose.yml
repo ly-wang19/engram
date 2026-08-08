@@ -10,6 +10,7 @@ services:
       - "127.0.0.1:${ENGRAM_PORT:-8000}:8000"
     environment:
       ENGRAM_API_KEYS: "${ENGRAM_API_KEYS:?set ENGRAM_API_KEYS in deploy/.env}"
+      ENGRAM_OWNER_KEYS: "${ENGRAM_OWNER_KEYS:-}"
       ENGRAM_DATA_DIR: /data
       ENGRAM_EMBEDDER: "${ENGRAM_EMBEDDER:-hashing}"
       ENGRAM_LLM: "${ENGRAM_LLM:-}"

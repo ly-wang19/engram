@@ -21,8 +21,9 @@ from typing import Iterable
 
 
 ROOT = Path(__file__).resolve().parents[1]
-LEAN = ROOT / "results/longmemeval_s_engram_lean_v2_final.jsonl"
-OTHER = ROOT / "results/longmemeval_s_volcano_doubao_deepseekjudge.jsonl"
+HEADLINE = ROOT / "results/headline_500.jsonl"
+HISTORICAL_LEAN = ROOT / "results/longmemeval_s_engram_lean_v2_final.jsonl"
+HISTORICAL_OTHER = ROOT / "results/longmemeval_s_volcano_doubao_deepseekjudge.jsonl"
 BACKBONE_RUNS = (
     ("doubao-pro", ROOT / "results/headline_500.jsonl"),
     ("doubao-flash", ROOT / "results/bb_flash.jsonl"),
@@ -69,12 +70,27 @@ def system_metrics(path: Path, system: str) -> dict[str, float | int]:
         if result.get("ok") is not None:
             scored.append(result)
     if not scored:
-        return {"n": 0, "errors": errors, "accuracy": 0.0, "avg_tokens": 0.0}
+        return {
+            "n": 0,
+            "errors": errors,
+            "accuracy": 0.0,
+            "avg_tokens": 0.0,
+            "p50_latency_ms": 0,
+            "p95_latency_ms": 0,
+        }
+    latencies = sorted(float(r.get("lat", 0.0)) for r in scored)
+
+    def percentile(p: float) -> int:
+        idx = min(len(latencies) - 1, int(round((p / 100.0) * (len(latencies) - 1))))
+        return round(latencies[idx])
+
     return {
         "n": len(scored),
         "errors": errors,
         "accuracy": 100.0 * sum(bool(r["ok"]) for r in scored) / len(scored),
-        "avg_tokens": sum(int(r.get("tok", 0)) for r in scored) / len(scored),
+        "avg_tokens": sum(int(r.get("tok", 0)) for r in scored) // len(scored),
+        "p50_latency_ms": percentile(50),
+        "p95_latency_ms": percentile(95),
     }
 
 
@@ -143,39 +159,33 @@ def discordant(
 
 
 def print_main_stats(bootstrap_samples: int) -> None:
-    lean = load(LEAN, "engram_lean")
-    full = load(OTHER, "full_context")
-    efull = load(OTHER, "engram_full")
-    common = sorted(set(lean) & set(full) & set(efull))
+    lean = load(HEADLINE, "engram_lean")
+    full = load(HEADLINE, "full_context")
+    common = sorted(set(lean) & set(full))
     n_common = len(common)
-    print(f"paired questions present in all three systems: {n_common}")
+    print(f"canonical paired questions present in both systems: {n_common}")
 
-    for name, data in [("engram_lean", lean), ("full_context", full), ("engram_full", efull)]:
+    for name, data in [("engram_lean", lean), ("full_context", full)]:
         k, n = acc(data, common)
         lo, hi = wilson(k, n)
         errs = sum(1 for q in common if data[q][2] is not None)
         toks = [data[q][1] for q in common if data[q][1] is not None]
-        mtok = sum(toks) / len(toks) if toks else 0
+        mtok = sum(toks) // len(toks) if toks else 0
+        metrics = system_metrics(HEADLINE, name)
         print(
             f"{name:14s} acc={k/n*100:5.1f}%  ({k}/{n})  Wilson95=[{lo*100:.1f}, {hi*100:.1f}]  "
-            f"mean_tokens={mtok:7.0f}  errors={errs}"
-        )
-
-    ek, en = acc(efull, common)
-    eerr = sum(1 for q in common if efull[q][2] is not None)
-    if eerr:
-        print(
-            f"  note: engram_full over its {en - eerr} error-free answers = "
-            f"{ek}/{en - eerr} = {ek / (en - eerr) * 100:.1f}% (the 83.4% reported in the paper); "
-            f"{ek}/{en} = {ek / en * 100:.1f}% under the strict /500 denominator."
+            f"mean_tokens={mtok:7.0f}  p50/p95_ms={metrics['p50_latency_ms']}/{metrics['p95_latency_ms']}  "
+            f"errors={errs}"
         )
 
     print()
-    for label, other in [("engram_lean vs full_context", full), ("engram_lean vs engram_full", efull)]:
-        n10, n01 = discordant(lean, other, common)
-        p = mcnemar_exact(n01, n10)
-        chi = mcnemar_cc(n01, n10)
-        print(f"{label}:  lean-only-right={n10}  other-only-right={n01}  chi2_cc={chi:.2f}  exact_p={p:.3g}")
+    n10, n01 = discordant(lean, full, common)
+    p = mcnemar_exact(n01, n10)
+    chi = mcnemar_cc(n01, n10)
+    print(
+        f"engram_lean vs full_context:  lean-only-right={n10}  other-only-right={n01}  "
+        f"chi2_cc={chi:.2f}  exact_p={p:.3g}"
+    )
 
     paired_lf = [(lean[q][0], full[q][0]) for q in common]
     lo, hi = bootstrap_gap_ci(paired_lf, samples=bootstrap_samples)
@@ -232,6 +242,18 @@ def print_main_stats(bootstrap_samples: int) -> None:
         f"{len(lean_right_full_wrong_abstain)} "
         f"({len(lean_right_full_wrong_abstain) / max(1, len(lean_right_full_wrong)) * 100:.0f}%), "
         f"gave wrong value {len(lean_right_full_wrong) - len(lean_right_full_wrong_abstain)}"
+    )
+
+    historical_lean = system_metrics(HISTORICAL_LEAN, "engram_lean")
+    historical_full = system_metrics(HISTORICAL_OTHER, "full_context")
+    print("\nhistorical independent runs (audit only; do not compute a paired gap):")
+    print(
+        f"  engram_lean: {float(historical_lean['accuracy']):.1f}% @ "
+        f"{float(historical_lean['avg_tokens']):.0f} tokens ({HISTORICAL_LEAN.name})"
+    )
+    print(
+        f"  full_context: {float(historical_full['accuracy']):.1f}% @ "
+        f"{float(historical_full['avg_tokens']):.0f} tokens ({HISTORICAL_OTHER.name})"
     )
 
 

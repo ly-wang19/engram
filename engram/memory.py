@@ -6,10 +6,12 @@ zero setup. Pass a real `embedder` / `llm` / store factories to run on benchmark
 """
 from __future__ import annotations
 
+import hashlib
+import os
 import re
 import tempfile
 from dataclasses import dataclass, field, replace
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 
 from .config import Config
 from .consolidate import ConsolidationEngine, is_single_valued, reinforce
@@ -21,6 +23,12 @@ from .consolidate.summarizer import (
     SessionSummarizer,
 )
 from .embed import Embedder, HashingEmbedder
+from .erasure import (
+    ErasureReceipt,
+    apply_erasure,
+    plan_fact_erasure,
+    plan_session_erasure,
+)
 from .ingest import IdentityResolver, Ingestor
 from .llm import LLM
 from .retrieve import (
@@ -41,7 +49,16 @@ from .store import (
     load_memory,
     save_memory,
 )
-from .types import Conflict, Episode, Fact, WorkingMemory
+from .types import Conflict, Entity, Episode, Fact, WorkingMemory, is_visible, valid_time_for
+from .twin import (
+    ActionDecision,
+    ActionRecord,
+    ActionRequest,
+    CapabilityGrant,
+    CapabilityRegistry,
+    DecisionStatus,
+    TwinContract,
+)
 from .util import DAY, fmt_date, now
 
 # The editable memory-policy prompts (the console's "提示词" / "要记录什么记忆"). Defaults are the
@@ -137,6 +154,9 @@ class Memory:
         reranker=None,
         vector_store_factory: Callable[[], VectorStore] = InMemoryVectorStore,
         graph_store_factory: Callable[[], GraphStore] = InMemoryGraphStore,
+        _lancedb_path: Optional[str] = None,
+        _lancedb_binding: Optional[str] = None,
+        _lancedb_base: Optional[str] = None,
     ) -> None:
         self.config = config or Config()
         self.embedder = embedder or HashingEmbedder(self.config.embed_dim)
@@ -147,10 +167,15 @@ class Memory:
         if self.config.storage == "lancedb" and not custom_vector_factory:
             from .store.lancedb_store import LanceDBVectorStore
 
-            base = self.config.data_path or tempfile.mkdtemp(prefix="engram_lancedb_")
+            base = _lancedb_path or self.config.data_path or tempfile.mkdtemp(prefix="engram_lancedb_")
 
             def make_vector_store(name: str) -> VectorStore:
-                return LanceDBVectorStore(base, name)
+                return LanceDBVectorStore(
+                    base,
+                    name,
+                    binding_id=_lancedb_binding,
+                    namespace_base=_lancedb_base,
+                )
         else:
             def make_vector_store(name: str) -> VectorStore:
                 return vector_store_factory()
@@ -188,6 +213,13 @@ class Memory:
         self._aliases: dict[str, set] = {}  # user_id -> {all declared names/nicknames} (coreference)
         # Suspected conflicts surfaced for the user to confirm (System-2 LLM detection; never auto-applied).
         self.conflicts: dict[str, Conflict] = {}
+        # Governance state for a personal twin. This authorizes and audits actions but never executes
+        # tools itself; the registry's safe default is no authority until the owner creates a grant.
+        self.twin_contract = TwinContract()
+        self.twin_contract_history: list[TwinContract] = [self.twin_contract]
+        self.capability_registry = CapabilityRegistry()
+        self.twin_decisions: dict[str, tuple[ActionRequest, ActionDecision]] = {}
+        self.twin_actions: list[ActionRecord] = []
         self.cold_pages_out: dict[str, int] = {}
         self.cold_pages_in: dict[str, int] = {}
         self._persist_path: Optional[str] = None
@@ -217,6 +249,7 @@ class Memory:
         """(Re)bind the pipeline components to the current stores. Called at init and after loading a
         snapshot, so persistence can swap the stores in without touching the embedder/llm (which aren't
         serialized)."""
+        self._normalize_linked_identities()
         self.ingestor = Ingestor(self.episodes_doc, self.episodes_vec, self.embedder, self.resolver)
         self.engine = ConsolidationEngine(self.fact_store, self.graph, self.embedder, self.config, self.llm)
         self.retriever = HybridRetriever(self.fact_store, self.graph, self.embedder, self.config)
@@ -237,7 +270,7 @@ class Memory:
 
     # --- persistence (so memory survives across processes/sessions; CLAUDE.md §6) ---
     def save(self, path: Optional[str] = None) -> None:
-        """Snapshot durable memory state to a safe JSONL+manifest store.
+        """Persist durable memory state to the transactional SQLite store.
 
         The embedder/llm are not serialized; reopen with the runtime backends you want to use. Normal
         operation intentionally does not write pickle.
@@ -251,19 +284,44 @@ class Memory:
 
     @classmethod
     def open(cls, path: str, **kwargs) -> "Memory":
-        """Open a persistent Memory from a JSONL+manifest store, or start empty if it does not exist."""
+        """Open a persistent Memory, migrating legacy JSONL stores, or start empty when absent."""
         cfg = kwargs.get("config")
-        if (
+        managed_lancedb = (
             cfg is not None
             and getattr(cfg, "storage", None) == "lancedb"
-            and getattr(cfg, "data_path", None) is None
-            and "vector_store_factory" not in kwargs
-        ):
-            kwargs["config"] = replace(cfg, data_path=f"{path}/lancedb")
+            and kwargs.get("vector_store_factory", InMemoryVectorStore) is InMemoryVectorStore
+        )
+        if managed_lancedb:
+            # Treat Config.data_path as a private base, not a globally shared table namespace. A stable
+            # digest of the canonical snapshot path gives the same snapshot the same vector namespace
+            # across restarts while preventing two snapshots from silently reading/writing each other's
+            # Lance tables. The marker in LanceDBVectorStore independently verifies this binding.
+            canonical_path = os.path.realpath(os.path.abspath(os.path.expanduser(path)))
+            namespace = hashlib.sha256(os.fsencode(canonical_path)).hexdigest()
+            vector_base = getattr(cfg, "data_path", None) or os.path.join(canonical_path, "lancedb")
+            kwargs["_lancedb_base"] = vector_base
+            kwargs["_lancedb_path"] = os.path.join(vector_base, "namespaces", f"store-{namespace}")
+            kwargs["_lancedb_binding"] = f"canonical:{namespace}"
         mem = cls(**kwargs)
-        if load_memory(mem, path):
+        loaded = load_memory(mem, path)
+        if loaded:
             mem._rewire()
             mem._classify()  # backfill category/sensitivity on facts saved before feature ⑤
+        elif managed_lancedb:
+            # The canonical snapshot is the source of truth. Reusing vectors left behind after that
+            # snapshot was deleted/recreated would resurrect orphaned personal data, so fail closed and
+            # require a fresh Lance base instead of treating the index as authoritative memory.
+            vector_stores = (mem.episodes_vec, mem.fact_store, mem.cold_store, mem.summary_vec)
+            if any(store.values() for store in vector_stores):
+                for store in vector_stores:
+                    close = getattr(store, "close", None)
+                    if close is not None:
+                        close()
+                from .store.lancedb_store import LanceDBPathError
+
+                raise LanceDBPathError(
+                    "LanceDB namespace contains orphaned vectors but the canonical snapshot is empty"
+                )
         mem._persist_path = path
         return mem
 
@@ -300,6 +358,11 @@ class Memory:
             ep.consolidated = True  # stays in the dated episodic log, but yields no durable fact
             ep.metadata["ephemeral"] = True
             wm = self.remember_working(content, user_id=user_id, session_id=session_id)
+            wm.metadata["episode_id"] = ep.id
+            # Real vector backends return detached payloads, so persist the post-ingest lifecycle flags
+            # explicitly instead of relying on the reference store's shared object identity.
+            self.episodes_doc.put(ep.id, ep)
+            self.episodes_vec.upsert(ep.id, ep.embedding or [], ep)
             return {"scope": "working", "episode_id": ep.id, "working_id": wm.id, "kind": wm.kind}
         return {"scope": "long", "episode_id": ep.id}
 
@@ -453,7 +516,140 @@ class Memory:
                                     user_id=user_id, **kwargs)
 
     def link_identity(self, a: str, b: str) -> str:
-        return self.resolver.link(a, b)
+        """Merge two handles and rebind their stored memory to one canonical owner.
+
+        Store payloads record the canonical ``user_id`` that existed when they were written. Merely
+        joining the resolver therefore makes payloads under the losing root invisible to scoped vector
+        and graph backends. Rebinding preserves every payload while restoring the invariant expected by
+        all downstream stores: one identity component has one storage owner.
+        """
+        canonical = self.resolver.link(a, b)
+        self._rewire()
+        self._persona_cache.clear()
+        return canonical
+
+    def _normalize_linked_identities(self) -> None:
+        """Repair linked components loaded from snapshots created before merge-time rebinding."""
+        for component in self.resolver.components():
+            canonical = self.resolver.resolve(min(component))
+            if len(component) > 1:
+                self._normalize_identity_component(canonical)
+
+    def _normalize_identity_component(self, user_id: str) -> None:
+        canonical = self.resolver.resolve(user_id)
+        component = self.resolver.component(canonical)
+        if len(component) < 2:
+            return
+
+        for ep in self.episodes_doc.values():
+            if ep.user_id not in component or ep.user_id == canonical:
+                continue
+            ep.metadata.setdefault("identity_alias", ep.user_id)
+            ep.user_id = canonical
+            self.episodes_doc.put(ep.id, ep)
+            self.episodes_vec.upsert(ep.id, ep.embedding or [], ep)
+            if ep.summary_embedding is not None:
+                self.summary_vec.upsert(ep.id, ep.summary_embedding, ep)
+
+        for store in (self.fact_store, self.cold_store):
+            for fact in store.values():
+                if fact.user_id in component and fact.user_id != canonical:
+                    fact.user_id = canonical
+                    store.upsert(fact.id, fact.embedding or [], fact)
+
+        for item in self.working_mem.values():
+            if item.user_id in component and item.user_id != canonical:
+                item.metadata.setdefault("identity_alias", item.user_id)
+                item.user_id = canonical
+
+        for conflict in self.conflicts.values():
+            if conflict.user_id in component:
+                conflict.user_id = canonical
+
+        self._normalize_identity_state(component, canonical)
+        self._normalize_graph_identity(component, canonical)
+
+    def _normalize_identity_state(self, component: frozenset[str], canonical: str) -> None:
+        names = [
+            (handle, self._identity[handle])
+            for handle in sorted(component)
+            if handle in self._identity
+        ]
+        aliases: set = set()
+        for handle in component:
+            aliases.update(self._aliases.pop(handle, set()))
+            if handle != canonical:
+                self._identity.pop(handle, None)
+        if names:
+            by_handle = dict(names)
+            self._identity[canonical] = by_handle.get(canonical, names[0][1])
+            aliases.update(name for _, name in names)
+        if aliases:
+            self._aliases.setdefault(canonical, set()).update(aliases)
+
+        for counters in (self.cold_pages_out, self.cold_pages_in):
+            total = sum(int(counters.pop(handle, 0)) for handle in component)
+            if total:
+                counters[canonical] = total
+            else:
+                counters.pop(canonical, None)
+        # A canonical cache entry loaded from disk survives an idempotent repair. Entries under losing
+        # aliases are ambiguous; link_identity() clears the whole cache after a real merge.
+        for handle in component - {canonical}:
+            self._persona_cache.pop(handle, None)
+
+    def _normalize_graph_identity(self, component: frozenset[str], canonical: str) -> None:
+        entities = getattr(self.graph, "entities", {})
+        rebound = []
+        for entity in list(entities.values()):
+            if entity.user_id not in component:
+                continue
+            entity.user_id = canonical
+            rebound.append(entity)
+
+        # Coalescing same-named nodes lets paths cross sessions written through either handle.
+        keepers: dict[str, Entity] = {}
+        redirects: dict[str, str] = {}
+        for entity in sorted(rebound, key=lambda item: item.id):
+            key = entity.name.lower()
+            keeper = keepers.get(key)
+            if keeper is None:
+                keepers[key] = entity
+                continue
+            redirects[entity.id] = keeper.id
+            keeper.aliases = list(dict.fromkeys([*keeper.aliases, *entity.aliases]))
+
+        if redirects:
+            relations = list(self.graph.relations())
+            affected_fact_ids = {
+                relation.fact_id
+                for relation in relations
+                if relation.subject_id in redirects or relation.object_id in redirects
+            }
+            for fact_id in affected_fact_ids:
+                self.graph.delete_relations_for_fact(fact_id)
+            for relation in relations:
+                if relation.fact_id in affected_fact_ids:
+                    relation.subject_id = redirects.get(relation.subject_id, relation.subject_id)
+                    relation.object_id = redirects.get(relation.object_id, relation.object_id)
+                    self.graph.add_relation(relation)
+            for entity_id in redirects:
+                entities.pop(entity_id, None)
+                for index_name in ("_out", "_in"):
+                    index = getattr(self.graph, index_name, None)
+                    if index is not None:
+                        index.pop(entity_id, None)
+
+        # The reference graph keeps a derived name index. Rebuild it after the ownership mutation;
+        # persisted graph implementations receive explicit upserts below.
+        by_name = getattr(self.graph, "_by_name", None)
+        if isinstance(by_name, dict):
+            by_name.clear()
+            for entity in sorted(entities.values(), key=lambda item: item.id):
+                by_name.setdefault((entity.user_id, entity.name.lower()), entity.id)
+
+        for entity in keepers.values():
+            self.graph.upsert_entity(entity)
 
     # --- user-authored memory management (the editable layer the management UI drives) ---
     def add_fact(self, subject: str, predicate: str, object: str, user_id: str = "default",
@@ -474,7 +670,11 @@ class Memory:
         live = [x for x in self._all_facts() if x.user_id == user and x.is_live()]
         action, invalidated = self.engine.conflict.reconcile(f, live)
         for old in invalidated:
-            self.engine.graph_builder.invalidate(old.id, f.created_at)
+            self.engine.graph_builder.invalidate(
+                old.id,
+                old.invalid_at if old.invalid_at is not None else f.valid_at,
+                old.expired_at if old.expired_at is not None else f.created_at,
+            )
             self._upsert_fact(old, tier="hot")
         if action != "duplicate":
             self.fact_store.upsert(f.id, f.embedding, f)
@@ -517,16 +717,28 @@ class Memory:
         self._persona_cache.clear()
         return f
 
+    def erase_fact(self, fact_id: str) -> Optional[ErasureReceipt]:
+        """Purge a fact, its raw provenance, and every object derived from that source.
+
+        Knowledge updates remain non-destructive; this path is only for an explicit user erasure. A raw
+        episode can produce multiple facts, so provenance-level erasure deliberately removes those sibling
+        facts too rather than leaving source-derived content or dangling provenance behind.
+        """
+        plan = plan_fact_erasure(self, fact_id)
+        if not plan.exists:
+            return None
+        return apply_erasure(self, plan)
+
     def delete_fact(self, fact_id: str) -> bool:
-        """Right-to-forget: HARD-remove a fact (distinct from auto-invalidation, which keeps history). This
-        is user-initiated erasure, so the data is actually gone — from both the hot and cold tiers."""
-        existed = self.fact_store.get(fact_id) is not None or self.cold_store.get(fact_id) is not None
-        self.graph.delete_relations_for_fact(fact_id)
-        self.graph.prune_orphan_entities()
-        self.fact_store.delete(fact_id)
-        self.cold_store.delete(fact_id)
-        self._persona_cache.clear()
-        return existed
+        """Backward-compatible boolean wrapper over provenance-level :meth:`erase_fact`."""
+        return self.erase_fact(fact_id) is not None
+
+    def erase_session(self, user_id: str, session_id: str) -> Optional[ErasureReceipt]:
+        """Purge one source session plus all derived facts and working-memory items."""
+        plan = plan_session_erasure(self, user_id, session_id)
+        if not plan.exists:
+            return None
+        return apply_erasure(self, plan)
 
     # --- focus areas: the "关注点" customization (what memory should emphasize / suppress) ---
     def set_focus(self, track: Optional[list[str]] = None, mute: Optional[list[str]] = None) -> dict:
@@ -576,6 +788,7 @@ class Memory:
         q: str = "",
         live_only: bool = False,
         limit: Optional[int] = None,
+        known_at: Optional[float] = None,
     ) -> dict:
         """Export the semantic graph as nodes + edges for the 关系图谱 visualization. Entities are nodes;
         relations are edges carrying their predicate and bi-temporal (live/superseded) status. Orphan
@@ -588,23 +801,19 @@ class Memory:
         relations = self.graph.relations()
         live_relation_fact_ids = {
             r.fact_id for r in relations
-            if r.invalid_at is None
+            if is_visible(r)
         }
         needle = q.strip().lower()
         edges, touched = [], set()
         for r in relations:
             if r.subject_id not in ents or r.object_id not in ents:
                 continue
-            live = (
-                r.invalid_at is None
-                if as_of is None
-                else r.valid_at <= as_of and (r.invalid_at is None or r.invalid_at > as_of)
-            )
+            live = is_visible(r, as_of=as_of, known_at=known_at)
             if live_only and not live:
                 continue
-            if as_of is None and not live and r.fact_id in live_relation_fact_ids:
+            if as_of is None and known_at is None and not live and r.fact_id in live_relation_fact_ids:
                 continue
-            if as_of is not None and not live:
+            if (as_of is not None or known_at is not None) and not live:
                 continue
             fact = self.fact_store.get(r.fact_id) or self.cold_store.get(r.fact_id)
             if fact is None:
@@ -634,6 +843,8 @@ class Memory:
                 "valid_at_h": fmt_date(r.valid_at),
                 "invalid_at": r.invalid_at,
                 "invalid_at_h": fmt_date(r.invalid_at) if r.invalid_at is not None else None,
+                "created_at": r.created_at,
+                "expired_at": r.expired_at,
                 "provenance": list(fact.provenance) if fact is not None else [],
             })
             touched.add(r.subject_id)
@@ -659,6 +870,155 @@ class Memory:
         self._apply_policy()
         self._persona_cache.clear()
         return self.get_policy()
+
+    # --- personal twin governance ------------------------------------------
+    def revise_twin_contract(self, patch: dict[str, Any]) -> TwinContract:
+        """Create an immutable next revision from an owner-supplied partial contract payload."""
+        allowed = {
+            "goals",
+            "principles",
+            "boundaries",
+            "provenance",
+            "confirm_high_risk_execution",
+            "confirm_external_writes",
+        }
+        unknown = set(patch) - allowed
+        if unknown:
+            raise ValueError(f"unknown twin contract field(s): {', '.join(sorted(unknown))}")
+        merged = self.twin_contract.to_dict()
+        for key in allowed:
+            if key in patch:
+                merged[key] = patch[key]
+        parsed = TwinContract.from_dict(merged)
+        self.twin_contract = self.twin_contract.update(
+            goals=parsed.goals if "goals" in patch else None,
+            principles=parsed.principles if "principles" in patch else None,
+            boundaries=parsed.boundaries if "boundaries" in patch else None,
+            provenance=parsed.provenance if "provenance" in patch else None,
+            confirm_high_risk_execution=(
+                parsed.confirm_high_risk_execution
+                if "confirm_high_risk_execution" in patch
+                else None
+            ),
+            confirm_external_writes=(
+                parsed.confirm_external_writes
+                if "confirm_external_writes" in patch
+                else None
+            ),
+        )
+        self.twin_contract_history.append(self.twin_contract)
+        return self.twin_contract
+
+    def grant_capability(self, grant: CapabilityGrant) -> CapabilityGrant:
+        self.capability_registry.add(grant)
+        return grant
+
+    def revoke_capability(self, grant_id: str) -> CapabilityGrant:
+        return self.capability_registry.revoke(grant_id)
+
+    def authorize_twin_action(
+        self,
+        request: ActionRequest,
+        *,
+        human_confirmed: bool = False,
+    ) -> ActionDecision:
+        decision = self.capability_registry.decide(
+            request,
+            self.twin_contract,
+            human_confirmed=human_confirmed,
+        )
+        self.twin_decisions[decision.id] = (request, decision)
+        return decision
+
+    def confirm_twin_action(self, decision_id: str) -> ActionDecision:
+        """Owner-control-plane approval for one pending, still-fresh decision.
+
+        This method is intentionally separate from ``authorize_twin_action`` so an
+        untrusted model cannot certify its own high-risk or external action.
+        """
+        pair = self.twin_decisions.get(decision_id)
+        if pair is None:
+            raise KeyError(decision_id)
+        request, pending = pair
+        if pending.status is not DecisionStatus.REQUIRES_CONFIRMATION:
+            raise ValueError("only a pending decision can be owner-confirmed")
+        point = now()
+        if not pending.is_fresh(point):
+            expired = replace(
+                pending,
+                status=DecisionStatus.DENIED,
+                reason="owner confirmation window expired",
+                decided_at=point,
+                valid_until=point,
+            )
+            self.twin_decisions[decision_id] = (request, expired)
+            return expired
+        reevaluated = self.capability_registry.decide(
+            request,
+            self.twin_contract,
+            human_confirmed=True,
+            at=point,
+        )
+        confirmed = replace(reevaluated, id=decision_id)
+        self.twin_decisions[decision_id] = (request, confirmed)
+        return confirmed
+
+    def twin_decision_executable(
+        self,
+        decision_id: str,
+        *,
+        at: Optional[float] = None,
+    ) -> tuple[bool, str]:
+        """Revalidate an allowed decision immediately before a trusted executor acts."""
+        pair = self.twin_decisions.get(decision_id)
+        if pair is None:
+            return False, "authorization decision not found"
+        request, decision = pair
+        point = now() if at is None else at
+        if not decision.allowed:
+            return False, "authorization is not allowed"
+        if not decision.is_fresh(point):
+            return False, "authorization expired"
+        if decision.policy_version != self.twin_contract.version:
+            return False, "owner contract changed after authorization"
+        current = self.capability_registry.decide(
+            request,
+            self.twin_contract,
+            human_confirmed=decision.confirmed_at is not None,
+            at=point,
+        )
+        if not current.allowed or current.grant_id != decision.grant_id:
+            return False, "capability or owner boundary changed after authorization"
+        return True, "authorization is current"
+
+    def record_twin_action(
+        self,
+        decision_id: str,
+        outcome: str,
+        *,
+        executed_at: Optional[float] = None,
+        provenance: tuple[str, ...] = (),
+    ) -> ActionRecord:
+        """Attach an executor-reported outcome to a trusted, previously allowed decision."""
+        pair = self.twin_decisions.get(decision_id)
+        if pair is None:
+            raise KeyError(decision_id)
+        request, decision = pair
+        point = now() if executed_at is None else executed_at
+        executable, reason = self.twin_decision_executable(decision_id, at=point)
+        if not executable:
+            raise ValueError(reason)
+        if any(item.decision.id == decision_id for item in self.twin_actions):
+            raise ValueError("an action outcome is already recorded for this decision")
+        record = ActionRecord(
+            request=request,
+            decision=decision,
+            executed_at=point,
+            outcome=outcome,
+            provenance=provenance,
+        )
+        self.twin_actions.append(record)
+        return record
 
     def _effective(self, key: str) -> str:
         """The override if set, else the built-in default."""
@@ -708,13 +1068,25 @@ class Memory:
         return wm
 
     def working_memory(self, user_id: str = "default", session_id: Optional[str] = None,
-                       as_of: Optional[float] = None, kind: Optional[str] = None) -> list[WorkingMemory]:
+                       as_of: Optional[float] = None, kind: Optional[str] = None,
+                       known_at: Optional[float] = None) -> list[WorkingMemory]:
         """Live working-memory items (optionally scoped to a session / kind); expired & consumed excluded.
         Lazily sweeps hard-expired items on read."""
         user = self.resolver.resolve(user_id)
-        self.sweep_working(as_of)
-        return [w for w in self.working_mem.values()
-                if w.user_id == user and w.is_live(as_of, session_id) and (kind is None or w.kind == kind)]
+        if known_at is None:
+            # Preserve the existing lazy-cleanup contract for current and valid-time-only reads. An
+            # explicit transaction-time view is an audit and must not destructively alter today's store.
+            self.sweep_working(as_of)
+        view_time = valid_time_for(as_of, known_at)
+        view_time = now() if view_time is None else view_time
+        return [
+            w for w in self.working_mem.values()
+            if w.user_id == user
+            and w.event_time <= view_time
+            and (known_at is None or w.created_at <= known_at)
+            and w.is_live(view_time, session_id)
+            and (kind is None or w.kind == kind)
+        ]
 
     def clear_session(self, user_id: str = "default", session_id: str = "default") -> int:
         """End-of-session / power-cycle clear: drop this session's working memory. Returns count cleared."""
@@ -782,7 +1154,11 @@ class Memory:
                 loser.invalid_at = max(winner.valid_at, loser.valid_at)
             loser.expired_at = now()
             winner.supersedes = loser.id
-            self.engine.graph_builder.invalidate(loser.id, loser.expired_at)
+            self.engine.graph_builder.invalidate(
+                loser.id,
+                loser.invalid_at,
+                loser.expired_at,
+            )
             self._upsert_fact(loser)
             self._upsert_fact(winner)
             self._persona_cache.clear()
@@ -837,6 +1213,7 @@ class Memory:
         user_id: str = "default",
         k: int = 8,
         as_of: Optional[float] = None,
+        known_at: Optional[float] = None,
     ) -> list[Episode]:
         """Top-k session summaries for a query, via the SAME hybrid (dense + BM25, RRF) signal as fact and
         episode retrieval. Lexical matching matters here: aggregation questions ('how many trips') hinge on
@@ -847,7 +1224,7 @@ class Memory:
         cands = self.summary_vec.search(
             self.embedder.embed(query),
             pool,
-            where=lambda e: e.user_id == user and (as_of is None or e.event_time <= as_of),
+            where=lambda e: e.user_id == user and is_visible(e, as_of=as_of, known_at=known_at),
         )
         eps = [ep for _, ep in cands]
         if len(eps) <= k:
@@ -946,19 +1323,39 @@ class Memory:
         user: str,
         as_of: Optional[float],
         top_k: Optional[int],
+        known_at: Optional[float] = None,
     ) -> tuple[list[tuple[Fact, float]], dict]:
-        ranked, diag = self.cold_retriever.retrieve(query, user, as_of, top_k)
+        ranked, diag = self.cold_retriever.retrieve(
+            query,
+            user,
+            as_of,
+            top_k,
+            known_at=known_at,
+        )
         if ranked:
             self._page_hot([f for f, _ in ranked])
         return ranked, diag
 
-    def procedural(self, user_id: str = "default", as_of: Optional[float] = None) -> list[Fact]:
+    def procedural(
+        self,
+        user_id: str = "default",
+        as_of: Optional[float] = None,
+        known_at: Optional[float] = None,
+    ) -> list[Fact]:
         """Standing instructions / how-to facts for this user (procedural memory)."""
         user = self.resolver.resolve(user_id)
-        return [f for f in self._all_facts()
-                if f.user_id == user and f.is_live(as_of)
-                and (f.predicate.lower() in self._INSTRUCTION_PREDS
-                     or any(f.predicate.lower().startswith(p + "_") for p in ("wants", "prefers", "remind")))]
+        return [
+            f for f in self._all_facts()
+            if f.user_id == user
+            and is_visible(f, as_of=as_of, known_at=known_at)
+            and (
+                f.predicate.lower() in self._INSTRUCTION_PREDS
+                or any(
+                    f.predicate.lower().startswith(p + "_")
+                    for p in ("wants", "prefers", "remind")
+                )
+            )
+        ]
 
     def _is_procedural_fact(self, f: Fact) -> bool:
         pred = f.predicate.lower()
@@ -985,6 +1382,7 @@ class Memory:
         user: str,
         as_of: Optional[float] = None,
         limit: Optional[int] = None,
+        known_at: Optional[float] = None,
     ) -> list[Fact]:
         if not self.config.procedural_memory:
             return []
@@ -992,7 +1390,11 @@ class Memory:
         q_is_proc = bool(_PROCEDURAL_QUERY_RE.search(query))
         rows: list[tuple[int, float, Fact]] = []
         for f in self._all_facts():
-            if f.user_id != user or not f.is_live(as_of) or not self._is_procedural_fact(f):
+            if (
+                f.user_id != user
+                or not is_visible(f, as_of=as_of, known_at=known_at)
+                or not self._is_procedural_fact(f)
+            ):
                 continue
             text = " ".join(
                 part for part in (
@@ -1023,8 +1425,15 @@ class Memory:
         user: str,
         as_of: Optional[float] = None,
         limit: Optional[int] = None,
+        known_at: Optional[float] = None,
     ) -> str:
-        rows = self._procedural_candidates(query, user, as_of, limit=limit)
+        rows = self._procedural_candidates(
+            query,
+            user,
+            as_of,
+            limit=limit,
+            known_at=known_at,
+        )
         if not rows:
             return ""
         lines = []
@@ -1064,16 +1473,23 @@ class Memory:
         self._persona_cache[user] = persona
         return persona
 
-    def _persona_at(self, user: str, as_of: Optional[float]) -> str:
+    def _persona_at(
+        self,
+        user: str,
+        as_of: Optional[float],
+        known_at: Optional[float] = None,
+    ) -> str:
         """Narrative profile for a read context. Current profiles are cached; as-of profiles are not,
         because the timestamp is part of the view and must not leak current facts into past contexts."""
-        if as_of is None:
+        if as_of is None and known_at is None:
             return self.build_persona(user)
         subject = self.engine.self_name(user)
         mute = self.focus.get("mute", [])
         live = [
             f for f in self._all_facts()
-            if f.user_id == user and f.is_live(as_of) and not self._matches(f, mute)
+            if f.user_id == user
+            and is_visible(f, as_of=as_of, known_at=known_at)
+            and not self._matches(f, mute)
         ]
         return self.profiles.narrative(
             subject,
@@ -1143,6 +1559,7 @@ class Memory:
         as_of: Optional[float],
         limit: int = 16,
         redact_sensitive: bool = False,
+        known_at: Optional[float] = None,
     ) -> str:
         """Supersession evidence for knowledge-update questions.
 
@@ -1150,7 +1567,10 @@ class Memory:
         non-destructive chain as evidence: the old value, when it stopped being valid, and the current
         replacement that superseded it.
         """
-        facts = [f for f in self._all_facts() if f.user_id == user]
+        facts = [
+            f for f in self._all_facts()
+            if f.user_id == user and (known_at is None or f.created_at <= known_at)
+        ]
         if redact_sensitive:
             facts = [f for f in facts if not getattr(f, "sensitive", False)]
         if not facts:
@@ -1199,10 +1619,11 @@ class Memory:
         ]
         for f in rows:
             until = fmt_date(f.invalid_at) if f.invalid_at is not None else "current"
-            view_time = now() if as_of is None else as_of
+            view_time = valid_time_for(as_of, known_at)
+            view_time = now() if view_time is None else view_time
             if f.valid_at > view_time:
                 status = "not yet valid"
-            elif f.is_live(as_of):
+            elif is_visible(f, as_of=as_of, known_at=known_at):
                 status = "current"
             elif f.id in replaces:
                 status = "superseded"
@@ -1230,6 +1651,7 @@ class Memory:
         query: str,
         user: str,
         as_of: Optional[float],
+        known_at: Optional[float] = None,
     ) -> Optional[SearchResult]:
         """Direct-answer path for natural-language history queries.
 
@@ -1240,8 +1662,14 @@ class Memory:
         """
         if not self.config.temporal_history_queries or not _TEMPORAL_HISTORY_RE.search(query):
             return None
-        view_time = now() if as_of is None else as_of
-        facts = [f for f in self._all_facts() if f.user_id == user and f.valid_at <= view_time]
+        view_time = valid_time_for(as_of, known_at)
+        view_time = now() if view_time is None else view_time
+        facts = [
+            f for f in self._all_facts()
+            if f.user_id == user
+            and f.valid_at <= view_time
+            and (known_at is None or f.created_at <= known_at)
+        ]
         if not facts:
             return None
         by_id = {f.id: f for f in facts}
@@ -1256,7 +1684,7 @@ class Memory:
             if not visible_newers:
                 continue
             newer = max(visible_newers, key=lambda f: (f.valid_at, f.created_at, f.id))
-            if old.is_live(as_of):
+            if is_visible(old, as_of=as_of, known_at=known_at):
                 continue
             old_terms = self._chain_terms(old)
             newer_terms = self._chain_terms(newer)
@@ -1284,6 +1712,7 @@ class Memory:
         as_of: Optional[float],
         limit: int = 12,
         redact_sensitive: bool = False,
+        known_at: Optional[float] = None,
     ) -> list[Fact]:
         """Expand retrieved facts to their visible supersession chain.
 
@@ -1294,8 +1723,12 @@ class Memory:
         """
         if not seeds:
             return []
-        view_time = now() if as_of is None else as_of
-        facts = [f for f in self._all_facts() if f.user_id == user]
+        view_time = valid_time_for(as_of, known_at)
+        view_time = now() if view_time is None else view_time
+        facts = [
+            f for f in self._all_facts()
+            if f.user_id == user and (known_at is None or f.created_at <= known_at)
+        ]
         if redact_sensitive:
             facts = [f for f in facts if not getattr(f, "sensitive", False)]
         by_id = {f.id: f for f in facts}
@@ -1348,6 +1781,7 @@ class Memory:
         query: str = "",
         limit: int = 12,
         redact_sensitive: bool = False,
+        known_at: Optional[float] = None,
     ) -> str:
         if query:
             seeds = [f for f in seeds if overlap_terms(query, self._chain_terms(f))]
@@ -1357,6 +1791,7 @@ class Memory:
             as_of,
             limit=limit,
             redact_sensitive=redact_sensitive,
+            known_at=known_at,
         )
         if not rows:
             return ""
@@ -1367,7 +1802,7 @@ class Memory:
         ]
         for f in rows:
             until = fmt_date(f.invalid_at) if f.invalid_at is not None else "current"
-            if f.is_live(as_of):
+            if is_visible(f, as_of=as_of, known_at=known_at):
                 role = "current"
             elif f.id in replaced_ids:
                 role = "superseded"
@@ -1415,6 +1850,7 @@ class Memory:
         limit: int = 4,
         snippet_chars: int = 360,
         redact_sensitive: bool = False,
+        known_at: Optional[float] = None,
     ) -> str:
         """Compact source episodes for retrieved facts.
 
@@ -1427,11 +1863,16 @@ class Memory:
             return ""
         rows: list[str] = []
         seen_eps: set[str] = set(exclude_episode_ids)
-        view_time = now() if as_of is None else as_of
+        view_time = valid_time_for(as_of, known_at)
+        view_time = now() if view_time is None else view_time
         history_query = bool(_TEMPORAL_HISTORY_RE.search(query or ""))
 
         def fact_order(f: Fact) -> tuple[int, float]:
-            past = int(history_query and f.valid_at <= view_time and not f.is_live(as_of))
+            past = int(
+                history_query
+                and f.valid_at <= view_time
+                and not is_visible(f, as_of=as_of, known_at=known_at)
+            )
             return (past, f.valid_at)
 
         for fact in sorted(facts, key=fact_order, reverse=True):
@@ -1443,7 +1884,11 @@ class Memory:
                 if ep_id in seen_eps:
                     continue
                 ep = self.episodes_doc.get(ep_id)
-                if ep is None or ep.user_id != user or ep.event_time > view_time:
+                if (
+                    ep is None
+                    or ep.user_id != user
+                    or not is_visible(ep, as_of=as_of, known_at=known_at)
+                ):
                     continue
                 seen_eps.add(ep_id)
                 needle = f"{query} {fact.text} {fact.subject} {fact.predicate} {fact.object}"
@@ -1465,6 +1910,7 @@ class Memory:
         as_of: Optional[float],
         limit: int,
         redact_sensitive: bool = False,
+        known_at: Optional[float] = None,
     ) -> list[Episode]:
         """Full raw chunks backed by retrieved facts' provenance.
 
@@ -1474,7 +1920,8 @@ class Memory:
         """
         if limit <= 0 or redact_sensitive or not facts:
             return []
-        view_time = now() if as_of is None else as_of
+        view_time = valid_time_for(as_of, known_at)
+        view_time = now() if view_time is None else view_time
         history_query = bool(_TEMPORAL_HISTORY_RE.search(query or ""))
         scored: dict[str, tuple[int, int, float, Episode]] = {}
         for fact_rank, fact in enumerate(facts):
@@ -1486,12 +1933,20 @@ class Memory:
                 continue
             for ep_id in fact.provenance:
                 ep = self.episodes_doc.get(ep_id)
-                if ep is None or ep.user_id != user or ep.event_time > view_time:
+                if (
+                    ep is None
+                    or ep.user_id != user
+                    or not is_visible(ep, as_of=as_of, known_at=known_at)
+                ):
                     continue
                 ep_overlap = len(overlap_terms(query, ep.content)) if query else 0
                 support_overlap = len(overlap_terms(fact.text, ep.content))
                 score = fact_overlap * 8 + support_overlap * 3 + ep_overlap * 2
-                if history_query and fact.valid_at <= view_time and not fact.is_live(as_of):
+                if (
+                    history_query
+                    and fact.valid_at <= view_time
+                    and not is_visible(fact, as_of=as_of, known_at=known_at)
+                ):
                     score += 96
                 prev = scored.get(ep.id)
                 item = (score, fact_rank, ep.event_time, ep)
@@ -1627,10 +2082,11 @@ class Memory:
         as_of: Optional[float],
         limit: int = 12,
         redact_sensitive: bool = False,
+        known_at: Optional[float] = None,
     ) -> str:
         """Bounded graph path evidence from query anchors; enough structure for relation-chain questions."""
         lines: list[str] = []
-        plan = self.planner.plan(query, user, as_of)
+        plan = self.planner.plan(query, user, as_of, known_at)
         if plan is not None and plan.facts:
             for f in plan.facts[:limit]:
                 if redact_sensitive and getattr(f, "sensitive", False):
@@ -1642,7 +2098,7 @@ class Memory:
         if not self.config.graph_proximity:
             return ""
         qids = self.retriever.query_entity_ids(query, user)
-        excluded = self.retriever.graph_exclusion_zone(query, user, as_of)
+        excluded = self.retriever.graph_exclusion_zone(query, user, as_of, known_at)
         frontier: list[tuple[str, int]] = [(eid, 0) for eid in qids]
         seen_nodes = set(qids)
         seen_edges: set[str] = set()
@@ -1652,13 +2108,13 @@ class Memory:
             if depth > max_hops:
                 continue
             for direction in ("out", "in"):
-                for rel in self.graph.neighbors(eid, as_of, direction):
+                for rel in self.graph.neighbors(eid, as_of, direction, known_at):
                     if rel.id in seen_edges:
                         continue
                     if rel.subject_id in excluded or rel.object_id in excluded:
                         continue
                     f = self.fact_store.get(rel.fact_id) or self.cold_store.get(rel.fact_id)
-                    if f is None or not f.is_live(as_of):
+                    if f is None or not is_visible(f, as_of=as_of, known_at=known_at):
                         continue
                     if redact_sensitive and getattr(f, "sensitive", False):
                         continue
@@ -1864,6 +2320,7 @@ class Memory:
         char_budget: int = 60_000,
         session_id: Optional[str] = None,  # when set, prepend this session's ephemeral working memory
         redact_sensitive: bool = False,  # safe/shared view: only non-sensitive structured facts are shown
+        known_at: Optional[float] = None,  # transaction time; enables strict bi-temporal visibility
     ) -> str:
         """The scalable read path (CLAUDE.md Bet A/E): assemble a SMALL, well-organized context from
         retrieved abstractions instead of the whole history —
@@ -1917,15 +2374,25 @@ class Memory:
         # The L3 persona is free-text synthesis and may fold in sensitive facts; redacted contexts are
         # structured-facts-only, so we drop it entirely.
         if persona and not redact_sensitive:
-            p = self._persona_at(user, as_of)
+            p = self._persona_at(user, as_of, known_at)
             if p:
-                label = "USER PROFILE" if as_of is None else f"USER PROFILE (as of {fmt_date(as_of)})"
+                view_time = valid_time_for(as_of, known_at)
+                label = (
+                    "USER PROFILE"
+                    if view_time is None
+                    else f"USER PROFILE (as of {fmt_date(view_time)})"
+                )
                 blocks.append(f"{label}:\n{p}")
 
         # WORKING MEMORY: the current session's ephemeral state ("today my throat hurts", this-trip intent)
         # — surfaced so the answer reflects "right now", but never consolidated to long-term or the profile.
         if session_id is not None and not redact_sensitive:
-            wm = self.working_memory(user, session_id=session_id, as_of=as_of)
+            wm = self.working_memory(
+                user,
+                session_id=session_id,
+                as_of=as_of,
+                known_at=known_at,
+            )
             if wm:
                 wl = "\n".join(f"- [{w.kind}] {w.content}"
                                for w in sorted(wm, key=lambda x: x.event_time))
@@ -1934,12 +2401,30 @@ class Memory:
         # L1 facts: hybrid retrieval per (sub-)query, unioned; + n-hop graph expansion from query entities.
         fact_map: dict[str, Fact] = {}
         for q in queries:
-            ranked = self.retriever.retrieve(q, user, as_of, top_k or n_facts)[0]
+            ranked = self.retriever.retrieve(
+                q,
+                user,
+                as_of,
+                top_k or n_facts,
+                known_at=known_at,
+            )[0]
             if not ranked:
-                ranked = self._retrieve_cold(q, user, as_of, top_k or n_facts)[0]
+                ranked = self._retrieve_cold(
+                    q,
+                    user,
+                    as_of,
+                    top_k or n_facts,
+                    known_at,
+                )[0]
             for f, _ in ranked:
                 fact_map.setdefault(f.id, f)
-        for f in self._graph_related_facts(query, user, as_of, limit=n_facts):
+        for f in self._graph_related_facts(
+            query,
+            user,
+            as_of,
+            limit=n_facts,
+            known_at=known_at,
+        ):
             fact_map.setdefault(f.id, f)
         all_facts = list(fact_map.values())
         # Focus "mute": drop facts on topics the user asked to suppress from the read context.
@@ -1979,7 +2464,13 @@ class Memory:
                 tl = "\n".join(f"- {fmt_date(f.valid_at)}: {f.text}" for f in chrono)
                 blocks.append(f"TIMELINE (oldest to newest — use for ordering and durations):\n{tl}")
             if need is not None and need.multi_hop:
-                paths = self._graph_paths_block(query, user, as_of, redact_sensitive=redact_sensitive)
+                paths = self._graph_paths_block(
+                    query,
+                    user,
+                    as_of,
+                    redact_sensitive=redact_sensitive,
+                    known_at=known_at,
+                )
                 if paths:
                     blocks.append(paths)
             if self.config.chain_evidence and (need is None or not need.history):
@@ -1990,6 +2481,7 @@ class Memory:
                     query=query,
                     limit=max(8, min(18, n_facts + 3)),
                     redact_sensitive=redact_sensitive,
+                    known_at=known_at,
                 )
                 if evo:
                     blocks.append(evo)
@@ -2003,6 +2495,7 @@ class Memory:
                 as_of,
                 limit=max(8, min(18, n_facts + 3)),
                 redact_sensitive=redact_sensitive,
+                known_at=known_at,
             ):
                 if f.id not in seen_chain_facts:
                     seen_chain_facts.add(f.id)
@@ -2019,12 +2512,19 @@ class Memory:
                 user,
                 as_of,
                 limit=getattr(self.config, "procedural_memory_k", 6),
+                known_at=known_at,
             )
             if proc:
                 blocks.append(proc)
 
         if need is not None and need.history and self.config.temporal_history_queries:
-            hist = self._history_block(user, query, as_of, redact_sensitive=redact_sensitive)
+            hist = self._history_block(
+                user,
+                query,
+                as_of,
+                redact_sensitive=redact_sensitive,
+                known_at=known_at,
+            )
             if hist:
                 blocks.append(hist)
 
@@ -2035,7 +2535,13 @@ class Memory:
         seen_s: set[str] = set()
         if n_summaries:
             for q in queries:
-                for e in self.retrieve_summaries(q, user, n_summaries, as_of=as_of):
+                for e in self.retrieve_summaries(
+                    q,
+                    user,
+                    n_summaries,
+                    as_of=as_of,
+                    known_at=known_at,
+                ):
                     if e.id not in seen_s:
                         seen_s.add(e.id)
                         summ_ranked.append(e)
@@ -2051,7 +2557,13 @@ class Memory:
                 seen_detail: set[str] = set()
                 detail_queries = list(need.subqueries) + [query] if need is not None and need.subqueries else queries
                 per_query = [
-                    self.retrieve_episodes(q, user, max(n_chunks, 1), as_of=as_of)
+                    self.retrieve_episodes(
+                        q,
+                        user,
+                        max(n_chunks, 1),
+                        as_of=as_of,
+                        known_at=known_at,
+                    )
                     for q in detail_queries
                 ]
                 max_hits = max((len(eps) for eps in per_query), default=0)
@@ -2077,6 +2589,7 @@ class Memory:
                 as_of,
                 limit=n_chunks,
                 redact_sensitive=redact_sensitive,
+                known_at=known_at,
             )
             if promoted:
                 merged: list[Episode] = []
@@ -2100,7 +2613,13 @@ class Memory:
         if need is not None and need.aggregation and not redact_sensitive:
             seen_agg = set(detail_ids)
             for q in queries:
-                for ep in self.retrieve_episodes(q, user, 4, as_of=as_of):
+                for ep in self.retrieve_episodes(
+                    q,
+                    user,
+                    4,
+                    as_of=as_of,
+                    known_at=known_at,
+                ):
                     if ep.id in seen_agg:
                         continue
                     seen_agg.add(ep.id)
@@ -2132,6 +2651,7 @@ class Memory:
                 as_of,
                 exclude_episode_ids=detail_ids,
                 redact_sensitive=redact_sensitive,
+                known_at=known_at,
             )
             if raw_prov:
                 blocks.append(raw_prov)
@@ -2174,40 +2694,47 @@ class Memory:
         user_id: str = "default",
         as_of: Optional[float] = None,
         top_k: Optional[int] = None,
+        known_at: Optional[float] = None,
     ) -> SearchResult:
         user = self.resolver.resolve(user_id)
 
         # 1. multi-hop planner first (fires only for genuine >=2-hop relational questions)
-        plan = self.planner.plan(query, user, as_of)
+        plan = self.planner.plan(query, user, as_of, known_at)
         if plan is not None:
             for f in plan.facts:
                 reinforce(f, self.config.access_boost)
             return SearchResult(query=query, facts=plan.facts, via="multi-hop", _answer=plan.answer)
 
         # 2. natural-language history queries over the supersession chain
-        hist = self._temporal_history_result(query, user, as_of)
+        hist = self._temporal_history_result(query, user, as_of, known_at)
         if hist is not None:
             return hist
 
         # 3. typed procedural memory: for rule/how-to queries, prefer the source-backed procedural view over
         # a generic fact answer. This keeps standing instructions auditable and still falls through for
         # ordinary lookup questions.
-        proc = self._procedural_fallback(query, user, as_of=as_of)
+        proc = self._procedural_fallback(query, user, as_of=as_of, known_at=known_at)
         if proc is not None:
             return proc
 
         # 4. hybrid retrieval
-        ranked, diag = self.retriever.retrieve(query, user, as_of, top_k)
+        ranked, diag = self.retriever.retrieve(
+            query,
+            user,
+            as_of,
+            top_k,
+            known_at=known_at,
+        )
         via = "hybrid"
         if not ranked:
-            ranked, diag = self._retrieve_cold(query, user, as_of, top_k)
+            ranked, diag = self._retrieve_cold(query, user, as_of, top_k, known_at)
             if ranked:
                 via = "cold"
         if not ranked:
-            proc = self._procedural_fallback(query, user, as_of=as_of)
+            proc = self._procedural_fallback(query, user, as_of=as_of, known_at=known_at)
             if proc is not None:
                 return proc
-            summ = self._summary_fallback(query, user_id, as_of=as_of)
+            summ = self._summary_fallback(query, user_id, as_of=as_of, known_at=known_at)
             if summ is not None:
                 return summ
             return SearchResult(query=query, via="abstain", abstained=True)
@@ -2227,7 +2754,13 @@ class Memory:
                 type_ok = False
 
         if not type_ok or self._should_abstain(query, facts, diag):
-            cold_ranked, cold_diag = self._retrieve_cold(query, user, as_of, top_k)
+            cold_ranked, cold_diag = self._retrieve_cold(
+                query,
+                user,
+                as_of,
+                top_k,
+                known_at,
+            )
             if cold_ranked:
                 facts = [f for f, _ in cold_ranked]
                 scores = [s for _, s in cold_ranked]
@@ -2243,10 +2776,10 @@ class Memory:
                     return SearchResult(query=query, facts=facts, scores=scores, via="cold")
             # #3b: the answer may live only in a session SUMMARY (a how-to, a rule, an install command) the
             # extractor never atomized into a fact. Fall back to the most relevant summary before abstaining.
-            proc = self._procedural_fallback(query, user, as_of=as_of)
+            proc = self._procedural_fallback(query, user, as_of=as_of, known_at=known_at)
             if proc is not None:
                 return proc
-            summ = self._summary_fallback(query, user_id, as_of=as_of)
+            summ = self._summary_fallback(query, user_id, as_of=as_of, known_at=known_at)
             if summ is not None:
                 return summ
             return SearchResult(query=query, facts=facts, scores=scores, via="abstain", abstained=True)
@@ -2255,9 +2788,22 @@ class Memory:
             reinforce(facts[0], self.config.access_boost)
         return SearchResult(query=query, facts=facts, scores=scores, via=via)
 
-    def as_of(self, query: str, when: float, user_id: str = "default", top_k: Optional[int] = None) -> SearchResult:
-        """Answer 'what did we believe at time `when`?' -- bi-temporal point-in-time query."""
-        return self.search(query, user_id=user_id, as_of=when, top_k=top_k)
+    def as_of(
+        self,
+        query: str,
+        when: float,
+        user_id: str = "default",
+        top_k: Optional[int] = None,
+        known_at: Optional[float] = None,
+    ) -> SearchResult:
+        """Answer for world-valid time ``when``; optionally constrain what was known at ``known_at``."""
+        return self.search(
+            query,
+            user_id=user_id,
+            as_of=when,
+            top_k=top_k,
+            known_at=known_at,
+        )
 
     def retrieve_episodes(
         self,
@@ -2266,6 +2812,7 @@ class Memory:
         k: int = 5,
         pool: Optional[int] = None,
         as_of: Optional[float] = None,
+        known_at: Optional[float] = None,
     ):
         """Retrieve the top-k raw episodes (sessions) for a query: bi-encoder candidate pool → BM25
         lexical rerank (RRF) → optional cross-encoder rerank.
@@ -2280,7 +2827,7 @@ class Memory:
         candidates = self.episodes_vec.search(
             self.embedder.embed(query),
             pool,
-            where=lambda e: e.user_id == user and (as_of is None or e.event_time <= as_of),
+            where=lambda e: e.user_id == user and is_visible(e, as_of=as_of, known_at=known_at),
         )
         eps = [ep for _, ep in candidates]
 
@@ -2317,6 +2864,7 @@ class Memory:
         summary: bool = False,
         verify: bool = False,
         intent: bool = False,
+        known_at: Optional[float] = None,
     ) -> str:
         """Assemble the hybrid read context (CLAUDE.md §3) for an LLM to answer from: live, date-stamped
         facts (conflict-resolved/current state) + the top-k raw session chunks (detail extraction drops).
@@ -2336,7 +2884,13 @@ class Memory:
             if hypo.strip():
                 search_query = f"{query}\n{hypo.strip()}"
 
-        ranked, _ = self.retriever.retrieve(search_query, user, as_of, top_k)
+        ranked, _ = self.retriever.retrieve(
+            search_query,
+            user,
+            as_of,
+            top_k,
+            known_at=known_at,
+        )
         # Sort most-recent first: for knowledge-update questions the LLM should see the latest
         # fact (e.g., new job, new city) at the top — and trust it over older facts lower in the list.
         ranked_by_date = sorted(ranked, key=lambda x: x[0].valid_at, reverse=True)
@@ -2350,11 +2904,30 @@ class Memory:
             if agentic and self.llm is not None:
                 from .retrieve.agentic import AgenticRetriever
 
-                episodes = AgenticRetriever(self, self.llm).gather_episodes(query, user, k_chunks, as_of=as_of)
+                episodes = AgenticRetriever(self, self.llm).gather_episodes(
+                    query,
+                    user,
+                    k_chunks,
+                    as_of=as_of,
+                    known_at=known_at,
+                )
             else:
-                episodes = self.retrieve_episodes(search_query, user, k_chunks, as_of=as_of)
+                episodes = self.retrieve_episodes(
+                    search_query,
+                    user,
+                    k_chunks,
+                    as_of=as_of,
+                    known_at=known_at,
+                )
             if self.config.provenance_chunk_promotion:
-                promoted = self._provenance_detail_chunks(ranked_facts, search_query, user, as_of, k_chunks)
+                promoted = self._provenance_detail_chunks(
+                    ranked_facts,
+                    search_query,
+                    user,
+                    as_of,
+                    k_chunks,
+                    known_at=known_at,
+                )
                 if promoted:
                     merged: list[Episode] = []
                     seen_promoted: set[str] = set()
@@ -2377,7 +2950,13 @@ class Memory:
             f"RELEVANT CONVERSATIONS (with dates):\n{chunk_block}"
         ).strip()
         if self.config.chain_evidence:
-            evo = self._fact_evolution_block(ranked_facts, user, as_of, query=search_query)
+            evo = self._fact_evolution_block(
+                ranked_facts,
+                user,
+                as_of,
+                query=search_query,
+                known_at=known_at,
+            )
             if evo:
                 result += f"\n\n{evo}"
         if self.config.provenance_evidence:
@@ -2387,6 +2966,7 @@ class Memory:
                 user,
                 as_of,
                 exclude_episode_ids={ep.id for ep in episodes},
+                known_at=known_at,
             )
             if raw_prov:
                 result += f"\n\n{raw_prov}"
@@ -2398,18 +2978,18 @@ class Memory:
         if graph:
             # L2: traverse the entity graph from the query's anchor entities to pull connected facts
             # across sessions (multi-hop / multi-session).
-            related = self._graph_related_facts(search_query, user, as_of)
+            related = self._graph_related_facts(search_query, user, as_of, known_at=known_at)
             if related:
                 block = "\n".join(f"- [{fmt_date(f.valid_at)}] {f.text}" for f in related)
                 result += f"\n\nRELATED FACTS (graph traversal):\n{block}"
         if wiki:
             # L4: LLM-curated per-entity notes (current vs past), synthesized at query time.
-            notes = self._entity_notes(search_query, user, as_of)
+            notes = self._entity_notes(search_query, user, as_of, known_at=known_at)
             if notes:
                 result = "ENTITY NOTES:\n" + "\n".join(f"- {n}" for n in notes) + "\n\n" + result
         if verify and self.llm is not None:
             # self-verify: draft an answer, find the single most useful gap, retrieve it, append evidence.
-            extra = self._self_verify(query, result, user, as_of)
+            extra = self._self_verify(query, result, user, as_of, known_at)
             if extra:
                 result += f"\n\nADDITIONAL EVIDENCE (self-verify):\n{extra}"
         if summary and self.llm is not None:
@@ -2431,7 +3011,14 @@ class Memory:
                 result = f"LIKELY INTENT: {hint.strip()}\n\n" + result
         return result
 
-    def _self_verify(self, query: str, context: str, user: str, as_of: Optional[float]) -> str:
+    def _self_verify(
+        self,
+        query: str,
+        context: str,
+        user: str,
+        as_of: Optional[float],
+        known_at: Optional[float] = None,
+    ) -> str:
         draft = self.llm.complete(
             f"Using only this context, answer concisely. If something is missing, say what.\n\n{context}\n\nQ: {query}",
             system="Answer from context; note any missing piece.",
@@ -2444,21 +3031,50 @@ class Memory:
         g = gap.strip().strip(".").lower()
         if not g or g == "none":
             return ""
-        more = self.retrieve_episodes(gap.strip(), user, 2, as_of=as_of)
+        more = self.retrieve_episodes(
+            gap.strip(),
+            user,
+            2,
+            as_of=as_of,
+            known_at=known_at,
+        )
         return "\n\n".join(f"[{ep.metadata.get('date', '?')}]\n{ep.content}" for ep in more)
 
-    def _graph_related_facts(self, query: str, user: str, as_of: Optional[float], limit: int = 8) -> list[Fact]:
+    def _graph_related_facts(
+        self,
+        query: str,
+        user: str,
+        as_of: Optional[float],
+        limit: int = 8,
+        known_at: Optional[float] = None,
+    ) -> list[Fact]:
         if not self.config.graph_proximity:
             return []
-        live = [f for f in self._all_facts() if f.user_id == user and f.is_live(as_of)]
+        live = [
+            f for f in self._all_facts()
+            if f.user_id == user and is_visible(f, as_of=as_of, known_at=known_at)
+        ]
         if not live:
             return []
-        graph_scores, _ = self.retriever._graph_scores(query, user, live, as_of)
+        graph_scores, _ = self.retriever._graph_scores(
+            query,
+            user,
+            live,
+            as_of,
+            known_at,
+        )
         related = [f for f in live if graph_scores.get(f.id, 0.0) > 0.0]
         related.sort(key=lambda f: (-graph_scores.get(f.id, 0.0), -f.valid_at, f.text.lower()))
         return related[:limit]
 
-    def _entity_notes(self, query: str, user: str, as_of: Optional[float], max_entities: int = 3) -> list[str]:
+    def _entity_notes(
+        self,
+        query: str,
+        user: str,
+        as_of: Optional[float],
+        max_entities: int = 3,
+        known_at: Optional[float] = None,
+    ) -> list[str]:
         if self.llm is None:
             return []
         notes: list[str] = []
@@ -2469,11 +3085,14 @@ class Memory:
             facts = [
                 f for f in self._all_facts()
                 if f.user_id == user and f.subject.lower() == ent.name.lower()
+                and (known_at is None or f.created_at <= known_at)
             ]
             if not facts:
                 continue
             lines = "\n".join(
-                f"[{fmt_date(f.valid_at)}] {f.text}" + ("" if f.is_live(as_of) else " (past)")
+                f"[{fmt_date(f.valid_at)}] {f.text}" + (
+                    "" if is_visible(f, as_of=as_of, known_at=known_at) else " (past)"
+                )
                 for f in sorted(facts, key=lambda x: x.valid_at)
             )
             note = self.llm.complete(
@@ -2513,6 +3132,7 @@ class Memory:
         query: str,
         user_id: str,
         as_of: Optional[float] = None,
+        known_at: Optional[float] = None,
     ) -> Optional[SearchResult]:
         """#3b: when atomized facts can't answer, surface the most relevant session SUMMARY if it genuinely
         overlaps the query (the info may live only in a summary — a how-to, a rule, an install command — that
@@ -2522,7 +3142,13 @@ class Memory:
             return None
         candidates: list[tuple[int, int, float, Episode, str]] = []
         k = max(1, int(getattr(self.config, "summary_fallback_k", 6) or 6))
-        for ep in self.retrieve_summaries(query, user_id, k=k, as_of=as_of):
+        for ep in self.retrieve_summaries(
+            query,
+            user_id,
+            k=k,
+            as_of=as_of,
+            known_at=known_at,
+        ):
             text = (ep.summary or ep.content or "").strip()
             if not text:
                 continue
@@ -2540,6 +3166,7 @@ class Memory:
         query: str,
         user: str,
         as_of: Optional[float] = None,
+        known_at: Optional[float] = None,
     ) -> Optional[SearchResult]:
         """Typed fallback for standing instructions/how-to facts.
 
@@ -2547,7 +3174,13 @@ class Memory:
         and only the object carries the useful steps. Before falling back to free-text summaries, answer
         from the source-backed procedural view so durable rules stay typed and auditable.
         """
-        rows = self._procedural_candidates(query, user, as_of, limit=1)
+        rows = self._procedural_candidates(
+            query,
+            user,
+            as_of,
+            limit=1,
+            known_at=known_at,
+        )
         if not rows:
             return None
         f = rows[0]

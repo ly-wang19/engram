@@ -111,6 +111,9 @@ flowchart TD
 | #16 `aggregation_constraint_filter` | 候选值按题面月份约束标 EXCLUDE | 影响 aggregation candidate precision | 配置开关 + 真实 numeric context27 |
 | 本次 `chain_provenance_promotion` | `supersedes` 链接入 provenance chunk promotion | 影响 previous/current-vs-past 问题的 raw source evidence | 复用 `chain_evidence` 开关 + 24/24 离线 ablation + LongMemEval sample context 0 errors |
 | 本次 `commercial_release_0_1_0` | 服务安全、租户落盘、部署和发布门禁收束 | 不改变 extraction/retrieval/fusion；影响所有 HTTP 自托管入口和新命名空间目录 | 危险路径/跨租户/鉴权/请求测试 + 全量 pytest + zero-setup + SDK/frontend/package/container 验收 |
+| 本次 `incremental_sqlite_persistence` | JSONL 全量快照升级为 SQLite canonical store | 影响六类对象的落盘生命周期；事务 UPSERT/DELETE、首次/滞后 manifest 恢复、store/commit identity、乐观 generation、no-follow、owner-only 权限、旧 JSONL 幂等迁移 | `tests/test_persist_sqlite.py` + persist roundtrip/crash/safety + zero-setup |
+| 本次 `lancedb_privacy_boundary` | 可选 Lance 向量层增加 owner-only 根目录、no-follow marker 与 canonical snapshot 子 namespace | 阻断 symlink/非目录、未标记旧库接管、跨 snapshot 表混用与无 canonical 的孤儿向量复活；明确逻辑删除、物理残留与加密卷边界 | `tests/test_lancedb_security.py` 9 项零可选依赖检查 + 安装 LanceDB 后 `tests/test_lancedb_store.py` parity |
+| 本次 `personal_twin_governance` | 增加 Twin Contract、default-deny Capability Registry、独立 owner confirmation 与短时决策审计 | 影响 Memory private state、SQLite roundtrip、Service/HTTP/MCP/TS；不内置 executor，模型不能自授权/自确认，credential ref 不进 prompt | `tests/test_twin_contract.py` + `test_twin_service.py` + `test_twin_eval.py` + MCP/TS 定向回归 |
 
 ## 当前重点区域
 
@@ -170,6 +173,7 @@ lossless episodes
   + raw evidence fusion
   + structured aggregation candidates
   + secure tenant namespace and self-hosted release gate
+  + owner-controlled twin contract and capability authorization
   + reproducible harness
 ```
 

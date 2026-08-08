@@ -40,27 +40,29 @@ Engram 让 LLM 智能体拥有跨会话的、可查询的持久记忆：它记�
 **头条系统是 `engram_lean`:它从检索到的一小片作答,从不读全部历史。** 这才是记忆系统的真正考验,
 也是本项目的核心论点(用零头的 token 在准确率上打赢全文):
 
-| 系统 | 总分 | 平均 token | 说明 |
-|---|---:|---:|---|
-| **Engram**（`engram_lean`） | **83.6%** | **9.6k** | 检索精简片;0 报错 / 500 |
-| 裸塞全文基线(同作答器+判分器) | 73.2% | 79k | 把整个干扰集塞进 prompt |
+| 系统 | 总分 | 平均上下文 token | 端到端延迟（p50 / p95） | 报错 |
+|---|---:|---:|---:|---:|
+| **Engram**（`engram_lean`） | **79.0%** | **7,283** | 93.6s / 173.7s | 0 / 500 |
+| 裸塞全文基线（同一次运行、作答器和判分器） | 76.0% | 79,241 | 14.5s / 60.1s | 0 / 500 |
 
-**Engram 比裸全文高 +10.4 分,却用约 8 倍更少的 token**(9.6k vs 79k)—— 在这次运行中,过滤后的精华片比
-嘈杂的全窗口*更*准。分项(`engram_lean`,全 500 题):
+在 canonical 同场联合运行中，**Engram 的准确率点估计为 +3.0 分，上下文 token 减少 10.9 倍**
+（7,283 vs 79,241）。本次端到端延迟没有取胜；延迟包含远程作答调用，我们不把差异归因于检索。
+分项（`engram_lean`，全 500 题）：
 
 | 类别 | 得分 | 题数 |
 |---|---:|---:|
-| 单会话-助手 | 92.9% | 56 |
-| 知识更新 | 87.5% | 72 |
-| 单会话-用户 | 87.5% | 64 |
-| 拒答 | 86.7% | 30 |
-| 时间推理 | 81.1% | 127 |
-| 多会话 | 79.3% | 121 |
-| 单会话-偏好 | 73.3% | 30 |
+| 单会话-助手 | 100.0% | 56 |
+| 知识更新 | 91.7% | 72 |
+| 拒答 | 90.0% | 30 |
+| 单会话-用户 | 84.4% | 64 |
+| 时间推理 | 70.9% | 127 |
+| 多会话 | 70.2% | 121 |
+| 单会话-偏好 | 56.7% | 30 |
 
-**它的定位:** **83.6%** —— Engram 大幅超过裸全文(**+10.4**)且省约 8 倍 token。我们如实公布 —— 同一
-作答器、同一严格判分器、每题留痕、不挑切片。Engram 在这次运行中领先的是 **token 效率与可复现性**;
-把同样的评测纪律扩展到更大语料,以及继续提升最难的几类(多会话推理、时间聚合),是公开路线图。
+**它的定位：**这次全 500 题的 paired 运行支持 token 效率结论和正向的准确率点估计，
+但不支持“统计显著领先”（paired McNemar `p=0.195`；差值的 bootstrap 95% CI 为
+`[-1.2, +7.2]` 分）。同一作答器、同一严格判分器、每题留痕、不挑切片。canonical 日志与历史独立运行见
+[`RESULTS.md`](RESULTS.md)。**这些结果不足以证明“世界第一”或领域领先。**
 
 ## 工作原理
 
@@ -106,7 +108,7 @@ flowchart TB
 
 | # | 设计选择 | 为什么重要 |
 |---|---|---|
-| 1 | **双时间轴事实** —— 每个事实同时带*有效时间*（在现实中何时为真）**和**\*事务时间\*（我们何时得知） | 让"我们在 T 时刻知道什么？"（`as_of`）和知识更新成为**一等公民**，而非事后补丁。这就是知识更新拿 87.5%、时间推理拿 81.1% 的原因。 |
+| 1 | **双时间轴事实** —— 每个事实同时带*有效时间*（在现实中何时为真）**和**\*事务时间\*（我们何时得知） | 让"我们在 T 时刻知道什么？"（`as_of`）和知识更新成为**一等公民**，而非事后补丁。canonical 运行的知识更新为 91.7%、时间推理为 70.9%；单个组件的因果贡献仍需消融实验确认。 |
 | 2 | **非破坏式冲突解决** —— 被推翻的事实是*失效*（`invalid_at` + `supersedes` 链），而非删除 | 没有静默的记忆损坏。每个事实都能回答"它从哪来？""它替换了谁？"—— 完整溯源 + 审计轨迹。 |
 | 3 | **低成本冲突检测** —— 槽位匹配 + 嵌入/NLI 启发式，**仅在**模糊时才升级到 LLM | 拿到生产级的时间正确性，**却不必每个事实都调一次 LLM** —— 规模化下的成本优势。 |
 | 4 | **混合检索** —— 稠密语义 + BM25 词法 + 图邻近作为正证据融合，时近/显著度作为先验 | 没有单一检索器能赢遍所有场景。**已验证结论：事实 + 原始片段，强于任何单独一种** —— 事实补充冲突已解/时间信号，片段找回丢失的细节。 |
@@ -126,6 +128,9 @@ engram-quickstart
 
 用离线确定性兜底（哈希嵌入器、规则抽取器、内存存储）跑完整流程 —— 写入 → 固化 → 检索。真实后端
 （LanceDB、Kuzu、LiteLLM、BGE）通过同一套接口接入：`pip install "engram-memory[all]"`。
+使用 LanceDB 时，`data_path` 是私有基目录，Engram 会为每个 canonical snapshot 派生 owner-only
+namespace 并拒绝不安全复用。文件权限不是加密，Lance 逻辑删除也不是物理擦除保证；详见
+[存储与隐私边界](docs/storage-privacy-boundary.zh-CN.md)。
 
 ```python
 from engram import Memory
@@ -138,6 +143,31 @@ mem.consolidate()                      # System-2：抽取事实、建图、解�
 print(mem.search("Where does Wei work?", user_id="u1").answer())
 # -> "Moonshot AI"（被推翻的旧事实是失效，而非删除 —— 历史被完整保留）
 ```
+
+## 个人分身底座（所有者控制）
+
+Engram 现在不只能“回忆”，也提供个人 AI 分身的治理底座：版本化 **Twin Contract**
+保存本人确认的目标、原则和边界；默认拒绝的 **Capability Registry** 只能显式授予
+`observe` / `draft` / `execute` 权限，且 scope 按完整路径段匹配。credential 字段只保存
+keychain/vault 的查找引用；部署方仍须确保真实密钥不进入合同正文、记忆、provenance 或 prompt。
+
+信任边界是刻意分开的：
+
+- 普通 agent key 只能读可注入模型的安全指引、脱敏权限摘要，发起授权请求、执行前复核状态、
+  回写执行结果。“授权”本身永远不执行外部动作。
+- 修改合同、授予/撤销能力、确认高风险或外部写入，必须使用独立的
+  `ENGRAM_OWNER_KEYS="tenant:<另一个强密钥>"`；owner key 不得与 agent key 复用。
+- agent 不能自报 `human_confirmed=true`。owner 只能把一个待确认决策升级为允许；该决策 5 分钟过期，
+  合同或 grant 变化也会使它失效。
+- 删除 fact/session 会沿 provenance 删除原始 Episode 与同源派生事实，落盘后重新打开 SQLite 复核。
+  这是 canonical/logical 校验，不代表 SSD、APFS 快照、备份、云同步或 Lance 旧 fragment 被物理抹除。
+
+运行 `python eval/twin_eval.py` 可复核 16 个确定性控制面不变量。16/16 是离线安全回归，**不是**
+对外 benchmark 或世界排名证据。详见[个人分身指南](docs/personal-twin.zh-CN.md)、[`API.md`](API.md)和
+[存储与隐私边界](docs/storage-privacy-boundary.zh-CN.md)。
+
+这一版是“记忆 + 授权”底座，不是已完成的自主克隆：项目不内置工具执行器、凭据保险库、
+语音/形象模型或后台自主性。受信执行器必须在每次行动前确认 `executable=true`，之后再回写结果。
 
 ## 怎么调用 / 接入你的应用
 
@@ -202,11 +232,15 @@ MCP 的 `engram_remember` 支持 `scope="long"|"auto"|"working"`：长期事实�
 用户要看哪些 Codex / Claude Code / app 会话写过记忆时，agent 可调用 `engram_list_sessions`；
 它只返回 session id、时间和计数，不返回记忆正文。
 用户要纠错或删除单条记忆时，agent 可先用 `engram_list_facts` 找到 fact id，再调用
-`engram_update_fact` 或 `engram_delete_fact(confirm=true)` 精确处理，不需要清空整个命名空间。
+`engram_update_fact` 做精确修改，或预览删除影响后显式确认 `engram_delete_fact`；删除会同时清掉该 fact
+的原始来源与同源派生事实，但仍不会清空整个命名空间。
 用户要导出自己的记忆时，agent 可调用 `engram_export(response_format="json")`；默认是安全导出
 （非敏感 facts + graph），用户明确要完整私有导出时再传 `include_sensitive=true`。
 用户要“以后多关注某类信息 / 少召回某类信息”时，agent 可用 `engram_get_focus` 查看当前策略，再用
 `engram_set_focus` 更新关注或屏蔽主题。
+MCP 还只向模型暴露安全的分身工具：`engram_get_twin_contract`、
+`engram_list_capabilities`、`engram_authorize_twin_action`和 `engram_record_twin_action`。
+它不暴露合同修改、grant/revoke 或 owner confirmation，也不返回 credential reference。
 
 ### JS/TS SDK + OpenAI 兼容（改一个 URL，你现有的 OpenAI 代码就有了记忆）
 

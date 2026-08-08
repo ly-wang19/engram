@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 
 from engram import Memory
 from engram.types import Conflict
@@ -46,6 +47,8 @@ def test_jsonl_roundtrip_preserves_bitemporal_and_state(tmp_path):
     mem.save(path)
     manifest = json.loads((tmp_path / "memory" / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["backend"] == "durable"
+    assert manifest["format"] == "sqlite"
+    assert "state" not in manifest
 
     loaded = Memory.open(path)
     assert [e.__dict__ for e in sorted(loaded.episodes_doc.values(), key=lambda e: e.id)] == [
@@ -81,11 +84,16 @@ def test_graph_tombstones_do_not_reappear_after_roundtrip(tmp_path):
 
     path = str(tmp_path / "memory")
     mem.save(path)
-    entities_jsonl = (tmp_path / "memory" / "entities.jsonl").read_text(encoding="utf-8")
-    relations_jsonl = (tmp_path / "memory" / "relations.jsonl").read_text(encoding="utf-8")
-    assert "diabetes" not in entities_jsonl.lower()
-    assert "ByteDance" not in entities_jsonl
-    assert deleted.id not in relations_jsonl
+    with sqlite3.connect(tmp_path / "memory" / "store.sqlite3") as conn:
+        entity_rows = " ".join(
+            row[0] for row in conn.execute("SELECT payload FROM records WHERE collection='entities'")
+        )
+        relation_rows = " ".join(
+            row[0] for row in conn.execute("SELECT payload FROM records WHERE collection='relations'")
+        )
+    assert "diabetes" not in entity_rows.lower()
+    assert "ByteDance" not in entity_rows
+    assert deleted.id not in relation_rows
 
     loaded = Memory.open(path)
 

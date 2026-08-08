@@ -163,12 +163,15 @@ Engram 的数据模型在 `engram/types.py`。理解这些对象，就能理解�
 
 | 对象 | 产生位置 | 保存位置 | 被谁消费 | 关键字段/不变量 |
 | --- | --- | --- | --- | --- |
-| `Episode` | `Memory.add`, `Memory.remember`, import | `episodes_doc`, `episodes_vec`, persistence `episodes.jsonl` | consolidation、raw retrieval、summary、eval | 原始无损事件；`event_time` 是世界时间，`ingested_at` 是事务时间；不因抽取失败丢弃 |
-| `Fact` | `RuleExtractor`, `LLMExtractor`, `add_fact` | `fact_store`, `cold_store`, persistence `facts.jsonl` | hybrid retrieval、graph、profile、history、context blocks | 原子 `(subject, predicate, object)`；双时间轴；contradiction 只失效不覆盖；保留 provenance |
-| `Entity` | `GraphBuilder.add_fact` | `graph`, persistence `entities.jsonl` | graph retrieval、multi-hop、graph API | 以 `user_id + canonical name` 定位；可带 aliases |
-| `Relation` | `GraphBuilder.add_fact` | `graph`, persistence `relations.jsonl` | graph proximity、multi-hop、graph visualization | 由 Fact 投影；携带 `fact_id` 和双时间过滤能力 |
-| `WorkingMemory` | `remember_working`, ephemeral `remember` | `working_mem`, persistence `working.jsonl` | `lean_context`, agent status, session report | 会话/TTL 范围内生效，不自动变成长期 profile |
-| `Conflict` | `_detect_conflicts`, manual conflict tools | `conflicts`, persistence `conflicts.jsonl` | conflict UI/API/MCP | 对高风险矛盾等待用户确认，不静默破坏记忆 |
+| `Episode` | `Memory.add`, `Memory.remember`, import | `episodes_doc`, `episodes_vec`, SQLite `episodes` collection | consolidation、raw retrieval、summary、eval | 原始无损事件；`event_time` 是世界时间，`ingested_at` 是事务时间；不因抽取失败丢弃 |
+| `Fact` | `RuleExtractor`, `LLMExtractor`, `add_fact` | `fact_store`, `cold_store`, SQLite `facts` collection | hybrid retrieval、graph、profile、history、context blocks | 原子 `(subject, predicate, object)`；双时间轴；contradiction 只失效不覆盖；保留 provenance |
+| `Entity` | `GraphBuilder.add_fact` | `graph`, SQLite `entities` collection | graph retrieval、multi-hop、graph API | 以 `user_id + canonical name` 定位；可带 aliases |
+| `Relation` | `GraphBuilder.add_fact` | `graph`, SQLite `relations` collection | graph proximity、multi-hop、graph visualization | 由 Fact 投影；携带 `fact_id` 和双时间过滤能力 |
+| `WorkingMemory` | `remember_working`, ephemeral `remember` | `working_mem`, SQLite `working` collection | `lean_context`, agent status, session report | 会话/TTL 范围内生效，不自动变成长期 profile |
+| `Conflict` | `_detect_conflicts`, manual conflict tools | `conflicts`, SQLite `conflicts` collection | conflict UI/API/MCP | 对高风险矛盾等待用户确认，不静默破坏记忆 |
+| `TwinContract` + history | owner control plane | SQLite private runtime state | prompt-safe context、authorization | 目标/原则/边界版本不可变；普通 agent 看不到隐藏控制字段 |
+| `CapabilityGrant` | owner grant/revoke | `CapabilityRegistry`, SQLite private runtime state | deterministic authorization | default deny；`observe/draft/execute`；segment scope；只保存 credential reference |
+| `ActionRequest/Decision/Record` | agent request, owner confirm, executor receipt | SQLite private runtime state | owner audit / executor preflight | authorization 不执行；owner 独立确认；5 分钟失效；合同/grant 变化后不可执行 |
 
 ### 3.1 双时间轴
 
@@ -355,21 +358,44 @@ Engram 的 core 接口在 `engram/store/base.py`，默认实现是内存 store�
 持久化在 `engram/store/persist.py`：
 
 ```text
-manifest.json
-episodes.jsonl
-facts.jsonl
-entities.jsonl
-relations.jsonl
-working.jsonl
-conflicts.jsonl
+manifest.json      # schema/embedder/generation/counts，无个人正文
+store.sqlite3      # canonical records + private runtime state
+.lock              # namespace migration/write lock
+
+<lance-base>/                                      # 0700
+├── .engram-lancedb.json                         # base ownership marker, 0600
+└── namespaces/store-<canonical-path-hash>/       # 可选派生向量索引, 0700
+    ├── .engram-lancedb.json                     # canonical namespace binding, 0600
+    └── ...                                      # Lance tables/fragments
 ```
 
 持久化约束：
 
 1. embedder id/dim 会写入 manifest，避免向量维度不兼容。
-2. `Memory.save(path)` 只保存状态，不保存 LLM/embedder 对象本身。
-3. `Memory.open(path, **kwargs)` 用当前传入的后端能力恢复 store。
-4. `MemoryService` 按 user/namespace 隔离路径，并用 file lock 避免并发写坏。
+2. 六类对象以 `(collection,id)` 事务 UPSERT/DELETE；未改变的 row 不更新，不再每次全量重写 JSONL。
+3. SQLite 使用 rollback journal + `synchronous=FULL` + `secure_delete=ON`；目录为 0700，文件为 0600。
+4. 是否空库只在取得 lock 后判断；即使首次提交后尚无 manifest，也会从 DB recovery metadata 重建，绝不把已提交记忆当成空库。
+5. 随机持久 `store_id` 与每代随机 `commit_id` 严格绑定 DB/manifest；相同 generation/count 的跨库混配也拒绝。
+6. `Memory.open` 将 generation 绑定到实例；`save` 在 `BEGIN IMMEDIATE` 内乐观比对，stale/unbound writer 抛 `ConcurrentWriteError`，不全量覆盖新提交。
+7. store 目录、DB、manifest、lock、sidecar 与旧 JSONL 必须是 direct regular file；拒绝 symlink/hardlink/非普通文件，旧文件清理使用 no-follow + inode 校验。
+8. schema-v1 JSONL 仍可读；首次成功迁移后覆写并删除旧明文文件，中断迁移可幂等重试。
+9. `Memory.save/open` 不序列化 LLM/embedder 对象；`MemoryService` 仍按 namespace 隔离并使用 file lock。
+10. LanceDB 是可重建的派生索引，不是 canonical truth。其显式 base 和最终根目录都强制 0700，
+    owner marker 强制 0600；拒绝 symlink/非目录、标记链接、未标记的非空旧库和 namespace 绑定冲突。
+11. `Memory.open` 将显式 `data_path` 视为私有基目录，按 canonical snapshot 规范路径派生稳定子
+    namespace；同一 snapshot 可重开，不同 snapshot 不共用 Lance tables。
+12. canonical snapshot 为空/丢失但已绑定 Lance namespace 仍有向量时，打开必须 fail closed；
+    不允许派生索引在 canonical truth 缺席时“复活”个人记忆。
+
+### 6.1 存储隐私与删除边界
+
+0700/0600 只提供本机访问控制，不是应用层静态加密。个人记忆部署必须依赖 FileVault、
+LUKS/dm-crypt 或等效加密卷，并将备份、snapshot、swap/休眠文件和同步副本纳入同一策略。
+
+LanceDB `table.delete` 是当前 live table 的逻辑删除，不证明旧 fragments、APFS/云盘 snapshot、
+Time Machine/其他备份、云同步版本历史或 SSD flash translation layer 中的旧字节已物理擦除。
+verified erasure receipt 只能证明声明范围内的当前 canonical store/可查索引不再可达，不得扩大为
+物理介质保证。完整运维要求见 [`storage-privacy-boundary.zh-CN.md`](storage-privacy-boundary.zh-CN.md)。
 
 ## 7. 读取链路总览
 
@@ -621,13 +647,16 @@ flowchart TD
 | 记住消息 | `remember` | `/v1/remember`, MCP remember |
 | 批量导入 | `import_` | `/v1/import` |
 | 回忆 | `recall` | `/v1/recall`, MCP recall/search |
-| 用户事实增删改 | `add_fact`, `update_fact`, `delete_fact` | fact APIs |
+| 用户事实增删改 | `add_fact`, `update_fact`, `delete_fact` | fact APIs；来源级删除先预览影响再确认 |
 | focus/policy | `set_focus`, `set_policy` | focus/policy APIs |
 | working memory | `add_working`, `working_memory`, `clear_working` | working APIs |
 | 冲突处理 | `conflicts`, `resolve_conflict` | conflicts APIs |
 | 会话收尾 | `close_session`, `session_report`, `sessions` | session APIs |
 | 图谱查看 | `graph` | graph API |
 | 导出/统计 | `export`, `stats`, `memories` | export/stats APIs |
+| 分身合同 | `twin_context`, `twin_contract`, `revise_twin_contract` | agent-safe GET + owner-only control API |
+| 分身权限 | `capabilities`, `grant_capability`, `revoke_capability` | 脱敏 agent 视图 + owner-only grant/revoke |
+| 分身行动 | `authorize_twin_action`, `confirm_twin_action`, `twin_decision`, `record_twin_action` | agent request / owner confirm / executor preflight + audit |
 
 服务层职责：
 
@@ -651,7 +680,7 @@ flowchart LR
     T --> D["prefix--sha256 digest directory"]
     D --> LOCK["thread lock + file lock"]
     LOCK --> MEM["Memory.open / operation / save"]
-    MEM --> JSONL["manifest + JSONL collections"]
+    MEM --> JSONL["manifest + SQLite canonical store"]
 ```
 
 | 环节 | 0.1.0 规则 | 失败行为 |
@@ -666,6 +695,29 @@ flowchart LR
 
 这条链路没有改变 `Memory` 内部的抽取、冲突、图构建或检索算法。工程发布结果记录到
 `results/commercial_release_0_1_0_validation.jsonl`，不能被当作算法效果提升证据。
+
+### 10.2 个人分身的信任分层
+
+```mermaid
+flowchart LR
+    MODEL["Agent / model\nENGRAM_API_KEYS"] --> SAFE["prompt-safe contract\nredacted grants"]
+    MODEL --> REQ["authorize request\nnever executes"]
+    OWNER["Human owner\nENGRAM_OWNER_KEYS"] --> GOV["contract revision\ngrant / revoke"]
+    REQ --> PEND["requires_confirmation"]
+    OWNER --> CONF["confirm pending decision"]
+    PEND --> CONF
+    CONF --> SHORT["allowed decision\nvalid <= 5 minutes"]
+    SHORT --> CHECK["executor GET decision\nexecutable=true?"]
+    CHECK --> EXEC["external trusted executor"]
+    EXEC --> AUDIT["record outcome"]
+```
+
+1. `ENGRAM_API_KEYS` 是 agent/app 面；`ENGRAM_OWNER_KEYS` 是独立的 owner 控制面，两者 token 禁止复用。
+2. agent GET 只返回 `to_model_context()` 和脱敏 grant；credential lookup reference、scope/boundary 控制不进 prompt。
+3. contract revision、grant/revoke 和 pending decision confirmation 仅 owner 鉴权路由可调。MCP 不注册这些工具。
+4. agent 不能传 `human_confirmed=true`。owner 只能确认服务端已存在且未过期的 pending decision。
+5. executor 行动前必须重新读取 decision；TTL、contract version、grant 或 boundary 任一变化都使 `executable=false`。
+6. Engram 只实现记忆与治理底座，不内置外部工具执行器、凭据保险库、语音/形象克隆或后台自主任务。
 
 ## 11. Eval harness 数据流
 
@@ -704,6 +756,10 @@ flowchart TD
 5. 失败/错误。
 6. 复现实验命令。
 
+`eval/twin_eval.py` 另外覆盖 default deny、scope 绕过、owner confirmation、grant lifecycle、
+contract version、audit persistence 与 provenance erasure 等 16 个确定性不变量。它是控制面回归，
+不是 LongMemEval/公开 benchmark，不能用 16/16 推导效果排名。
+
 ## 12. 改动验收分层
 
 用户已经明确要求：算法变动必须有真实数据验收，实验要保存下来。但每次小改动不一定跑完整 500。
@@ -720,6 +776,7 @@ flowchart TD
 
 ```bash
 pytest
+python eval/twin_eval.py
 python eval/ablate_features.py
 python eval/bench.py --help
 python eval/validate_results.py
@@ -784,6 +841,7 @@ python eval/validate_results.py
 | 服务层 | `engram/service.py::MemoryService` |
 | HTTP API | `engram/server/app.py` |
 | MCP tools | `engram/mcp/server.py` |
+| 个人分身治理 | `engram/twin.py`, `engram/memory.py`, `engram/service.py` |
 | 持久化格式 | `engram/store/persist.py` |
 | 命名空间安全映射 | `engram/service.py::_safe_user`, `_contained_child`, `_legacy_paths` |
 | 容器与单节点部署 | `Dockerfile`, `deploy/docker-compose.yml`, `deploy/engram.service` |
@@ -805,6 +863,10 @@ python eval/validate_results.py
 9. 不在公开文案里使用未经可复现验证的 “SOTA/#1/1M” 等主张。
 10. 不把原始 tenant/user 文本直接拼进文件路径；删除目标必须是数据根目录的已验证子项。
 11. 生产 HTTP 服务不默认开启 open/anonymous；liveness 不能替代 readiness。
+12. 不把 LanceDB 逻辑删除、SQLite `secure_delete` 或 owner-only 文件权限表述为旧 fragments、
+    SSD/APFS snapshot、备份或云同步副本的物理擦除；静态加密由加密卷提供。
+13. 不让 agent/model 修改 Twin Contract、自授权限、读凭据引用或自报人工确认；authorization 永远不执行。
+14. 不把 `eval/twin_eval.py` 的 deterministic invariant 通过率当作对外能力 benchmark 或世界排名。
 
 ## 17. 以后如何维护这份报告
 

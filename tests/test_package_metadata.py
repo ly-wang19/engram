@@ -32,6 +32,7 @@ def test_package_metadata_links_to_real_repository():
     assert 'Issues = "https://github.com/ly-wang19/engram/issues"' in pyproject
     assert 'license-files = ["LICENSE", "COMMERCIAL-LICENSE.md"]' in pyproject
     assert 'engram-quickstart = "engram.quickstart:main"' in pyproject
+    assert 'mcp = ["mcp>=1.2,<2"' in pyproject
     assert "from engram.quickstart import main" in quickstart_example
     assert '"-m", "engram.quickstart"' in zero_setup
     for module in (
@@ -73,10 +74,10 @@ def test_zero_setup_contract_mentions_installed_quickstart():
         assert "engram-quickstart" in text, f"{rel} must include the installed quickstart contract"
 
 
-def test_console_seed_default_names_jsonl_stores_not_pickles():
+def test_console_seed_default_names_sqlite_stores_not_pickles():
     seed_console = (ROOT / "eval/seed_console.py").read_text(encoding="utf-8")
 
     assert 'default="/tmp/console_stores"' in seed_console
-    assert "JSONL store directories" in seed_console
+    assert "SQLite store directories" in seed_console
     assert "console_pkls" not in seed_console
     assert "sys.path.insert(0, str(ROOT))" in seed_console

@@ -16,7 +16,7 @@
 
 **Primary Dependencies**: 核心零硬依赖；FastAPI/Uvicorn/Pydantic 为可选 server extra；前端沿用 React/Vite；不新增运行时重依赖。
 
-**Storage**: 现有 JSONL + manifest 目录快照，单租户一个目录；保留可信旧 pickle 显式迁移能力。
+**Storage**: stdlib SQLite + manifest 增量快照，单租户一个目录；旧 JSONL 首次读取后安全迁移，保留可信旧 pickle 显式迁移能力。
 
 **Testing**: pytest、`scripts/check_zero_setup.py`、TypeScript typecheck/node:test/build、前端 build、Python wheel/sdist 检查、Docker Compose 重启持久化冒烟。
 

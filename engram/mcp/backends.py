@@ -31,6 +31,7 @@ class Backend(Protocol):
         session_id: str | None = None,
         as_of: float | None = None,
         redact_sensitive: bool = False,
+        known_at: float | None = None,
     ) -> dict: ...
     async def close_session(
         self,
@@ -38,6 +39,7 @@ class Backend(Protocol):
         summarize: bool = True,
         clear_working: bool = True,
     ) -> dict: ...
+    async def erase_session(self, session_id: str, confirm: bool = False) -> dict: ...
     async def session_report(
         self,
         session_id: str,
@@ -59,6 +61,38 @@ class Backend(Protocol):
         track: list[str] | None = None,
         mute: list[str] | None = None,
     ) -> dict: ...
+    async def twin_contract(self) -> dict: ...
+    async def revise_twin_contract(self, patch: dict[str, Any]) -> dict: ...
+    async def capabilities(self) -> dict: ...
+    async def grant_capability(
+        self,
+        capability: str,
+        permission: str,
+        scopes: list[str],
+        *,
+        credential_ref: dict[str, str] | None = None,
+        expires_at: float | None = None,
+        provenance: list[str] | None = None,
+    ) -> dict: ...
+    async def revoke_capability(self, grant_id: str) -> dict: ...
+    async def authorize_twin_action(
+        self,
+        capability: str,
+        permission: str,
+        resource: str,
+        *,
+        description: str = "",
+        high_risk: bool = False,
+        external_write: bool = False,
+    ) -> dict: ...
+    async def record_twin_action(
+        self,
+        decision_id: str,
+        outcome: str,
+        *,
+        executed_at: float | None = None,
+        provenance: list[str] | None = None,
+    ) -> dict: ...
     async def add_fact(
         self,
         subject: str,
@@ -76,7 +110,7 @@ class Backend(Protocol):
         sensitive: bool | None = None,
         category: str | None = None,
     ) -> dict | None: ...
-    async def delete_fact(self, fact_id: str) -> dict: ...
+    async def delete_fact(self, fact_id: str, confirm: bool = False) -> dict: ...
     async def import_(self, data: Any, format: str = "auto") -> dict: ...
     async def export(self, include_sensitive: bool = False) -> dict: ...
     async def forget(self) -> dict: ...
@@ -106,6 +140,7 @@ class LocalBackend:
         session_id: str | None = None,
         as_of: float | None = None,
         redact_sensitive: bool = False,
+        known_at: float | None = None,
     ) -> dict:
         return await asyncio.to_thread(
             self.svc.recall,
@@ -116,6 +151,7 @@ class LocalBackend:
             session_id=session_id,
             as_of=as_of,
             redact_sensitive=redact_sensitive,
+            known_at=known_at,
         )
 
     async def close_session(
@@ -130,6 +166,14 @@ class LocalBackend:
             session_id,
             summarize=summarize,
             clear_working=clear_working,
+        )
+
+    async def erase_session(self, session_id: str, confirm: bool = False) -> dict:
+        return await asyncio.to_thread(
+            self.svc.erase_session,
+            self.ns,
+            session_id,
+            confirm,
         )
 
     async def session_report(
@@ -169,6 +213,77 @@ class LocalBackend:
     ) -> dict:
         return await asyncio.to_thread(self.svc.set_focus, self.ns, track=track, mute=mute)
 
+    async def twin_contract(self) -> dict:
+        return await asyncio.to_thread(self.svc.twin_contract, self.ns)
+
+    async def revise_twin_contract(self, patch: dict[str, Any]) -> dict:
+        return await asyncio.to_thread(self.svc.revise_twin_contract, self.ns, patch)
+
+    async def capabilities(self) -> dict:
+        return await asyncio.to_thread(self.svc.capabilities, self.ns)
+
+    async def grant_capability(
+        self,
+        capability: str,
+        permission: str,
+        scopes: list[str],
+        *,
+        credential_ref: dict[str, str] | None = None,
+        expires_at: float | None = None,
+        provenance: list[str] | None = None,
+    ) -> dict:
+        return await asyncio.to_thread(
+            self.svc.grant_capability,
+            self.ns,
+            capability,
+            permission,
+            scopes,
+            credential_ref=credential_ref,
+            expires_at=expires_at,
+            provenance=provenance,
+        )
+
+    async def revoke_capability(self, grant_id: str) -> dict:
+        return await asyncio.to_thread(self.svc.revoke_capability, self.ns, grant_id)
+
+    async def authorize_twin_action(
+        self,
+        capability: str,
+        permission: str,
+        resource: str,
+        *,
+        description: str = "",
+        high_risk: bool = False,
+        external_write: bool = False,
+    ) -> dict:
+        return await asyncio.to_thread(
+            self.svc.authorize_twin_action,
+            self.ns,
+            capability,
+            permission,
+            resource,
+            description=description,
+            high_risk=high_risk,
+            external_write=external_write,
+        )
+
+    async def record_twin_action(
+        self,
+        decision_id: str,
+        outcome: str,
+        *,
+        executed_at: float | None = None,
+        provenance: list[str] | None = None,
+    ) -> dict:
+        return await asyncio.to_thread(
+            self.svc.record_twin_action,
+            self.ns,
+            decision_id,
+            outcome,
+            executed_at=executed_at,
+            provenance=provenance,
+        )
+
     async def add_fact(
         self,
         subject: str,
@@ -207,8 +322,13 @@ class LocalBackend:
             category,
         )
 
-    async def delete_fact(self, fact_id: str) -> dict:
-        return await asyncio.to_thread(self.svc.delete_fact, self.ns, fact_id)
+    async def delete_fact(self, fact_id: str, confirm: bool = False) -> dict:
+        return await asyncio.to_thread(
+            self.svc.delete_fact,
+            self.ns,
+            fact_id,
+            confirm,
+        )
 
     async def import_(self, data: Any, format: str = "auto") -> dict:
         return await asyncio.to_thread(self.svc.import_, self.ns, None, format, data)
@@ -282,12 +402,15 @@ class RemoteBackend:
         session_id: str | None = None,
         as_of: float | None = None,
         redact_sensitive: bool = False,
+        known_at: float | None = None,
     ) -> dict:
         body = {"query": query, "lean": lean, "n_chunks": n_chunks}
         if session_id is not None:
             body["session_id"] = session_id
         if as_of is not None:
             body["as_of"] = as_of
+        if known_at is not None:
+            body["known_at"] = known_at
         if redact_sensitive:
             body["redact_sensitive"] = True
         return await self._post("/v1/recall", body)
@@ -302,6 +425,12 @@ class RemoteBackend:
             "session_id": session_id,
             "summarize": summarize,
             "clear_working": clear_working,
+        })
+
+    async def erase_session(self, session_id: str, confirm: bool = False) -> dict:
+        return await self._post("/v1/sessions/erase", {
+            "session_id": session_id,
+            "confirm": confirm,
         })
 
     async def session_report(
@@ -347,6 +476,77 @@ class RemoteBackend:
             body["mute"] = mute
         return await self._put("/v1/focus", body)
 
+    async def twin_contract(self) -> dict:
+        return await self._get("/v1/twin/contract")
+
+    async def revise_twin_contract(self, patch: dict[str, Any]) -> dict:
+        return await self._put("/v1/twin/contract", patch)
+
+    async def capabilities(self) -> dict:
+        return await self._get("/v1/twin/capabilities")
+
+    async def grant_capability(
+        self,
+        capability: str,
+        permission: str,
+        scopes: list[str],
+        *,
+        credential_ref: dict[str, str] | None = None,
+        expires_at: float | None = None,
+        provenance: list[str] | None = None,
+    ) -> dict:
+        body: dict[str, Any] = {
+            "capability": capability,
+            "permission": permission,
+            "scopes": scopes,
+            "provenance": provenance or [],
+        }
+        if credential_ref is not None:
+            body["credential_ref"] = credential_ref
+        if expires_at is not None:
+            body["expires_at"] = expires_at
+        return await self._post("/v1/twin/capabilities", body)
+
+    async def revoke_capability(self, grant_id: str) -> dict:
+        encoded = quote(grant_id, safe="")
+        return await self._post(f"/v1/twin/capabilities/{encoded}/revoke", {})
+
+    async def authorize_twin_action(
+        self,
+        capability: str,
+        permission: str,
+        resource: str,
+        *,
+        description: str = "",
+        high_risk: bool = False,
+        external_write: bool = False,
+    ) -> dict:
+        return await self._post("/v1/twin/authorize", {
+            "capability": capability,
+            "permission": permission,
+            "resource": resource,
+            "description": description,
+            "high_risk": high_risk,
+            "external_write": external_write,
+        })
+
+    async def record_twin_action(
+        self,
+        decision_id: str,
+        outcome: str,
+        *,
+        executed_at: float | None = None,
+        provenance: list[str] | None = None,
+    ) -> dict:
+        body: dict[str, Any] = {
+            "decision_id": decision_id,
+            "outcome": outcome,
+            "provenance": provenance or [],
+        }
+        if executed_at is not None:
+            body["executed_at"] = executed_at
+        return await self._post("/v1/twin/actions/record", body)
+
     async def add_fact(
         self,
         subject: str,
@@ -384,8 +584,9 @@ class RemoteBackend:
             body["category"] = category
         return await self._patch(f"/v1/facts/{quote(fact_id, safe='')}", body)
 
-    async def delete_fact(self, fact_id: str) -> dict:
-        return await self._delete(f"/v1/facts/{quote(fact_id, safe='')}")
+    async def delete_fact(self, fact_id: str, confirm: bool = False) -> dict:
+        query = urlencode({"confirm": "true" if confirm else "false"})
+        return await self._delete(f"/v1/facts/{quote(fact_id, safe='')}?{query}")
 
     async def import_(self, data: Any, format: str = "auto") -> dict:
         return await self._post("/v1/import", {"data": data, "format": format})

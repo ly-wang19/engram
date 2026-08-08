@@ -4,6 +4,7 @@ import multiprocessing
 import os
 import queue
 import shutil
+import sqlite3
 from pathlib import Path
 
 from engram import Memory
@@ -403,14 +404,19 @@ def test_service_fact_edit_delete_persists_clean_graph_files(tmp_path):
     edited = svc.add_fact("u", "user", "works_at", "ByteDance")["id"]
 
     assert svc.update_fact("u", edited, object="Moonshot AI")["ok"] is True
-    assert svc.delete_fact("u", deleted)["ok"] is True
+    assert svc.delete_fact("u", deleted, confirm=True)["ok"] is True
 
     store = Path(svc._path("u"))
-    entities_jsonl = (store / "entities.jsonl").read_text(encoding="utf-8")
-    relations_jsonl = (store / "relations.jsonl").read_text(encoding="utf-8")
-    assert "diabetes" not in entities_jsonl.lower()
-    assert "ByteDance" not in entities_jsonl
-    assert deleted not in relations_jsonl
+    with sqlite3.connect(store / "store.sqlite3") as conn:
+        entity_rows = " ".join(
+            row[0] for row in conn.execute("SELECT payload FROM records WHERE collection='entities'")
+        )
+        relation_rows = " ".join(
+            row[0] for row in conn.execute("SELECT payload FROM records WHERE collection='relations'")
+        )
+    assert "diabetes" not in entity_rows.lower()
+    assert "ByteDance" not in entity_rows
+    assert deleted not in relation_rows
 
     reloaded = MemoryService(data_dir=str(tmp_path), embedder_name="hashing")
     graph = reloaded.graph("u")

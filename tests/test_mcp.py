@@ -36,14 +36,19 @@ async def call(name: str, **args) -> str:
 @pytest.mark.asyncio
 async def test_tools_are_registered_with_flat_schema():
     tools = {t.name: t for t in await S.mcp.list_tools()}
-    assert {"engram_remember", "engram_recall", "engram_close_session", "engram_session_report",
+    assert {"engram_remember", "engram_recall", "engram_close_session", "engram_erase_session",
+            "engram_session_report",
             "engram_list_sessions", "engram_search",
             "engram_list_facts", "engram_profile", "engram_agent_status", "engram_stats",
             "engram_add_fact", "engram_update_fact", "engram_delete_fact", "engram_get_focus",
-            "engram_set_focus", "engram_import", "engram_export", "engram_forget"} <= set(tools)
+            "engram_set_focus", "engram_get_twin_contract", "engram_list_capabilities",
+            "engram_authorize_twin_action", "engram_record_twin_action",
+            "engram_import", "engram_export", "engram_forget"} <= set(tools)
     # flat top-level params (not nested under "params")
     props = tools["engram_recall"].inputSchema.get("properties", {})
-    assert "query" in props and "max_chunks" in props and "session_id" in props and "as_of" in props
+    assert {
+        "query", "max_chunks", "session_id", "as_of", "known_at"
+    } <= set(props)
     assert "redact_sensitive" in props
     remember_props = tools["engram_remember"].inputSchema.get("properties", {})
     assert "content" in remember_props and "session_id" in remember_props and "scope" in remember_props
@@ -57,10 +62,20 @@ async def test_tools_are_registered_with_flat_schema():
     assert "session_id" in status_props
     report_props = tools["engram_session_report"].inputSchema.get("properties", {})
     assert {"session_id", "include_sensitive"} <= set(report_props)
+    erase_session_props = tools["engram_erase_session"].inputSchema.get("properties", {})
+    assert {"session_id", "confirm"} <= set(erase_session_props)
     sessions_props = tools["engram_list_sessions"].inputSchema.get("properties", {})
     assert {"limit", "offset", "q"} <= set(sessions_props)
     search_props = tools["engram_search"].inputSchema.get("properties", {})
-    assert "as_of" in search_props and "redact_sensitive" in search_props
+    assert {"as_of", "known_at", "redact_sensitive"} <= set(search_props)
+    authorize_props = tools["engram_authorize_twin_action"].inputSchema.get("properties", {})
+    assert {"capability", "permission", "resource", "high_risk", "external_write"} <= set(
+        authorize_props
+    )
+    assert "human_confirmed" not in authorize_props
+    record_props = tools["engram_record_twin_action"].inputSchema.get("properties", {})
+    assert {"decision_id", "outcome", "provenance"} <= set(record_props)
+    assert "executed_at" not in record_props
     assert tools["engram_recall"].annotations.readOnlyHint is True
     assert tools["engram_get_focus"].annotations.readOnlyHint is True
     assert tools["engram_set_focus"].annotations.readOnlyHint is False
@@ -68,9 +83,113 @@ async def test_tools_are_registered_with_flat_schema():
     assert tools["engram_agent_status"].annotations.readOnlyHint is True
     assert tools["engram_session_report"].annotations.readOnlyHint is True
     assert tools["engram_list_sessions"].annotations.readOnlyHint is True
+    assert tools["engram_get_twin_contract"].annotations.readOnlyHint is True
+    assert tools["engram_list_capabilities"].annotations.readOnlyHint is True
+    assert tools["engram_authorize_twin_action"].annotations.readOnlyHint is False
+    assert tools["engram_record_twin_action"].annotations.readOnlyHint is False
     assert tools["engram_export"].annotations.readOnlyHint is True
     assert tools["engram_close_session"].annotations.readOnlyHint is False
+    assert tools["engram_erase_session"].annotations.destructiveHint is True
     assert tools["engram_forget"].annotations.destructiveHint is True
+
+
+@pytest.mark.asyncio
+async def test_twin_tools_default_deny_hide_credentials_and_never_self_confirm(local_backend):
+    local_backend.revise_twin_contract(
+        "me",
+        {
+            "goals": [{"title": "Protect focus"}],
+            "boundaries": [
+                {
+                    "description": "Never change the private calendar without approval",
+                    "effect": "require_confirmation",
+                    "capability": "calendar",
+                    "scopes": ["calendars/private/**"],
+                    "minimum_permission": "execute",
+                }
+            ],
+        },
+    )
+    contract = await call("engram_get_twin_contract", response_format="json")
+    assert "Protect focus" in contract
+    assert "calendars/private/**" not in contract
+    assert '"effect"' not in contract
+
+    denied = json.loads(await call(
+        "engram_authorize_twin_action",
+        capability="calendar",
+        permission="execute",
+        resource="calendars/private/events/42",
+        response_format="json",
+    ))
+    assert denied["decision"]["status"] == "denied"
+    assert denied["executed"] is False
+
+    local_backend.grant_capability(
+        "me",
+        capability="calendar",
+        permission="execute",
+        scopes=["calendars/private/**"],
+        credential_ref={"provider": "vault", "key": "calendar/private"},
+    )
+    listed = await call("engram_list_capabilities", response_format="json")
+    assert '"credential_configured": true' in listed
+    assert "credential_ref" not in listed
+    assert "calendar/private" not in listed
+    assert '"provider"' not in listed
+
+    pending = json.loads(await call(
+        "engram_authorize_twin_action",
+        capability="calendar",
+        permission="execute",
+        resource="calendars/private/events/42",
+        external_write=True,
+        response_format="json",
+    ))
+    assert pending["decision"]["status"] == "requires_confirmation"
+    assert pending["executed"] is False
+    rejected_record = await call(
+        "engram_record_twin_action",
+        decision_id=pending["decision"]["id"],
+        outcome="must not be recorded as executed",
+    )
+    assert "Could not record" in rejected_record
+
+
+@pytest.mark.asyncio
+async def test_twin_tool_records_only_an_existing_allowed_decision(local_backend):
+    local_backend.grant_capability(
+        "me",
+        capability="notes",
+        permission="draft",
+        scopes=["notes/personal/**"],
+    )
+    allowed = json.loads(await call(
+        "engram_authorize_twin_action",
+        capability="notes",
+        permission="draft",
+        resource="notes/personal/weekly-plan",
+        response_format="json",
+    ))
+    assert allowed["decision"]["status"] == "allowed"
+    assert allowed["executed"] is False
+
+    recorded = json.loads(await call(
+        "engram_record_twin_action",
+        decision_id=allowed["decision"]["id"],
+        outcome="Trusted executor prepared a reversible draft",
+        provenance=["executor:notes-1"],
+        response_format="json",
+    ))
+    assert recorded["ok"] is True
+    assert recorded["action"]["executed_at"] > allowed["decision"]["decided_at"]
+
+    missing = await call(
+        "engram_record_twin_action",
+        decision_id="decision_missing",
+        outcome="should not be accepted",
+    )
+    assert "Could not record" in missing
 
 
 @pytest.mark.asyncio
@@ -184,6 +303,31 @@ async def test_update_and_delete_fact_tools(local_backend):
     assert json.loads(deleted)["ok"] is True
     facts_after = await call("engram_list_facts")
     assert "No facts stored yet" in facts_after
+
+
+@pytest.mark.asyncio
+async def test_erase_session_tool_requires_confirmation_and_returns_receipt(local_backend):
+    await call(
+        "engram_remember",
+        content="temporary private session marker",
+        session_id="erase-me",
+        scope="working",
+    )
+
+    guard = await call("engram_erase_session", session_id="erase-me")
+    assert "confirm=true" in guard
+    raw = await call(
+        "engram_erase_session",
+        session_id="erase-me",
+        confirm=True,
+        response_format="json",
+    )
+    data = json.loads(raw)
+    assert data["ok"] is True
+    assert data["erasure"]["verified"] is True
+    assert data["erasure"]["storage_verified"] is True
+    assert data["erasure"]["counts"]["episodes"] == 1
+    assert data["erasure"]["counts"]["working"] == 1
 
 
 @pytest.mark.asyncio
@@ -360,6 +504,42 @@ async def test_recall_and_search_support_as_of(local_backend):
 
 
 @pytest.mark.asyncio
+async def test_recall_and_search_support_known_at(local_backend):
+    from engram.types import Fact
+
+    mem = local_backend.get("me")
+    fact = Fact(
+        "user",
+        "works_at",
+        "Acme",
+        user_id="me",
+        valid_at=10.0,
+        created_at=20.0,
+        embedding=mem.embedder.embed("user works at Acme"),
+    )
+    mem.fact_store.upsert(fact.id, fact.embedding or [], fact)
+    mem.engine.graph_builder.add_fact(fact)
+
+    visible = json.loads(await call(
+        "engram_search",
+        query="Where does the user work?",
+        as_of=15.0,
+        response_format="json",
+    ))
+    assert visible["answer"] == "Acme"
+
+    hidden = json.loads(await call(
+        "engram_search",
+        query="Where does the user work?",
+        as_of=15.0,
+        known_at=15.0,
+        response_format="json",
+    ))
+    assert hidden["known_at"] == 15.0
+    assert hidden["facts"] == []
+
+
+@pytest.mark.asyncio
 async def test_recall_and_search_support_sensitive_redaction(local_backend):
     await call("engram_add_fact", predicate="has_disease", object="diabetes")
     await call("engram_add_fact", predicate="works_at", object="Acme")
@@ -409,6 +589,7 @@ async def test_remote_backend_forwards_as_of():
         lean=False,
         session_id="s1",
         as_of=1_700_864_000.0,
+        known_at=1_700_900_000.0,
         redact_sensitive=True,
     )
 
@@ -416,6 +597,7 @@ async def test_remote_backend_forwards_as_of():
     assert url == "http://engram.test/v1/recall"
     assert body["session_id"] == "s1"
     assert body["as_of"] == 1_700_864_000.0
+    assert body["known_at"] == 1_700_900_000.0
     assert body["redact_sensitive"] is True
     assert headers["Authorization"] == "Bearer sk-test"
 
@@ -476,14 +658,14 @@ async def test_remote_backend_updates_and_deletes_fact():
     client = FakeClient()
     backend = RemoteBackend("http://engram.test", key="sk-test", client=client)
     updated = await backend.update_fact("fact/a b", object="Moonshot AI", sensitive=False)
-    deleted = await backend.delete_fact("fact/a b")
+    deleted = await backend.delete_fact("fact/a b", confirm=True)
 
     patch_url, body, patch_headers = client.patches[-1]
     assert patch_url == "http://engram.test/v1/facts/fact%2Fa%20b"
     assert body == {"object": "Moonshot AI", "sensitive": False}
     assert patch_headers["Authorization"] == "Bearer sk-test"
     delete_url, delete_headers = client.deletes[-1]
-    assert delete_url == "http://engram.test/v1/facts/fact%2Fa%20b"
+    assert delete_url == "http://engram.test/v1/facts/fact%2Fa%20b?confirm=true"
     assert delete_headers["Authorization"] == "Bearer sk-test"
     assert updated["ok"] is True and deleted["ok"] is True
 
@@ -558,6 +740,34 @@ async def test_remote_backend_closes_session():
 
 
 @pytest.mark.asyncio
+async def test_remote_backend_erases_session_with_confirmation():
+    class FakeResponse:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"ok": True, "erasure": {"storage_verified": True}}
+
+    class FakeClient:
+        def __init__(self):
+            self.posts = []
+
+        async def post(self, url, json=None, headers=None):
+            self.posts.append((url, json, headers))
+            return FakeResponse()
+
+    client = FakeClient()
+    backend = RemoteBackend("http://engram.test", key="sk-test", client=client)
+    data = await backend.erase_session("private/session", confirm=True)
+
+    url, body, headers = client.posts[-1]
+    assert url == "http://engram.test/v1/sessions/erase"
+    assert body == {"session_id": "private/session", "confirm": True}
+    assert headers["Authorization"] == "Bearer sk-test"
+    assert data["erasure"]["storage_verified"] is True
+
+
+@pytest.mark.asyncio
 async def test_remote_backend_fetches_session_report():
     class FakeResponse:
         def raise_for_status(self):
@@ -585,6 +795,88 @@ async def test_remote_backend_fetches_session_report():
     )
     assert headers["Authorization"] == "Bearer sk-test"
     assert data["ok"] is True
+
+
+@pytest.mark.asyncio
+async def test_remote_backend_routes_twin_control_plane_calls():
+    class FakeResponse:
+        def __init__(self, payload):
+            self.payload = payload
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return self.payload
+
+    class FakeClient:
+        def __init__(self):
+            self.calls = []
+
+        async def get(self, url, headers=None):
+            self.calls.append(("GET", url, None, headers))
+            if url.endswith("/contract"):
+                return FakeResponse({"ok": True, "contract": {}, "model_context": {}})
+            return FakeResponse({"ok": True, "registry": {"schema_version": 1, "grants": []}})
+
+        async def put(self, url, json=None, headers=None):
+            self.calls.append(("PUT", url, json, headers))
+            return FakeResponse({"ok": True, "contract": {"version": 2}})
+
+        async def post(self, url, json=None, headers=None):
+            self.calls.append(("POST", url, json, headers))
+            if url.endswith("/authorize"):
+                return FakeResponse({"ok": True, "decision": {"status": "allowed"}, "executed": False})
+            if url.endswith("/actions/record"):
+                return FakeResponse({"ok": True, "action": {"id": "record_1"}})
+            return FakeResponse({"ok": True, "grant": {"id": "grant/a b"}})
+
+    client = FakeClient()
+    backend = RemoteBackend("http://engram.test", key="sk-test", client=client)
+    await backend.twin_contract()
+    await backend.revise_twin_contract({"goals": [{"title": "Protect focus"}]})
+    await backend.capabilities()
+    await backend.grant_capability(
+        "calendar",
+        "execute",
+        ["calendars/personal/**"],
+        credential_ref={"provider": "vault", "key": "calendar/personal"},
+        expires_at=42,
+        provenance=["owner:grant-1"],
+    )
+    await backend.revoke_capability("grant/a b")
+    decision = await backend.authorize_twin_action(
+        "calendar",
+        "execute",
+        "calendars/personal/events/42",
+        external_write=True,
+    )
+    await backend.record_twin_action(
+        "decision_1",
+        "Executor created the approved event",
+        executed_at=43,
+        provenance=["executor:calendar-1"],
+    )
+
+    assert [(method, url) for method, url, _, _ in client.calls] == [
+        ("GET", "http://engram.test/v1/twin/contract"),
+        ("PUT", "http://engram.test/v1/twin/contract"),
+        ("GET", "http://engram.test/v1/twin/capabilities"),
+        ("POST", "http://engram.test/v1/twin/capabilities"),
+        ("POST", "http://engram.test/v1/twin/capabilities/grant%2Fa%20b/revoke"),
+        ("POST", "http://engram.test/v1/twin/authorize"),
+        ("POST", "http://engram.test/v1/twin/actions/record"),
+    ]
+    grant_body = client.calls[3][2]
+    assert grant_body["credential_ref"] == {
+        "provider": "vault",
+        "key": "calendar/personal",
+    }
+    assert "secret" not in grant_body["credential_ref"]
+    assert client.calls[4][2] == {}
+    assert "human_confirmed" not in client.calls[5][2]
+    assert decision["executed"] is False
+    assert client.calls[6][2]["executed_at"] == 43
 
 
 @pytest.mark.asyncio

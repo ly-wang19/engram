@@ -14,6 +14,10 @@ import type {
   ChatCompletionChunk,
   ChatCompletionCreateParams,
   CloseSessionResult,
+  CapabilityGrantInput,
+  CapabilityGrantResponse,
+  CapabilityRegistryResponse,
+  ErasureResult,
   AgentStatus,
   Fact,
   FactInput,
@@ -38,6 +42,15 @@ import type {
   SessionIndex,
   SessionListOptions,
   SessionReport,
+  TwinActionRecordInput,
+  TwinActionRecordResult,
+  TwinAuthorizationInput,
+  TwinAuthorizationResult,
+  TwinContractPatch,
+  TwinContextResponse,
+  TwinDecisionResult,
+  TwinContractResponse,
+  TwinContractHistoryResponse,
 } from './types'
 
 /** Thrown for any non-2xx response. `detail` carries the parsed error body when available. */
@@ -154,7 +167,13 @@ export class EngramClient {
   /** Retrieve a small, relevant, dated context to answer from (the lean read path). */
   recall(
     query: string,
-    options: { nChunks?: number; sessionId?: string; asOf?: number; redactSensitive?: boolean } = {},
+    options: {
+      nChunks?: number
+      sessionId?: string
+      asOf?: number
+      knownAt?: number
+      redactSensitive?: boolean
+    } = {},
   ): Promise<RecallResult> {
     return this.post<RecallResult>('/v1/recall', {
       query,
@@ -162,6 +181,7 @@ export class EngramClient {
       n_chunks: options.nChunks ?? 6,
       session_id: options.sessionId ?? null,
       as_of: options.asOf ?? null,
+      known_at: options.knownAt ?? null,
       redact_sensitive: options.redactSensitive ?? false,
     })
   }
@@ -175,6 +195,14 @@ export class EngramClient {
       session_id: sessionId,
       summarize: options.summarize ?? true,
       clear_working: options.clearWorking ?? true,
+    })
+  }
+
+  /** Permanently erase one source session and every memory object derived from it. */
+  eraseSession(sessionId: string, options: { confirm?: boolean } = {}): Promise<ErasureResult> {
+    return this.post<ErasureResult>('/v1/sessions/erase', {
+      session_id: sessionId,
+      confirm: options.confirm ?? false,
     })
   }
 
@@ -202,11 +230,15 @@ export class EngramClient {
   }
 
   /** Answer a single factual question directly (abstains when not in memory). */
-  search(query: string, options: { asOf?: number; redactSensitive?: boolean } = {}): Promise<SearchResult> {
+  search(
+    query: string,
+    options: { asOf?: number; knownAt?: number; redactSensitive?: boolean } = {},
+  ): Promise<SearchResult> {
     return this.post<SearchResult>('/v1/recall', {
       query,
       lean: false,
       as_of: options.asOf ?? null,
+      known_at: options.knownAt ?? null,
       redact_sensitive: options.redactSensitive ?? false,
     })
   }
@@ -244,6 +276,98 @@ export class EngramClient {
     return this.request<ProfileResult>('/v1/profile')
   }
 
+  // --- personal-twin governance -------------------------------------------
+  /** Read prompt-safe owner guidance with a normal agent/app credential. */
+  twinContract(): Promise<TwinContextResponse> {
+    return this.request<TwinContextResponse>('/v1/twin/contract')
+  }
+
+  /** Read the complete contract with a separately configured owner-control key. */
+  ownerTwinContract(): Promise<TwinContractResponse> {
+    return this.request<TwinContractResponse>('/v1/twin/control/contract')
+  }
+
+  /** Read immutable contract revisions with a separately configured owner-control key. */
+  twinContractHistory(limit = 100): Promise<TwinContractHistoryResponse> {
+    return this.request<TwinContractHistoryResponse>(
+      `/v1/twin/control/contract/history?limit=${encodeURIComponent(String(limit))}`,
+    )
+  }
+
+  /** Replace selected owner-contract sections, producing an immutable new version. */
+  reviseTwinContract(patch: TwinContractPatch): Promise<TwinContractResponse> {
+    return this.request<TwinContractResponse>('/v1/twin/contract', {
+      method: 'PUT',
+      body: JSON.stringify(patch),
+    })
+  }
+
+  /** Read owner-managed capability grants. Credential fields are references, never secret material. */
+  capabilities(): Promise<CapabilityRegistryResponse> {
+    return this.request<CapabilityRegistryResponse>('/v1/twin/capabilities')
+  }
+
+  /** Read full grants, including credential lookup references, with an owner-control key. */
+  ownerCapabilities(): Promise<CapabilityRegistryResponse> {
+    return this.request<CapabilityRegistryResponse>('/v1/twin/control/capabilities')
+  }
+
+  /** Add a scoped grant through a trusted owner control plane. This does not perform any action. */
+  grantCapability(input: CapabilityGrantInput): Promise<CapabilityGrantResponse> {
+    return this.post<CapabilityGrantResponse>('/v1/twin/capabilities', {
+      capability: input.capability,
+      permission: input.permission,
+      scopes: input.scopes,
+      credential_ref: input.credentialRef ?? null,
+      expires_at: input.expiresAt ?? null,
+      provenance: input.provenance ?? [],
+    })
+  }
+
+  /** Revoke a grant through a trusted owner control plane. */
+  revokeCapability(id: string): Promise<CapabilityGrantResponse | OkMessage> {
+    return this.post(`/v1/twin/capabilities/${encodeURIComponent(id)}/revoke`)
+  }
+
+  /**
+   * Evaluate policy and persist the decision; this method never executes the requested action.
+   * Agents cannot self-report human confirmation. Use `confirmTwinAction` from a separate owner-key client.
+   */
+  authorizeTwinAction(input: TwinAuthorizationInput): Promise<TwinAuthorizationResult> {
+    return this.post<TwinAuthorizationResult>('/v1/twin/authorize', {
+      capability: input.capability,
+      permission: input.permission,
+      resource: input.resource,
+      description: input.description ?? '',
+      high_risk: input.highRisk ?? false,
+      external_write: input.externalWrite ?? false,
+    })
+  }
+
+  /** Owner-only approval of one pending decision; requires an Engram owner-control key. */
+  confirmTwinAction(decisionId: string): Promise<TwinDecisionResult> {
+    return this.post<TwinDecisionResult>(
+      `/v1/twin/decisions/${encodeURIComponent(decisionId)}/confirm`,
+    )
+  }
+
+  /** Revalidate a short-lived decision immediately before an executor acts. */
+  twinDecision(decisionId: string): Promise<TwinDecisionResult> {
+    return this.request<TwinDecisionResult>(
+      `/v1/twin/decisions/${encodeURIComponent(decisionId)}`,
+    )
+  }
+
+  /** Record a result reported by a separate trusted executor; this method performs no external action. */
+  recordTwinAction(input: TwinActionRecordInput): Promise<TwinActionRecordResult> {
+    return this.post<TwinActionRecordResult>('/v1/twin/actions/record', {
+      decision_id: input.decisionId,
+      outcome: input.outcome,
+      executed_at: input.executedAt ?? null,
+      provenance: input.provenance ?? [],
+    })
+  }
+
   // --- editable facts -------------------------------------------------------
   /** Assert an authoritative fact (user-sourced; never silently overwritten). */
   addFact(fact: FactInput): Promise<{ ok: boolean; id: string; text: string }> {
@@ -257,8 +381,11 @@ export class EngramClient {
     })
   }
 
-  deleteFact(id: string): Promise<{ ok: boolean }> {
-    return this.request(`/v1/facts/${encodeURIComponent(id)}`, { method: 'DELETE' })
+  deleteFact(id: string, options: { confirm?: boolean } = {}): Promise<ErasureResult> {
+    const confirmed = options.confirm === true ? 'true' : 'false'
+    return this.request(`/v1/facts/${encodeURIComponent(id)}?confirm=${confirmed}`, {
+      method: 'DELETE',
+    })
   }
 
   // --- focus / policy / graph ----------------------------------------------
@@ -279,9 +406,10 @@ export class EngramClient {
   }
 
   /** Semantic graph. Defaults to share-safe; pass includeSensitive=true for the full owner-visible graph. */
-  graph(options: { asOf?: number; includeSensitive?: boolean } = {}): Promise<GraphData> {
+  graph(options: { asOf?: number; knownAt?: number; includeSensitive?: boolean } = {}): Promise<GraphData> {
     const params = new URLSearchParams()
     if (options.asOf !== undefined) params.set('as_of', String(options.asOf))
+    if (options.knownAt !== undefined) params.set('known_at', String(options.knownAt))
     if (options.includeSensitive !== undefined) {
       params.set('include_sensitive', options.includeSensitive ? 'true' : 'false')
     }

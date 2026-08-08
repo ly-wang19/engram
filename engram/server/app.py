@@ -15,6 +15,10 @@ Then a client (curl / SDK / the MCP bridge) calls it with `Authorization: Bearer
     GET  /v1/profile                                             -> the user's synthesized profile
     POST /v1/forget {"confirm": true}                            -> wipe this user's memory
 
+Personal-twin governance splits trust: ENGRAM_API_KEYS are agent/app credentials, while separate
+ENGRAM_OWNER_KEYS authorize contract/grant changes and pending-action confirmation. The two key sets
+must not overlap; authorization decisions never execute external tools.
+
 This is the foundation of a hosted product (like Hy-Memory). It is single-node + file-backed by default —
 swap the in-memory stores for pgvector/Qdrant + Kuzu (already pluggable behind the store interfaces) and
 put it behind your auth/gateway to scale to a public service.
@@ -44,24 +48,38 @@ class AuthConfigError(ValueError):
     """The static API-key mapping is ambiguous or malformed."""
 
 
-def _load_keys() -> dict[str, str]:
-    """Map API key -> user_id from ENGRAM_API_KEYS ('alice:sk-a,bob:sk-b')."""
+def _load_key_mapping(env_name: str) -> dict[str, str]:
+    """Map a configured bearer key to a tenant without leaking key material."""
     out: dict[str, str] = {}
-    raw = os.environ.get("ENGRAM_API_KEYS", "").strip()
+    raw = os.environ.get(env_name, "").strip()
     if not raw:
         return out
     for index, pair in enumerate(raw.split(","), start=1):
         pair = pair.strip()
         if ":" not in pair:
-            raise AuthConfigError(f"ENGRAM_API_KEYS entry {index} must use tenant:key")
+            raise AuthConfigError(f"{env_name} entry {index} must use tenant:key")
         user, key = (part.strip() for part in pair.split(":", 1))
         if not user or not key:
-            raise AuthConfigError(f"ENGRAM_API_KEYS entry {index} has an empty tenant or key")
+            raise AuthConfigError(f"{env_name} entry {index} has an empty tenant or key")
         previous = out.get(key)
         if previous is not None and previous != user:
             raise AuthConfigError("one API key cannot map to multiple tenants")
         out[key] = user
     return out
+
+
+def _load_keys() -> dict[str, str]:
+    """Map normal agent/app API keys from ENGRAM_API_KEYS."""
+    return _load_key_mapping("ENGRAM_API_KEYS")
+
+
+def _load_owner_keys() -> dict[str, str]:
+    """Map separate owner-control-plane keys used only for action confirmation."""
+    owners = _load_key_mapping("ENGRAM_OWNER_KEYS")
+    agents = _load_key_mapping("ENGRAM_API_KEYS")
+    if set(owners).intersection(agents):
+        raise AuthConfigError("owner keys must not be reused as agent/app API keys")
+    return owners
 
 
 def _max_request_bytes() -> int:
@@ -210,6 +228,24 @@ def auth(authorization: str = Header(default="")) -> str:
     raise HTTPException(401, "set ENGRAM_API_KEYS (user:key,...) or ENGRAM_OPEN=1")
 
 
+def owner_auth(authorization: str = Header(default="")) -> str:
+    """Authenticate a human owner plane independently from agent/app credentials."""
+    try:
+        keys = _load_owner_keys()
+    except AuthConfigError as exc:
+        raise HTTPException(503, "invalid owner key configuration") from exc
+    if not keys:
+        raise HTTPException(503, "set ENGRAM_OWNER_KEYS (tenant:key) before confirming actions")
+    token = _bearer_token(authorization)
+    matched_user = None
+    for key, user in keys.items():
+        if hmac.compare_digest(token, key):
+            matched_user = user
+    if matched_user is None:
+        raise HTTPException(401, "invalid or missing owner key")
+    return matched_user
+
+
 class RememberReq(BaseModel):
     content: str = Field(min_length=1, max_length=1_000_000)
     session_id: str = Field(default="default", min_length=1, max_length=512)
@@ -221,7 +257,8 @@ class RecallReq(BaseModel):
     lean: bool = True
     n_chunks: int = Field(default=6, ge=0, le=50)
     session_id: Optional[str] = Field(default=None, max_length=512)
-    as_of: Optional[float] = None  # epoch seconds: point-in-time memory view
+    as_of: Optional[float] = None  # epoch seconds: valid/world-time view
+    known_at: Optional[float] = None  # epoch seconds: transaction-time knowledge boundary
     redact_sensitive: bool = False  # hide facts tagged sensitive from the returned context/fact list
 
 
@@ -231,12 +268,53 @@ class CloseSessionReq(BaseModel):
     clear_working: bool = True
 
 
+class EraseSessionReq(BaseModel):
+    session_id: str = Field(min_length=1, max_length=512)
+    confirm: bool = False
+
+
+class TwinContractPatchReq(BaseModel):
+    goals: Optional[list[dict]] = None
+    principles: Optional[list[dict]] = None
+    boundaries: Optional[list[dict]] = None
+    provenance: Optional[list[str]] = None
+    confirm_high_risk_execution: Optional[bool] = None
+    confirm_external_writes: Optional[bool] = None
+
+
+class CapabilityGrantReq(BaseModel):
+    capability: str = Field(min_length=1, max_length=256)
+    permission: str
+    scopes: list[str]
+    credential_ref: Optional[dict[str, str]] = None
+    expires_at: Optional[float] = None
+    provenance: list[str] = Field(default_factory=list)
+
+
+class TwinAuthorizeReq(BaseModel):
+    capability: str = Field(min_length=1, max_length=256)
+    permission: str
+    resource: str = Field(min_length=1, max_length=2048)
+    description: str = Field(default="", max_length=4096)
+    high_risk: bool = False
+    external_write: bool = False
+
+
+class TwinActionRecordReq(BaseModel):
+    decision_id: str = Field(min_length=1, max_length=256)
+    outcome: str = Field(max_length=32_768)
+    executed_at: Optional[float] = None
+    provenance: list[str] = Field(default_factory=list)
+
+
 @app.get("/health")
 def health():
     service = svc()
     config_error = False
+    owner_keys: dict[str, str] = {}
     try:
         keys = _load_keys()
+        owner_keys = _load_owner_keys()
         _max_request_bytes()
     except AuthConfigError:
         keys = {}
@@ -255,6 +333,7 @@ def health():
         "version": __version__,
         "auth_mode": auth_mode,
         "anonymous_allowed": auth_mode == "open" and _env_flag("ENGRAM_ALLOW_ANONYMOUS"),
+        "owner_control_configured": bool(owner_keys) and not config_error,
         "embedder": service.embedder.__class__.__name__,
         "llm_configured": service.llm is not None,
         "answerer_configured": service.answerer is not None,
@@ -389,7 +468,8 @@ def recall(req: RecallReq, user: str = Depends(auth)):
     # token count, so the console's 问答 view can show the answer AND the token saving.
     return svc().recall(user, req.query, lean=req.lean, n_chunks=req.n_chunks,
                         session_id=req.session_id, as_of=req.as_of,
-                        redact_sensitive=req.redact_sensitive, answer=True)
+                        redact_sensitive=req.redact_sensitive, answer=True,
+                        known_at=req.known_at)
 
 
 @app.post("/v1/sessions/close")
@@ -405,6 +485,12 @@ def close_session(req: CloseSessionReq, user: str = Depends(auth)):
         summarize=req.summarize,
         clear_working=req.clear_working,
     )
+
+
+@app.post("/v1/sessions/erase")
+def erase_session(req: EraseSessionReq, user: str = Depends(auth)):
+    """Permanently erase one source session and all memory derived from it."""
+    return svc().erase_session(user, req.session_id, confirm=req.confirm)
 
 
 @app.get("/v1/sessions")
@@ -439,6 +525,97 @@ def session_report(
 @app.get("/v1/profile")
 def profile(user: str = Depends(auth)):
     return svc().profile(user)
+
+
+@app.get("/v1/twin/contract")
+def twin_contract(user: str = Depends(auth)):
+    """Prompt-safe contract context for agents; no hidden policy controls."""
+    return svc().twin_context(user)
+
+
+@app.get("/v1/twin/control/contract")
+def owner_twin_contract(user: str = Depends(owner_auth)):
+    return svc().twin_contract(user)
+
+
+@app.get("/v1/twin/control/contract/history")
+def twin_contract_history(
+    limit: int = 100,
+    user: str = Depends(owner_auth),
+):
+    if limit < 1 or limit > 1000:
+        raise HTTPException(400, "limit must be between 1 and 1000")
+    return svc().twin_contract_history(user, limit=limit)
+
+
+@app.put("/v1/twin/contract")
+def revise_twin_contract(req: TwinContractPatchReq, user: str = Depends(owner_auth)):
+    patch = req.model_dump(exclude_none=True)
+    if not patch:
+        raise HTTPException(400, "provide at least one twin contract field")
+    try:
+        return svc().revise_twin_contract(user, patch)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.get("/v1/twin/capabilities")
+def twin_capabilities(user: str = Depends(auth)):
+    return svc().capabilities(user)
+
+
+@app.get("/v1/twin/control/capabilities")
+def owner_twin_capabilities(user: str = Depends(owner_auth)):
+    return svc().capabilities(user, include_credential_refs=True)
+
+
+@app.post("/v1/twin/capabilities")
+def grant_twin_capability(req: CapabilityGrantReq, user: str = Depends(owner_auth)):
+    try:
+        return svc().grant_capability(user, **req.model_dump())
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.post("/v1/twin/capabilities/{grant_id}/revoke")
+def revoke_twin_capability(grant_id: str, user: str = Depends(owner_auth)):
+    return svc().revoke_capability(user, grant_id)
+
+
+@app.post("/v1/twin/authorize")
+def authorize_twin_action(req: TwinAuthorizeReq, user: str = Depends(auth)):
+    try:
+        return svc().authorize_twin_action(user, **req.model_dump())
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.get("/v1/twin/decisions/{decision_id}")
+def twin_decision(decision_id: str, user: str = Depends(auth)):
+    result = svc().twin_decision(user, decision_id)
+    if not result.get("ok"):
+        raise HTTPException(404, result.get("message", "authorization decision not found"))
+    return result
+
+
+@app.post("/v1/twin/decisions/{decision_id}/confirm")
+def confirm_twin_action(decision_id: str, user: str = Depends(owner_auth)):
+    """Owner-only confirmation; normal agent/app bearer keys are never accepted here."""
+    try:
+        result = svc().confirm_twin_action(user, decision_id)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    if not result.get("ok") and "not found" in result.get("message", ""):
+        raise HTTPException(404, result["message"])
+    return result
+
+
+@app.post("/v1/twin/actions/record")
+def record_twin_action(req: TwinActionRecordReq, user: str = Depends(auth)):
+    try:
+        return svc().record_twin_action(user, **req.model_dump())
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(400, str(exc)) from exc
 
 
 @app.get("/v1/profile/structured")
@@ -534,7 +711,7 @@ class ChatCompletionReq(BaseModel):
     model: str = "engram"
     messages: list[dict] = []
     stream: bool = False
-    # Engram extension: recall/remember/session_id/scope/n_chunks/as_of/redact_sensitive.
+    # Engram extension: recall/remember/session_id/scope/n_chunks/as_of/known_at/redact_sensitive.
     memory: Optional[dict] = None
 
 
@@ -543,7 +720,8 @@ def chat_completions(req: ChatCompletionReq, background: BackgroundTasks, user: 
     """OpenAI-compatible chat completions, augmented with long-term memory: recall a relevant slice for
     the latest user turn, inject it, generate with the configured LLM, then remember the turn off the
     critical path. Set body.memory={"recall":false}, {"remember":false}, {"session_id":"..."},
-    {"scope":"working"}, {"as_of":...}, or {"redact_sensitive":true} to control the memory layer."""
+    {"scope":"working"}, {"as_of":...}, {"known_at":...}, or {"redact_sensitive":true} to control
+    the memory layer."""
     from . import openai_compat as oc
 
     if not req.messages:
@@ -560,6 +738,7 @@ def chat_completions(req: ChatCompletionReq, background: BackgroundTasks, user: 
             n_chunks=int(opts.get("n_chunks", 6)),
             do_recall=opts.get("recall", True),
             as_of=opts.get("as_of"),
+            known_at=opts.get("known_at"),
             redact_sensitive=bool(opts.get("redact_sensitive", False)),
             session_id=session_id,
         )
@@ -625,9 +804,13 @@ def edit_fact(fact_id: str, req: FactEdit, user: str = Depends(auth)):
 
 
 @app.delete("/v1/facts/{fact_id}")
-def remove_fact(fact_id: str, user: str = Depends(auth)):
-    """Right-to-forget: permanently delete a single fact."""
-    return svc().delete_fact(user, fact_id)
+def remove_fact(
+    fact_id: str,
+    confirm: bool = False,
+    user: str = Depends(auth),
+):
+    """Right-to-forget: erase a fact's source graph after an explicit impact preview."""
+    return svc().delete_fact(user, fact_id, confirm=confirm)
 
 
 # --- ③ focus areas: customize what memory emphasizes (track) or suppresses (mute) ---
@@ -718,6 +901,7 @@ def resolve_conflict(conflict_id: str, req: ResolveReq, user: str = Depends(auth
 @app.get("/v1/graph")
 def graph(
     as_of: float | None = None,
+    known_at: float | None = None,
     include_sensitive: bool = False,
     q: str = "",
     live_only: bool = False,
@@ -730,6 +914,7 @@ def graph(
     return svc().graph(
         user,
         as_of=as_of,
+        known_at=known_at,
         include_sensitive=include_sensitive,
         q=q,
         live_only=live_only,

@@ -7,8 +7,9 @@ export interface Health {
   ok: boolean
   ready: boolean
   service: string
-  auth_mode: 'api_keys' | 'open' | 'disabled'
+  auth_mode: 'api_keys' | 'open' | 'disabled' | 'invalid'
   anonymous_allowed: boolean
+  owner_control_configured: boolean
   embedder: string
   llm_configured: boolean
   answerer_configured: boolean
@@ -35,6 +36,7 @@ export interface RecallResult {
   context: string
   tokens_est: number
   as_of: number | null
+  known_at: number | null
   redacted_sensitive: boolean
   full_tokens?: number
   answer?: string
@@ -45,6 +47,7 @@ export interface SearchResult {
   answer: string
   facts: string[]
   as_of: number | null
+  known_at: number | null
   redacted_sensitive: boolean
 }
 
@@ -59,6 +62,34 @@ export interface CloseSessionResult {
   summaries: number
   reflected: number
   working_cleared: number
+}
+
+export interface ErasureReceipt {
+  id: string
+  scope: 'fact' | 'session'
+  requested_id: string
+  erased_at: number
+  counts: {
+    facts: number
+    episodes: number
+    working: number
+    conflicts: number
+  }
+  digest: string
+  verified: boolean
+  storage_verified: boolean
+  canonical_storage_verified: boolean
+  live_index_verified: boolean
+  storage_backend: string
+  /** Always false: backups, snapshots, SSD remapping, and old vector fragments are outside this proof. */
+  physical_media_erasure_guaranteed: false
+}
+
+export interface ErasureResult {
+  ok: boolean
+  confirmation_required?: boolean
+  message?: string
+  erasure?: ErasureReceipt
 }
 
 export interface SessionReportFact {
@@ -264,6 +295,7 @@ export interface AgentStatus {
     read_context: string
     write_memory: string
     close_session: string
+    erase_session: string
     inspect_facts: string
     correct_fact: string
     delete_fact: string
@@ -274,6 +306,207 @@ export interface AgentStatus {
 export interface ProfileResult {
   profile: string
   facts: string[]
+}
+
+// --- personal-twin governance ---------------------------------------------
+
+export type CapabilityPermission = 'observe' | 'draft' | 'execute'
+export type TwinBoundaryEffect = 'deny' | 'require_confirmation'
+export type TwinDecisionStatus = 'denied' | 'requires_confirmation' | 'allowed'
+
+export interface TwinGoal {
+  id: string
+  title: string
+  description: string
+  status: string
+  priority: number
+  provenance: string[]
+}
+
+export interface TwinPrinciple {
+  id: string
+  name: string
+  statement: string
+  priority: number
+  provenance: string[]
+}
+
+export interface TwinBoundary {
+  id: string
+  description: string
+  effect: TwinBoundaryEffect
+  capability: string
+  scopes: string[]
+  minimum_permission: CapabilityPermission
+  model_visible: boolean
+  provenance: string[]
+}
+
+export interface TwinContract {
+  schema_version: 1
+  version: number
+  updated_at: number
+  provenance: string[]
+  confirm_high_risk_execution: boolean
+  confirm_external_writes: boolean
+  goals: TwinGoal[]
+  principles: TwinPrinciple[]
+  boundaries: TwinBoundary[]
+}
+
+/** Prompt-safe guidance. Enforcement scopes, effects, grants, and credential references are absent. */
+export interface TwinModelContext {
+  contract_version: number
+  goals: Array<Pick<TwinGoal, 'title' | 'description' | 'status'>>
+  principles: Array<Pick<TwinPrinciple, 'name' | 'statement'>>
+  boundaries: Array<Pick<TwinBoundary, 'description'>>
+}
+
+export interface TwinContractResponse {
+  ok: boolean
+  contract: TwinContract
+  model_context: TwinModelContext
+}
+
+/** Prompt-safe response available to the normal agent/app credential. */
+export interface TwinContextResponse {
+  ok: boolean
+  contract_version: number
+  model_context: TwinModelContext
+}
+
+export interface TwinContractHistoryResponse {
+  ok: boolean
+  contracts: TwinContract[]
+  returned: number
+}
+
+/** Fields mirror the owner-control-plane API; each successful update creates a new contract version. */
+export interface TwinContractPatch {
+  goals?: Array<Partial<TwinGoal> & Pick<TwinGoal, 'title'>>
+  principles?: Array<Partial<TwinPrinciple> & Pick<TwinPrinciple, 'statement'>>
+  boundaries?: Array<Partial<TwinBoundary> & Pick<TwinBoundary, 'description'>>
+  provenance?: string[]
+  confirm_high_risk_execution?: boolean
+  confirm_external_writes?: boolean
+}
+
+/** A provider lookup identifier only. Secret bytes must stay in the named keychain/vault. */
+export interface CredentialRef {
+  provider: string
+  key: string
+}
+
+export interface CapabilityGrant {
+  id: string
+  capability: string
+  permission: CapabilityPermission
+  scopes: string[]
+  /** Present only on the separately authenticated owner control plane. */
+  credential_ref?: CredentialRef | null
+  /** Prompt-safe indication returned to a normal agent instead of the lookup reference. */
+  credential_configured?: boolean
+  granted_at: number
+  expires_at: number | null
+  revoked_at: number | null
+  provenance: string[]
+}
+
+export interface CapabilityRegistry {
+  schema_version: 1
+  grants: CapabilityGrant[]
+}
+
+export interface CapabilityRegistryResponse {
+  ok: boolean
+  registry: CapabilityRegistry
+}
+
+export interface CapabilityGrantInput {
+  capability: string
+  permission: CapabilityPermission
+  scopes: string[]
+  /** Lookup reference only; never pass a token, password, private key, or cookie. */
+  credentialRef?: CredentialRef
+  expiresAt?: number
+  provenance?: string[]
+}
+
+export interface CapabilityGrantResponse {
+  ok: boolean
+  grant: CapabilityGrant
+}
+
+export interface TwinActionRequest {
+  id: string
+  capability: string
+  permission: CapabilityPermission
+  resource: string
+  description: string
+  high_risk: boolean
+  external_write: boolean
+  requested_at: number
+}
+
+export interface TwinActionDecision {
+  id: string
+  request_id: string
+  status: TwinDecisionStatus
+  reason: string
+  grant_id: string | null
+  policy_version: number
+  decided_at: number
+  valid_until: number | null
+  confirmed_at: number | null
+}
+
+export interface TwinAuthorizationInput {
+  capability: string
+  permission: CapabilityPermission
+  resource: string
+  description?: string
+  highRisk?: boolean
+  externalWrite?: boolean
+}
+
+export interface TwinAuthorizationResult {
+  ok: boolean
+  request: TwinActionRequest
+  decision: TwinActionDecision
+  /** Always false: authorization evaluates policy and never executes the requested action. */
+  executed: false
+}
+
+export interface TwinDecisionResult {
+  ok: boolean
+  message: string
+  request: TwinActionRequest
+  decision: TwinActionDecision
+  executable: boolean
+  executed: boolean
+}
+
+export interface TwinActionRecord {
+  id: string
+  request: TwinActionRequest
+  decision: TwinActionDecision
+  executed_at: number | null
+  outcome: string
+  provenance: string[]
+}
+
+export interface TwinActionRecordInput {
+  decisionId: string
+  outcome: string
+  /** Set only by the trusted executor that can attest the action occurred. */
+  executedAt?: number
+  provenance?: string[]
+}
+
+export interface TwinActionRecordResult {
+  ok: boolean
+  message?: string
+  action?: TwinActionRecord
 }
 
 export interface Focus {
@@ -310,6 +543,8 @@ export interface GraphEdge {
   valid_at_h: string
   invalid_at: number | null
   invalid_at_h: string | null
+  created_at: number
+  expired_at: number | null
   provenance: string[]
 }
 
@@ -440,6 +675,8 @@ export interface MemoryControls {
   n_chunks?: number
   /** epoch seconds for a point-in-time memory view */
   as_of?: number
+  /** epoch seconds for the transaction-time knowledge boundary */
+  known_at?: number
   /** omit facts tagged sensitive from injected memory */
   redact_sensitive?: boolean
 }
@@ -471,6 +708,7 @@ export interface EngramChatMeta {
   memory_tokens_est: number
   session_id?: string | null
   as_of: number | null
+  known_at: number | null
   redacted_sensitive: boolean
   remembered: boolean
   remember_scope?: string

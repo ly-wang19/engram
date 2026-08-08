@@ -126,7 +126,11 @@ class ConsolidationEngine:
                 live = [f for f in self.fact_store.values() if f.user_id == fact.user_id and f.is_live()]
                 action, invalidated = self.conflict.reconcile(fact, live)
                 for old in invalidated:
-                    self.graph_builder.invalidate(old.id, fact.created_at)
+                    self.graph_builder.invalidate(
+                        old.id,
+                        old.invalid_at if old.invalid_at is not None else fact.valid_at,
+                        old.expired_at if old.expired_at is not None else fact.created_at,
+                    )
                     self.fact_store.upsert(old.id, old.embedding or [], old)
                     stats["invalidated"] += 1
                 if action == "duplicate":

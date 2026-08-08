@@ -229,9 +229,13 @@ extras that slot in behind the same interfaces. We never break the zero-setup de
 - **M1 — Real backends + real eval.** Real local embeddings (BGE via sentence-transformers, no key), LLM
   extractor + judge, and a real LongMemEval runner (`eval/bench.py`) with a full-context baseline on the
   same items.
-  - **Headline (LongMemEval_S, full 500, official judge): `engram_lean` 83.6% vs full-context 73.2%
-    (+10.4) at ~8× fewer tokens (9.6k vs 79k), 0 errors.** The headline system answers from a small
-    *retrieved* slice — the honest test of the thesis.
+  - **Canonical paired headline (LongMemEval_S, full 500, official judge): `engram_lean` 79.0% vs
+    full-context 76.0% (+3.0 point estimate) at 10.9× fewer context tokens (7,283 vs 79,241), 0 errors.**
+    End-to-end p50/p95 latency is 93.6s/173.7s vs 14.5s/60.1s, so this run demonstrates token efficiency,
+    not a latency win. The paired accuracy difference is not statistically decisive (McNemar p=0.195;
+    bootstrap 95% CI [-1.2, +7.2]). The headline system answers from a small *retrieved* slice — the honest
+    test of the thesis. A historical independent `engram_lean` run scored 83.6%, but it is not paired with
+    the separate 73.2% baseline log and must not be presented as a +10.4-point within-run result.
   - **Validated finding (load-bearing):** pure fact-extraction *loses recall*; the read path MUST be
     **hybrid = consolidated facts + retrieved raw session chunks**. Facts add conflict-resolved/bi-temporal
     signal; chunks restore detail. Never ship facts-only QA.

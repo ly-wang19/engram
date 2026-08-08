@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections import defaultdict
 from typing import Any, Optional
 
-from ..types import Entity, Relation
+from ..types import Entity, Relation, is_visible
 from ..util import cosine
 from .base import DocStore, GraphStore, Predicate, VectorStore
 
@@ -83,23 +83,34 @@ class InMemoryGraphStore(GraphStore):
         self._in[relation.object_id].append(relation.id)
 
     def neighbors(
-        self, entity_id: str, as_of: Optional[float] = None, direction: str = "out"
+        self,
+        entity_id: str,
+        as_of: Optional[float] = None,
+        direction: str = "out",
+        known_at: Optional[float] = None,
     ) -> list[Relation]:
         rel_ids = self._out[entity_id] if direction == "out" else self._in[entity_id]
         out: list[Relation] = []
         for rid in rel_ids:
             r = self.rels[rid]
-            live = as_of is None or (
-                r.valid_at <= as_of and (r.invalid_at is None or r.invalid_at > as_of)
-            )
-            if live:
+            if is_visible(r, as_of=as_of, known_at=known_at):
                 out.append(r)
         return out
 
-    def invalidate_relations_for_fact(self, fact_id: str, t: float) -> None:
+    def invalidate_relations_for_fact(
+        self,
+        fact_id: str,
+        valid_at: float,
+        expired_at: Optional[float] = None,
+    ) -> None:
+        transaction_end = valid_at if expired_at is None else expired_at
         for r in self.rels.values():
-            if r.fact_id == fact_id and r.invalid_at is None:
-                r.invalid_at = t
+            if r.fact_id != fact_id:
+                continue
+            if r.invalid_at is None:
+                r.invalid_at = valid_at
+            if r.expired_at is None:
+                r.expired_at = transaction_end
 
     def delete_relations_for_fact(self, fact_id: str) -> None:
         for rid, rel in list(self.rels.items()):

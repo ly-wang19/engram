@@ -14,6 +14,11 @@ from typing import Optional
 from .util import gen_id, now
 
 
+def _contains_time(start: float, end: Optional[float], point: float) -> bool:
+    """Return whether ``point`` is in the half-open interval ``[start, end)``."""
+    return start <= point and (end is None or point < end)
+
+
 @dataclass
 class Episode:
     """A raw, lossless turn or event. Never mutated after ingestion (append-only log)."""
@@ -33,6 +38,23 @@ class Episode:
     summary_embedding: Optional[list[float]] = None
     id: str = field(default_factory=lambda: gen_id("ep"))
     metadata: dict = field(default_factory=dict)
+
+    def is_valid_at(self, valid_time: float) -> bool:
+        """True once this world event has happened."""
+        return self.event_time <= valid_time
+
+    def is_known_at(self, transaction_time: float) -> bool:
+        """True once this episode has been ingested."""
+        return self.ingested_at <= transaction_time
+
+    def is_visible_at(self, valid_time: float, transaction_time: float) -> bool:
+        """True once the event happened and the system had ingested it."""
+        return self.is_valid_at(valid_time) and self.is_known_at(transaction_time)
+
+    def is_live(self, as_of: Optional[float] = None) -> bool:
+        """True on both time axes at ``as_of`` (or now when omitted)."""
+        t = now() if as_of is None else as_of
+        return self.is_visible_at(valid_time=t, transaction_time=t)
 
 
 @dataclass
@@ -88,12 +110,27 @@ class Fact:
         """The (user, subject, predicate) key. Two facts sharing a slot are candidate conflicts."""
         return (self.user_id, self.subject.lower(), self.predicate.lower())
 
+    def is_valid_at(self, valid_time: float) -> bool:
+        """True when this claim applies in the world at ``valid_time``."""
+        return _contains_time(self.valid_at, self.invalid_at, valid_time)
+
+    def is_known_at(self, transaction_time: float) -> bool:
+        """True when the system had learned and not yet retracted this claim."""
+        return _contains_time(self.created_at, self.expired_at, transaction_time)
+
+    def is_visible_at(self, valid_time: float, transaction_time: float) -> bool:
+        """True at an explicit point on both the world-time and belief-time axes."""
+        return self.is_valid_at(valid_time) and self.is_known_at(transaction_time)
+
     def is_live(self, as_of: Optional[float] = None) -> bool:
-        """True if this fact is both currently believed and valid-in-world at `as_of`."""
+        """True on both time axes at ``as_of`` (or now when omitted).
+
+        ``as_of`` remains a single-timestamp convenience API. Call :meth:`is_visible_at` when valid
+        time and transaction time differ. In particular, a fact cannot appear in a historical view
+        before ``created_at`` merely because it was already true in the world.
+        """
         t = now() if as_of is None else as_of
-        believed = self.expired_at is None or self.expired_at > t
-        valid = self.valid_at <= t and (self.invalid_at is None or self.invalid_at > t)
-        return believed and valid
+        return self.is_visible_at(valid_time=t, transaction_time=t)
 
 
 @dataclass
@@ -119,6 +156,53 @@ class Relation:
     valid_at: float = field(default_factory=now)
     invalid_at: Optional[float] = None
     id: str = field(default_factory=lambda: gen_id("rel"))
+    # Appended after ``id`` so existing positional Relation construction remains compatible.
+    created_at: float = field(default_factory=now)
+    expired_at: Optional[float] = None
+
+    def is_valid_at(self, valid_time: float) -> bool:
+        """True when this edge applies in the world at ``valid_time``."""
+        return _contains_time(self.valid_at, self.invalid_at, valid_time)
+
+    def is_known_at(self, transaction_time: float) -> bool:
+        """True when the system had learned and not yet retracted this edge."""
+        return _contains_time(self.created_at, self.expired_at, transaction_time)
+
+    def is_visible_at(self, valid_time: float, transaction_time: float) -> bool:
+        """True at an explicit point on both the world-time and belief-time axes."""
+        return self.is_valid_at(valid_time) and self.is_known_at(transaction_time)
+
+    def is_live(self, as_of: Optional[float] = None) -> bool:
+        """True on both time axes at ``as_of`` (or now when omitted)."""
+        t = now() if as_of is None else as_of
+        return self.is_visible_at(valid_time=t, transaction_time=t)
+
+
+def valid_time_for(as_of: Optional[float], known_at: Optional[float]) -> Optional[float]:
+    """Resolve world time; a transaction-only query uses that same instant by default."""
+    return as_of if as_of is not None else known_at
+
+
+def is_visible(
+    item: Episode | Fact | Relation,
+    *,
+    as_of: Optional[float] = None,
+    known_at: Optional[float] = None,
+) -> bool:
+    """Apply the product's temporal-view contract to one bi-temporal item.
+
+    ``as_of`` alone is the backwards-compatible valid/world-time view. Supplying ``known_at`` enables
+    true bi-temporal filtering; when it is the only coordinate, it is also used as valid time. With no
+    coordinates the item must be live on both axes now.
+    """
+    if as_of is None and known_at is None:
+        return item.is_live()
+    valid_time = valid_time_for(as_of, known_at)
+    if valid_time is None:  # guarded above; keeps type narrowing explicit for Python 3.10.
+        return item.is_live()
+    if known_at is None:
+        return item.is_valid_at(valid_time)
+    return item.is_visible_at(valid_time=valid_time, transaction_time=known_at)
 
 
 @dataclass

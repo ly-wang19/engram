@@ -26,8 +26,15 @@ class GraphBuilder:
                 fact_id=fact.id,
                 valid_at=fact.valid_at,
                 invalid_at=fact.invalid_at,
+                created_at=fact.created_at,
+                expired_at=fact.expired_at,
             )
         )
 
-    def invalidate(self, fact_id: str, t: float) -> None:
-        self.graph.invalidate_relations_for_fact(fact_id, t)
+    def invalidate(
+        self,
+        fact_id: str,
+        valid_at: float,
+        expired_at: float | None = None,
+    ) -> None:
+        self.graph.invalidate_relations_for_fact(fact_id, valid_at, expired_at)

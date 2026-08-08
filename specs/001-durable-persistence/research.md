@@ -3,28 +3,23 @@
 All decisions honor the constitution: stdlib-only default (II), behind the existing interfaces (III),
 preserve every field (IV), and assert **no** performance numbers (V — those are harness tasks).
 
-## D1. On-disk format → JSON Lines (one file per entity type) + `manifest.json`
-- **Decision**: serialize each collection to its own append-friendly `.jsonl` (one JSON object per line);
-  a `manifest.json` header carries schema version, embedder identity, and committed counts.
-- **Rationale**: pure stdlib (`json`) keeps the durable path zero-dep (II); append-friendly → crash-safe
-  (FR-005); safe to load — `json.loads` cannot execute code (FR-003); human-inspectable for
-  provenance/debugging; streamable record-by-record → no whole-blob load (unlike pickle). The stores
-  already hold plain dataclasses, so the mapping is mechanical.
-- **Alternatives**: *pickle* (status quo) — unsafe + brittle + rewrites the whole store each save;
-  *SQLite* — solid but adds a schema/migration surface and still needs JSON for nested fields (embeddings,
-  provenance); revisit when we need secondary indexes, not for the snapshot; *LMDB* — C dependency, breaks
-  the stdlib default; *Parquet* — needs pyarrow, columnar is overkill for doc/graph records.
+## D1. On-disk format → SQLite canonical store + `manifest.json`
+- **Decision**: store compact JSON payloads in stdlib SQLite rows keyed by `(collection, id)`; keep a small
+  `manifest.json` for schema/embedder compatibility and cross-process generation detection.
+- **Rationale**: SQLite remains zero-dependency in Python, but unlike whole-collection JSONL snapshots it
+  provides incremental UPSERT/DELETE, atomic multi-collection transactions, rollback recovery, and secure
+  deletion. JSON payloads preserve nested fields and explicit dataclass reconstruction.
+- **Compatibility**: the original schema-v1 JSONL format remains readable and is migrated once after full
+  validation; successful migration removes the legacy plaintext files.
 
-## D2. Crash safety → append + fsync, manifest written last (atomic), torn-tail recovery
-- **Decision**: append a record as one line, `flush()` + `os.fsync()`; write `manifest.json` **last** via
-  `manifest.json.tmp` + `os.replace()` (atomic). On load, parse the manifest-declared committed prefix for
-  each `.jsonl`; missing/malformed records inside that prefix fail loudly, while truncated/garbled records
-  after the manifest count are ignored as an uncommitted torn tail → a crash leaves a recoverable
-  **last-committed prefix** without silently dropping committed memory (FR-005, SC-003).
-- **Rationale**: atomic rename + fsync is the standard durable-without-a-DB recipe; `os.replace` is atomic
-  on POSIX and Windows.
-- **Alternatives**: *whole-file-then-rename per save* — loses O(1) append, rewrites everything (what pickle
-  did); *WAL/journal* — overkill for an append log.
+## D2. Crash safety → SQLite transaction + recoverable manifest publication
+- **Decision**: apply each snapshot under `BEGIN IMMEDIATE`, `journal_mode=DELETE`, and
+  `synchronous=FULL`; publish the committed generation through atomic manifest replacement afterward.
+- **Recovery**: an uncommitted transaction rolls back. If DB commit succeeds but manifest publication is
+  interrupted, recovery metadata in the same DB transaction repairs the lagging manifest. A manifest
+  generation ahead of SQLite is rejected. Schema-v1 JSONL retains its historical torn-tail rules.
+- **Rationale**: no cross-file collection rewrite or persistent WAL containing another plaintext copy;
+  SQLite supplies the transaction boundary while the manifest remains a cheap process-change fingerprint.
 
 ## D3. Safe load + version gate → manifest `schema_version`, explicit reconstruction
 - **Decision**: `manifest.json` carries `schema_version` (int) + `engram_version`. If `schema_version`
@@ -42,15 +37,15 @@ preserve every field (IV), and assert **no** performance numbers (V — those ar
   *sqlite-vec* — promising but newer/less proven; *Qdrant/pgvector* — need a server → later extras behind
   the same ABC.
 
-## D5. Concurrency → single-writer advisory lock (v1)
-- **Decision**: an advisory lock file per namespace dir (`.lock` via `fcntl.flock`); a second writer fails
-  fast with a clear error. Multi-writer is **out of scope v1**, documented.
-- **Rationale**: matches `MemoryService`'s per-namespace LRU ownership (`engram/service.py`); prevents
-  interleaved corruption without a DB.
+## D5. Concurrency → namespace lock + SQLite writer transaction
+- **Decision**: retain `.lock` via `fcntl.flock` around save/load migration and use SQLite
+  `BEGIN IMMEDIATE` for the canonical update.
+- **Rationale**: serializes whole-memory read-modify-save cycles across local agents while SQLite protects
+  the database transaction itself.
 - **Alternatives**: portalocker (extra dep); MVCC (overkill).
 
 ## D6. Format stays orthogonal to the vector backend
-- **Decision**: fact embeddings travel in `facts.jsonl`, so the durable snapshot is backend-independent. On
+- **Decision**: fact embeddings travel in SQLite JSON payloads, so the durable snapshot is backend-independent. On
   load with the in-memory backend, embeddings repopulate the dict; with LanceDB, load upserts them into the
   LanceDB table. US1 (format) is therefore testable without US2 (LanceDB), as the spec requires.
 - **Rationale**: keeps the two user stories independently shippable/testable; the snapshot stays portable

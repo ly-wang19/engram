@@ -13,7 +13,7 @@ import re
 
 from ..config import Config
 from ..store import GraphStore, VectorStore
-from ..types import Fact
+from ..types import Fact, is_visible
 from .lexical import stem, stems
 
 # query keyword -> graph predicate
@@ -112,24 +112,36 @@ class MultiHopPlanner:
             return ""
         return re.split(r"\b(?:for|with|after|before|who|that|and|or)\b|[?.!,;:]", m.group(1), 1)[0].strip()
 
-    def _location_fact(self, entity_id: str, target: str, as_of: Optional[float]) -> Optional[Fact]:
+    def _location_fact(
+        self,
+        entity_id: str,
+        target: str,
+        as_of: Optional[float],
+        known_at: Optional[float] = None,
+    ) -> Optional[Fact]:
         if not target:
             return None
         target_terms = set(stems(target))
         if not target_terms:
             return None
-        for rel in self.graph.neighbors(entity_id, as_of, "out"):
+        for rel in self.graph.neighbors(entity_id, as_of, "out", known_at):
             if rel.predicate != "lives_in":
                 continue
             obj = self.graph.entities.get(rel.object_id)
             name = obj.name if obj else ""
             if target_terms <= set(stems(name)):
                 fact = self._fact(rel.fact_id)
-                if fact is not None and fact.is_live(as_of):
+                if fact is not None and is_visible(fact, as_of=as_of, known_at=known_at):
                     return fact
         return None
 
-    def plan(self, query: str, user_id: str, as_of: Optional[float] = None) -> Optional[PlanResult]:
+    def plan(
+        self,
+        query: str,
+        user_id: str,
+        as_of: Optional[float] = None,
+        known_at: Optional[float] = None,
+    ) -> Optional[PlanResult]:
         preds = self._ordered_predicates(query)
         if len(preds) < 2:
             return None  # not multi-hop; let hybrid handle it
@@ -143,7 +155,7 @@ class MultiHopPlanner:
             if pred in _ANSWER_ATTR_PREDS and location and len(preds) > 1:
                 constrained: dict[str, list[Fact]] = {}
                 for eid, facts in frontier_paths.items():
-                    loc_fact = self._location_fact(eid, location, as_of)
+                    loc_fact = self._location_fact(eid, location, as_of, known_at)
                     if loc_fact is not None:
                         constrained[eid] = facts + [loc_fact]
                 if not constrained:
@@ -152,7 +164,7 @@ class MultiHopPlanner:
 
             next_paths: dict[str, list[Fact]] = {}
             for eid, facts in frontier_paths.items():
-                for rel in self.graph.neighbors(eid, as_of, "out"):
+                for rel in self.graph.neighbors(eid, as_of, "out", known_at):
                     rel_pred = rel.predicate
                     if (
                         rel_pred == pred
@@ -162,7 +174,11 @@ class MultiHopPlanner:
                         or (pred == "spouse" and rel_pred in {"wife", "husband", "partner"})
                     ):
                         fact = self._fact(rel.fact_id)
-                        if fact is None or not fact.is_live(as_of):
+                        if fact is None or not is_visible(
+                            fact,
+                            as_of=as_of,
+                            known_at=known_at,
+                        ):
                             continue
                         next_paths[rel.object_id] = facts + ([fact] if fact is not None else [])
             if not next_paths:

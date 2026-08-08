@@ -19,6 +19,7 @@ def client():
     os.environ.update(ENGRAM_DATA_DIR=d, ENGRAM_EMBEDDER="hashing", ENGRAM_OPEN="1")
     os.environ.pop("ENGRAM_LLM", None)
     os.environ.pop("ENGRAM_API_KEYS", None)
+    os.environ.pop("ENGRAM_OWNER_KEYS", None)
     os.environ.pop("ENGRAM_ALLOW_ANONYMOUS", None)
     from engram.server import app as appmod
     appmod._svc = None  # fresh singleton bound to the test env
@@ -131,6 +132,114 @@ def test_close_session_endpoint_consolidates_summarizes_and_clears_working(clien
     assert out["working_cleared"] == 1
     assert client.get("/v1/working?session_id=s1", headers=h).json()["items"] == []
     assert client.get("/v1/memories", headers=h).json()["counts"]["summaries"] == 1
+
+
+def test_erase_session_endpoint_requires_confirmation_and_returns_receipt(client):
+    h = hdr("session_erasure")
+    sentinel = "SESSION-ERASURE-HTTP-SENTINEL"
+    remembered = client.post(
+        "/v1/remember",
+        json={"content": sentinel, "session_id": "erase-me", "scope": "working"},
+        headers=h,
+    ).json()
+    assert remembered["ok"] is True
+
+    guard = client.post(
+        "/v1/sessions/erase",
+        json={"session_id": "erase-me", "confirm": False},
+        headers=h,
+    ).json()
+    assert guard["ok"] is False and guard["confirmation_required"] is True
+
+    erased = client.post(
+        "/v1/sessions/erase",
+        json={"session_id": "erase-me", "confirm": True},
+        headers=h,
+    ).json()
+    assert erased["ok"] is True
+    assert erased["erasure"]["verified"] is True
+    assert erased["erasure"]["storage_verified"] is True
+    assert erased["erasure"]["counts"]["episodes"] == 1
+    assert erased["erasure"]["counts"]["working"] == 1
+    assert sentinel not in str(
+        client.get("/v1/memories?include_sensitive=true", headers=h).json()
+    )
+
+
+def test_twin_governance_writes_and_confirmation_require_separate_owner_key(client):
+    from engram.server import app as appmod
+
+    tenant = "twin-owner-plane"
+    agent_headers = hdr(tenant)
+    owner_headers = {"Authorization": "Bearer owner-control-secret"}
+    os.environ["ENGRAM_OWNER_KEYS"] = f"{tenant}:owner-control-secret"
+    try:
+        # Normal agent credentials can read only prompt-safe context and cannot self-grant.
+        context = client.get("/v1/twin/contract", headers=agent_headers).json()
+        assert "model_context" in context and "contract" not in context
+        assert client.post(
+            "/v1/twin/capabilities",
+            json={
+                "capability": "mail",
+                "permission": "execute",
+                "scopes": ["mailboxes/personal/**"],
+            },
+            headers=agent_headers,
+        ).status_code == 401
+
+        granted = client.post(
+            "/v1/twin/capabilities",
+            json={
+                "capability": "mail",
+                "permission": "execute",
+                "scopes": ["mailboxes/personal/**"],
+                "credential_ref": {"provider": "vault", "key": "mail/main"},
+            },
+            headers=owner_headers,
+        )
+        assert granted.status_code == 200 and granted.json()["ok"] is True
+        safe_grant = client.get(
+            "/v1/twin/capabilities", headers=agent_headers
+        ).json()["registry"]["grants"][0]
+        assert "credential_ref" not in safe_grant
+        assert safe_grant["credential_configured"] is True
+
+        pending = client.post(
+            "/v1/twin/authorize",
+            json={
+                "capability": "mail",
+                "permission": "execute",
+                "resource": "mailboxes/personal/messages/42",
+                "external_write": True,
+            },
+            headers=agent_headers,
+        ).json()
+        assert pending["decision"]["status"] == "requires_confirmation"
+        decision_id = pending["decision"]["id"]
+        assert client.post(
+            f"/v1/twin/decisions/{decision_id}/confirm", headers=agent_headers
+        ).status_code == 401
+
+        confirmed = client.post(
+            f"/v1/twin/decisions/{decision_id}/confirm", headers=owner_headers
+        ).json()
+        assert confirmed["decision"]["status"] == "allowed"
+        assert confirmed["executable"] is True and confirmed["executed"] is False
+        live = client.get(
+            f"/v1/twin/decisions/{decision_id}", headers=agent_headers
+        ).json()
+        assert live["executable"] is True
+    finally:
+        os.environ.pop("ENGRAM_OWNER_KEYS", None)
+
+
+def test_owner_key_must_not_reuse_an_agent_api_key(monkeypatch):
+    from engram.server import app as appmod
+
+    monkeypatch.setenv("ENGRAM_API_KEYS", "tenant:shared-secret")
+    monkeypatch.setenv("ENGRAM_OWNER_KEYS", "tenant:shared-secret")
+    with pytest.raises(appmod.AuthConfigError, match="must not be reused"):
+        appmod._load_owner_keys()
 
 
 def test_http_handoff_across_agent_sessions_in_same_namespace(client):
@@ -347,7 +456,9 @@ def test_fact_crud_and_focus_policy_graph_export(client):
     assert "nodes" in client.get("/v1/graph", headers=h).json()
     exp = client.get("/v1/export", headers=h).json()
     assert exp["engram_export_version"] == 1 and any(f["object"] == "Moonshot AI" for f in exp["facts"])
-    assert client.delete(f"/v1/facts/{fid}", headers=h).json()["ok"] is True
+    preview = client.delete(f"/v1/facts/{fid}", headers=h).json()
+    assert preview["confirmation_required"] is True
+    assert client.delete(f"/v1/facts/{fid}?confirm=true", headers=h).json()["ok"] is True
 
 
 def test_graph_endpoint_supports_as_of_and_edge_audit_fields(client):
@@ -529,6 +640,51 @@ def test_recall_endpoint_supports_as_of_for_search_and_lean_context(client):
     }, headers=h).json()
     assert current_ctx["as_of"] is None
     assert current_ctx["full_tokens"] > ctx["full_tokens"]
+
+
+def test_recall_endpoint_known_at_hides_facts_learned_later(client):
+    from engram.server import app as appmod
+    from engram.types import Fact
+
+    user = "recall_known_at"
+    h = hdr(user)
+    mem = appmod.svc().get(user)
+    fact = Fact(
+        "user",
+        "works_at",
+        "Acme",
+        user_id=user,
+        valid_at=10.0,
+        created_at=20.0,
+        embedding=mem.embedder.embed("user works at Acme"),
+    )
+    mem.fact_store.upsert(fact.id, fact.embedding or [], fact)
+    mem.engine.graph_builder.add_fact(fact)
+
+    valid_only = client.post("/v1/recall", json={
+        "query": "Where does the user work?",
+        "lean": False,
+        "as_of": 15.0,
+    }, headers=h).json()
+    assert valid_only["answer"] == "Acme"
+    assert valid_only["known_at"] is None
+
+    before_learning = client.post("/v1/recall", json={
+        "query": "Where does the user work?",
+        "lean": False,
+        "as_of": 15.0,
+        "known_at": 15.0,
+    }, headers=h).json()
+    assert before_learning["known_at"] == 15.0
+    assert before_learning["facts"] == []
+
+    after_learning = client.post("/v1/recall", json={
+        "query": "Where does the user work?",
+        "lean": False,
+        "as_of": 15.0,
+        "known_at": 20.0,
+    }, headers=h).json()
+    assert after_learning["answer"] == "Acme"
 
 
 def test_recall_endpoint_can_redact_sensitive_facts(client):

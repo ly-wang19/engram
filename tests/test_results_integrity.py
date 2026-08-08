@@ -170,19 +170,21 @@ def test_public_raw_logs_have_unique_and_matching_qids():
         assert len(qids) == len(set(qids)), f"{link} contains duplicate qids"
         qids_by_link[link] = set(qids)
 
-    lean_qids = qids_by_link["results/longmemeval_s_engram_lean_v2_final.jsonl"]
-    baseline_qids = qids_by_link["results/longmemeval_s_volcano_doubao_deepseekjudge.jsonl"]
-    assert len(lean_qids) == 500
-    assert lean_qids == baseline_qids
+    headline_qids = qids_by_link["results/headline_500.jsonl"]
+    historical_lean_qids = qids_by_link["results/longmemeval_s_engram_lean_v2_final.jsonl"]
+    historical_baseline_qids = qids_by_link["results/longmemeval_s_volcano_doubao_deepseekjudge.jsonl"]
+    assert len(headline_qids) == 500
+    assert headline_qids == historical_lean_qids == historical_baseline_qids
 
 
 def test_public_raw_logs_have_matching_qid_categories():
-    lean_rows = _rows(ROOT / "results/longmemeval_s_engram_lean_v2_final.jsonl")
-    baseline_rows = _rows(ROOT / "results/longmemeval_s_volcano_doubao_deepseekjudge.jsonl")
-    lean_categories = {row["qid"]: row["cat"] for row in lean_rows}
-    baseline_categories = {row["qid"]: row["cat"] for row in baseline_rows}
-
-    assert lean_categories == baseline_categories
+    paths = (
+        ROOT / "results/headline_500.jsonl",
+        ROOT / "results/longmemeval_s_engram_lean_v2_final.jsonl",
+        ROOT / "results/longmemeval_s_volcano_doubao_deepseekjudge.jsonl",
+    )
+    categories = [{row["qid"]: row["cat"] for row in _rows(path)} for path in paths]
+    assert categories[0] == categories[1] == categories[2]
 
 
 def test_public_raw_logs_have_expected_category_distribution():
@@ -196,6 +198,7 @@ def test_public_raw_logs_have_expected_category_distribution():
         "single-session-preference": 30,
     }
     for rel in (
+        "results/headline_500.jsonl",
         "results/longmemeval_s_engram_lean_v2_final.jsonl",
         "results/longmemeval_s_volcano_doubao_deepseekjudge.jsonl",
     ):
@@ -210,6 +213,7 @@ def test_public_raw_logs_have_expected_category_distribution():
 
 def test_public_raw_logs_have_matching_gold_by_qid():
     paths = (
+        ROOT / "results/headline_500.jsonl",
         ROOT / "results/longmemeval_s_engram_lean_v2_final.jsonl",
         ROOT / "results/longmemeval_s_volcano_doubao_deepseekjudge.jsonl",
     )
@@ -228,8 +232,32 @@ def test_public_raw_logs_have_matching_gold_by_qid():
 
 
 def test_results_md_headline_numbers_match_raw_logs():
-    lean = _metrics(ROOT / "results/longmemeval_s_engram_lean_v2_final.jsonl", "engram_lean")
+    headline = ROOT / "results/headline_500.jsonl"
+    lean = _metrics(headline, "engram_lean")
     assert lean == {
+        "n": 500,
+        "errors": 0,
+        "accuracy": 79.0,
+        "avg_tokens": 7283,
+        "p50_latency_ms": 93573,
+        "p95_latency_ms": 173661,
+    }
+
+    baseline = _metrics(headline, "full_context")
+    assert baseline == {
+        "n": 500,
+        "errors": 0,
+        "accuracy": 76.0,
+        "avg_tokens": 79241,
+        "p50_latency_ms": 14506,
+        "p95_latency_ms": 60134,
+    }
+
+    historical_lean = _metrics(
+        ROOT / "results/longmemeval_s_engram_lean_v2_final.jsonl",
+        "engram_lean",
+    )
+    assert historical_lean == {
         "n": 500,
         "errors": 0,
         "accuracy": 83.6,
@@ -238,18 +266,11 @@ def test_results_md_headline_numbers_match_raw_logs():
         "p95_latency_ms": 106623,
     }
 
-    baseline = _metrics(ROOT / "results/longmemeval_s_volcano_doubao_deepseekjudge.jsonl", "full_context")
-    assert baseline == {
-        "n": 500,
-        "errors": 0,
-        "accuracy": 73.2,
-        "avg_tokens": 79241,
-        "p50_latency_ms": 15603,
-        "p95_latency_ms": 64161,
-    }
-
-    full = _metrics(ROOT / "results/longmemeval_s_volcano_doubao_deepseekjudge.jsonl", "engram_full")
-    assert full == {
+    historical_full = _metrics(
+        ROOT / "results/longmemeval_s_volcano_doubao_deepseekjudge.jsonl",
+        "engram_full",
+    )
+    assert historical_full == {
         "n": 499,
         "errors": 1,
         "accuracy": 83.4,
@@ -259,22 +280,25 @@ def test_results_md_headline_numbers_match_raw_logs():
     }
 
     results = (ROOT / "RESULTS.md").read_text(encoding="utf-8")
-    assert "p50 **60.5s** / p95 **106.6s**" in results
+    assert "p50 **93.6s** / p95 **173.7s**" in results
+    assert "p50 **14.5s** / p95 **60.1s**" in results
+    assert "historical 83.6% lean score and 73.2% full-context score" in results
+    assert "must not be combined into a paired `+10.4`-point claim" in results
 
 
 def test_results_md_category_numbers_match_raw_logs():
     categories = _category_metrics(
-        ROOT / "results/longmemeval_s_engram_lean_v2_final.jsonl",
+        ROOT / "results/headline_500.jsonl",
         "engram_lean",
     )
     expected = {
-        "single-session-assistant": (92.9, 56),
-        "single-session-user": (87.5, 64),
-        "knowledge-update": (87.5, 72),
-        "abstention": (86.7, 30),
-        "temporal-reasoning": (81.1, 127),
-        "multi-session": (79.3, 121),
-        "single-session-preference": (73.3, 30),
+        "single-session-assistant": (100.0, 56),
+        "single-session-user": (84.4, 64),
+        "knowledge-update": (91.7, 72),
+        "abstention": (90.0, 30),
+        "temporal-reasoning": (70.9, 127),
+        "multi-session": (70.2, 121),
+        "single-session-preference": (56.7, 30),
     }
     assert categories == expected
 
@@ -333,7 +357,7 @@ def test_public_copy_avoids_competitor_leaderboard_positioning():
 
 
 def test_public_headline_claims_are_traceable_to_results():
-    expected_claims = ("83.6", "73.2", "9.6k", "79k")
+    expected_claims = ("79.0", "76.0", "7,283", "79,241", "93.6", "173.7", "14.5", "60.1")
     for rel in ("README.md", "README.zh-CN.md", "docs/index.html", "demo/index.html"):
         text = (ROOT / rel).read_text(encoding="utf-8")
         for claim in expected_claims:
@@ -342,35 +366,30 @@ def test_public_headline_claims_are_traceable_to_results():
 
 
 def test_contributor_headline_claims_match_results():
-    expected_claims = ("83.6", "73.2", "+10.4", "9.6k", "79k")
-    stale_claims = ("74.8", "+8.8")
+    expected_claims = ("79.0", "76.0", "+3.0", "7,283", "79,241", "93.6", "173.7")
     for rel in ("AGENTS.md", "CLAUDE.md"):
         text = (ROOT / rel).read_text(encoding="utf-8")
         for claim in expected_claims:
             assert claim in text, f"{claim!r} missing from {rel}"
-        for claim in stale_claims:
-            assert claim not in text, f"stale claim {claim!r} found in {rel}"
+        assert "historical independent" in text.lower()
+        assert "must not be presented as a +10.4-point within-run result" in text
 
 
 def test_public_derived_headline_claims_match_raw_logs():
-    lean = _metrics(ROOT / "results/longmemeval_s_engram_lean_v2_final.jsonl", "engram_lean")
-    baseline = _metrics(ROOT / "results/longmemeval_s_volcano_doubao_deepseekjudge.jsonl", "full_context")
+    headline = ROOT / "results/headline_500.jsonl"
+    lean = _metrics(headline, "engram_lean")
+    baseline = _metrics(headline, "full_context")
     accuracy_delta = round(float(lean["accuracy"]) - float(baseline["accuracy"]), 1)
-    token_ratio = round(float(baseline["avg_tokens"]) / float(lean["avg_tokens"]))
+    token_ratio = round(float(baseline["avg_tokens"]) / float(lean["avg_tokens"]), 1)
 
-    assert accuracy_delta == 10.4
-    assert token_ratio == 8
+    assert accuracy_delta == 3.0
+    assert token_ratio == 10.9
 
     docs = ("README.md", "README.zh-CN.md", "RESULTS.md", "docs/index.html", "demo/index.html")
     for rel in docs:
         text = (ROOT / rel).read_text(encoding="utf-8")
-        assert "+10.4" in text, f"derived accuracy delta missing from {rel}"
-        compact = text.replace(" ", "")
-        assert (
-            "8×" in text
-            or "8x" in text
-            or "8倍" in compact
-        ), f"derived token ratio missing from {rel}"
+        assert "+3.0" in text, f"derived accuracy delta missing from {rel}"
+        assert "10.9" in text, f"derived token ratio missing from {rel}"
 
 
 def test_report_prints_p50_and_p95_latency_for_committed_logs():
@@ -378,7 +397,7 @@ def test_report_prints_p50_and_p95_latency_for_committed_logs():
         [
             sys.executable,
             str(ROOT / "eval/report.py"),
-            str(ROOT / "results/longmemeval_s_engram_lean_v2_final.jsonl"),
+            str(ROOT / "results/headline_500.jsonl"),
         ],
         text=True,
     )

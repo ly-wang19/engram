@@ -43,30 +43,31 @@ standard judge, so this is a fair number, not a friendly one.
 This is the real test of a memory system — and the project's core thesis (beat full-context on accuracy at
 a fraction of the tokens):
 
-| System | Overall | Avg tokens | Notes |
-|---|---:|---:|---|
-| **Engram** (`engram_lean`) | **83.6%** | **9.6k** | retrieves a lean slice; 0 errors / 500 |
-| full-context baseline (same answerer+judge) | 73.2% | 79k | stuffs the whole haystack in the prompt |
+| System | Overall | Avg context tokens | End-to-end latency (p50 / p95) | Errors |
+|---|---:|---:|---:|---:|
+| **Engram** (`engram_lean`) | **79.0%** | **7,283** | 93.6s / 173.7s | 0 / 500 |
+| full-context baseline (same run, answerer, and judge) | 76.0% | 79,241 | 14.5s / 60.1s | 0 / 500 |
 
-**Engram beats the full-context baseline by +10.4 points while using ~8× fewer tokens** (9.6k vs 79k) — the
-filtered slice is *more* accurate than the noisy full window on this run. Per-category (`engram_lean`,
-full 500):
+In the canonical joint run, **Engram's accuracy point estimate is +3.0 points while using 10.9×
+fewer context tokens** (7,283 vs 79,241). It did not win on end-to-end latency in this run; latency includes
+the remote answer call and is reported without attributing the difference to retrieval. Per-category
+(`engram_lean`, full 500):
 
 | Category | Score | n |
 |---|---|---|
-| single-session-assistant | 92.9% | 56 |
-| abstention | 86.7% | 30 |
-| knowledge-update | 87.5% | 72 |
-| single-session-user | 87.5% | 64 |
-| temporal-reasoning | 81.1% | 127 |
-| multi-session | 79.3% | 121 |
-| single-session-preference | 73.3% | 30 |
+| single-session-assistant | 100.0% | 56 |
+| abstention | 90.0% | 30 |
+| knowledge-update | 91.7% | 72 |
+| single-session-user | 84.4% | 64 |
+| temporal-reasoning | 70.9% | 127 |
+| multi-session | 70.2% | 121 |
+| single-session-preference | 56.7% | 30 |
 
-**Where it stands:** at **83.6%** Engram beats the full-context baseline decisively (**+10.4**) at a fraction
-of the tokens. We report it openly — same answerer, same strict judge, every question logged, no
-cherry-picked slice. Engram leads on **token efficiency and reproducibility** in this run; scaling the
-same discipline to larger corpora is the active roadmap, alongside the hardest categories
-(multi-session reasoning, temporal aggregation).
+**Where it stands:** this paired full-500 run supports the token-efficiency result and a positive accuracy
+point estimate, but not a statistically decisive accuracy claim (paired McNemar `p=0.195`; bootstrap 95% CI
+for the gap `[-1.2, +7.2]` points). Same answerer, same strict judge, every question logged, no
+cherry-picked slice. **This does not establish a world-#1 or field-leading result.** See [`RESULTS.md`](RESULTS.md) for the
+canonical log and historical independent runs.
 
 ## Quickstart (zero setup, no API keys)
 
@@ -89,6 +90,10 @@ cfg = Config(storage="lancedb", data_path="./engram-vectors")
 mem = Memory.open("./engram-store", config=cfg)
 ```
 
+`data_path` is a private base: Engram derives one owner-only Lance namespace per canonical snapshot and
+rejects unsafe directory reuse. File permissions are not encryption, and Lance logical deletion is not a
+physical-erasure guarantee; see the [storage/privacy boundary](docs/storage-privacy-boundary.zh-CN.md).
+
 Existing trusted legacy pickle snapshots can be migrated explicitly:
 
 ```bash
@@ -107,6 +112,35 @@ mem.consolidate()                      # System-2: extract facts, build graph, r
 print(mem.search("Where does Wei work?", user_id="u1").answer())
 # -> "Moonshot AI"  (the contradicted fact is invalidated, not deleted — history is preserved)
 ```
+
+## Personal-twin foundation (owner controlled)
+
+Engram now carries more than recall: it provides a governance foundation for an owner's personal AI
+twin. A versioned **Twin Contract** stores owner-approved goals, principles, and boundaries; a
+default-deny **Capability Registry** grants only explicit `observe`, `draft`, or `execute` authority over
+canonical segment scopes. Credential fields store only keychain/vault lookup references; deployments must
+keep actual secret bytes out of the contract, memory text, provenance, and prompts.
+
+The trust split is deliberate:
+
+- A normal agent key can read only prompt-safe guidance and redacted grant metadata, request an
+  authorization, re-check its live status, and record an executor outcome. Authorization never executes.
+- Contract edits, grants, revocations, and high-risk/external-write confirmation require a separate
+  `ENGRAM_OWNER_KEYS="tenant:<different-strong-key>"` credential. Owner and agent keys cannot be reused.
+- The agent cannot submit `human_confirmed=true`. Owner confirmation upgrades one pending decision; the
+  resulting one-shot decision expires after five minutes and is invalidated by contract/grant changes.
+- Fact/session erasure follows provenance through raw source episodes and sibling derivations, commits the
+  canonical SQLite store, then verifies through a fresh reopen. This is logical/canonical verification,
+  not a claim about SSD, APFS snapshots, backups, cloud history, or old Lance fragments.
+
+Run `python eval/twin_eval.py` for the 16 deterministic control-plane invariants. Its 16/16 result is an
+offline safety regression suite, **not** public benchmark evidence. See the
+[personal-twin guide](docs/personal-twin.zh-CN.md), [`API.md`](API.md), and the
+[storage/privacy boundary](docs/storage-privacy-boundary.zh-CN.md).
+
+This release is the memory and authorization substrate, not a finished autonomous clone: Engram does not
+ship a tool executor, credential vault, voice/avatar model, or background autonomy. A trusted executor must
+check `executable=true` immediately before each action and report the outcome afterward.
 
 ## Connect it to your agent
 
@@ -177,7 +211,9 @@ for explicit local development.
 **1. MCP server** — give Claude Desktop / Claude Code / Cursor a persistent memory (`engram_recall`,
 `engram_remember`, `engram_close_session`, `engram_agent_status`, `engram_list_facts`,
 `engram_list_sessions`, `engram_update_fact`, `engram_delete_fact`, `engram_get_focus`,
-`engram_set_focus`, `engram_search`, `engram_stats`, `engram_import`, `engram_export`, …):
+`engram_set_focus`, `engram_get_twin_contract`, `engram_list_capabilities`,
+`engram_authorize_twin_action`, `engram_record_twin_action`, `engram_search`, `engram_stats`,
+`engram_import`, `engram_export`, …):
 
 ```bash
 pip install "engram-memory[mcp]"
@@ -200,8 +236,9 @@ current-task state, then call `engram_close_session` when a thread ends or switc
 step does not delete the transcript; it finishes consolidation, creates missing session summaries,
 clears ephemeral working memory, and persists the namespace.
 When the user asks to correct or remove one memory, use `engram_list_facts` to find the fact id, then
-`engram_update_fact` or `engram_delete_fact(confirm=true)` for a precise edit instead of wiping the
-whole namespace. When the user asks the agent to emphasize or suppress a topic class, use
+`engram_update_fact` for a precise edit or preview and explicitly confirm `engram_delete_fact`; deletion
+also removes that fact's raw source and sibling derivations. This is still narrower than wiping the whole
+namespace. When the user asks the agent to emphasize or suppress a topic class, use
 `engram_set_focus` instead of rewriting facts.
 
 **2. JS/TS SDK + OpenAI-compatible API** — change one URL and your existing OpenAI code gets memory:
@@ -297,7 +334,7 @@ provenance-tagged context. For the algorithm-level contracts, see
 
 | # | Design choice | Why it matters |
 |---|---|---|
-| 1 | **Bi-temporal facts** — every fact carries *valid time* (true in the world) **and** *transaction time* (when we learned it) | Makes "what did we know on date T?" (`as_of`) and knowledge-updates **first-class**, not bolted-on. This is why knowledge-update scores 87.5% and temporal 81.1%. |
+| 1 | **Bi-temporal facts** — every fact carries *valid time* (true in the world) **and** *transaction time* (when we learned it) | Makes "what did we know on date T?" (`as_of`) and knowledge-updates **first-class**, not bolted-on. The canonical run scores 91.7% on knowledge-update and 70.9% on temporal reasoning; component causality still requires an ablation. |
 | 2 | **Non-destructive conflict resolution** — a contradicted fact is *invalidated* (`invalid_at` + `supersedes` chain), never deleted | No silent memory corruption. Every fact answers "where did this come from?" and "what did it replace?" — full provenance + audit trail. |
 | 3 | **Cheap conflict detection** — slot-match + embedding/NLI heuristics, escalate to an LLM **only** when ambiguous | Production-grade temporal correctness **without** an LLM call per fact — the cost win at scale. |
 | 4 | **Hybrid retrieval** — dense semantic + BM25 lexical + graph proximity fused as positive evidence, with recency/salience as priors | No single retriever wins everywhere. The *validated* finding: **facts + raw chunks beats either alone** — facts add conflict-resolved/temporal signal, chunks restore lost detail. |

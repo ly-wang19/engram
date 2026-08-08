@@ -62,12 +62,22 @@ class GraphStore(ABC):
 
     @abstractmethod
     def neighbors(
-        self, entity_id: str, as_of: Optional[float] = None, direction: str = "out"
+        self,
+        entity_id: str,
+        as_of: Optional[float] = None,
+        direction: str = "out",
+        known_at: Optional[float] = None,
     ) -> list[Relation]:
-        """Live relations incident to `entity_id` (filtered to those valid at `as_of`)."""
+        """Relations incident to ``entity_id`` visible in the requested temporal view."""
 
     @abstractmethod
-    def invalidate_relations_for_fact(self, fact_id: str, t: float) -> None: ...
+    def invalidate_relations_for_fact(
+        self,
+        fact_id: str,
+        valid_at: float,
+        expired_at: Optional[float] = None,
+    ) -> None:
+        """Close an edge's world-valid and transaction-known intervals independently."""
 
     @abstractmethod
     def delete_relations_for_fact(self, fact_id: str) -> None:

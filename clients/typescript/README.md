@@ -131,6 +131,39 @@ const fullPrivatePage = await engram.memories({
 })
 ```
 
+## Owner-controlled personal twin
+
+Configure different credentials for the agent/app plane and the human owner plane:
+
+```bash
+export ENGRAM_API_KEYS='alice:agent-random-key'
+export ENGRAM_OWNER_KEYS='alice:owner-different-random-key'
+```
+
+```ts
+const agent = new EngramClient({ baseUrl, apiKey: 'agent-random-key' })
+const owner = new EngramClient({ baseUrl, apiKey: 'owner-different-random-key' })
+
+await owner.grantCapability({
+  capability: 'calendar', permission: 'execute', scopes: ['calendars/personal/**'],
+  credentialRef: { provider: 'keychain', key: 'engram/calendar' },
+})
+
+const pending = await agent.authorizeTwinAction({
+  capability: 'calendar', permission: 'execute',
+  resource: 'calendars/personal/events/42', externalWrite: true,
+})
+// The agent cannot self-confirm. Present this request to the human owner.
+await owner.confirmTwinAction(pending.decision.id)
+const live = await agent.twinDecision(pending.decision.id)
+if (!live.executable) throw new Error(live.message)
+// A separate trusted executor acts here, then reports the outcome:
+await agent.recordTwinAction({ decisionId: pending.decision.id, outcome: 'event created' })
+```
+
+Authorization never performs the external action. Decisions are short-lived and are invalidated by
+contract/grant changes. Keep credential bytes in the referenced keychain/vault; do not put them in Engram.
+
 ## API surface
 
 | Method | HTTP | Returns |
@@ -146,8 +179,16 @@ const fullPrivatePage = await engram.memories({
 | `agentStatus({ sessionId? })` | GET /v1/agent/status | `AgentStatus` content-free namespace/session/focus/counts/next actions |
 | `stats()` | GET /v1/stats | `MemoryStats` content-free namespace observability, including consolidation backlog, hot/cold fact tiers, and page-in/out counts |
 | `profile()` | GET /v1/profile | `ProfileResult` |
+| `twinContract()` | GET /v1/twin/contract | prompt-safe `TwinContextResponse` for an agent key |
+| `ownerTwinContract()` / `twinContractHistory()` | GET /v1/twin/control/contract[...] | full owner-only contract and immutable revisions |
+| `reviseTwinContract(patch)` | PUT /v1/twin/contract | owner-only new contract revision |
+| `capabilities()` / `ownerCapabilities()` | GET /v1/twin/[control/]capabilities | redacted agent view / full owner view |
+| `grantCapability(input)` / `revokeCapability(id)` | POST /v1/twin/capabilities[...] | owner-only scoped grant lifecycle |
+| `authorizeTwinAction(input)` | POST /v1/twin/authorize | policy decision only; never executes or self-confirms |
+| `confirmTwinAction(id)` / `twinDecision(id)` | POST confirm / GET decision | separate owner approval / live executor check |
+| `recordTwinAction(input)` | POST /v1/twin/actions/record | audit an allowed executor outcome |
 | `addFact({ subject?, predicate, object })` | POST /v1/facts | `{ ok, id, text }` |
-| `updateFact(id, patch)` / `deleteFact(id)` | PATCH/DELETE /v1/facts/:id | — |
+| `updateFact(id, patch)` / `deleteFact(id, { confirm? })` | PATCH/DELETE /v1/facts/:id | edit / preview then provenance-level erasure |
 | `getFocus()` / `setFocus(f)` | GET/PUT /v1/focus | `Focus` |
 | `getPolicy()` / `setPolicy(p)` | GET/PUT /v1/policy | `PolicyResponse` |
 | `graph({ asOf?, includeSensitive? })` | GET /v1/graph | `GraphData`; share-safe by default, full owner-visible graph with `includeSensitive: true` |

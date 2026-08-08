@@ -76,30 +76,48 @@ def test_lancedb_topk_matches_in_memory_for_normalized_vectors(tmp_path):
 
 def test_memory_config_lancedb_uses_lancedb_stores_and_reopens(tmp_path):
     cfg = Config(storage="lancedb", data_path=str(tmp_path / "vectors"))
-    mem = Memory(config=cfg)
+    snapshot = tmp_path / "snapshot"
+    mem = Memory.open(str(snapshot), config=cfg)
     mem.add_fact("user", "works_at", "Moonshot AI", user_id="u")
-    mem.save(str(tmp_path / "snapshot"))
-    manifest = json.loads((tmp_path / "snapshot" / "manifest.json").read_text(encoding="utf-8"))
+    mem.save()
+    manifest = json.loads((snapshot / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["backend"] == "lancedb"
 
-    reopened = Memory.open(str(tmp_path / "snapshot"), config=cfg)
+    reopened = Memory.open(str(snapshot), config=cfg)
     assert isinstance(reopened.fact_store, LanceDBVectorStore)
+    assert reopened.fact_store.path == mem.fact_store.path
+    assert "/namespaces/store-" in reopened.fact_store.path
     assert "moonshot" in reopened.search("Where do I work?", user_id="u").answer().lower()
 
 
 def test_lancedb_consolidation_persists_invalidated_fact_payload(tmp_path):
     cfg = Config(storage="lancedb", data_path=str(tmp_path / "vectors"))
-    mem = Memory(config=cfg)
+    snapshot = tmp_path / "snapshot"
+    mem = Memory.open(str(snapshot), config=cfg)
     mem.add("My name is Finn and I work at IBM.", user_id="u", event_time=1.0)
     mem.add("I now work at Oracle.", user_id="u", event_time=2.0)
     mem.consolidate()
-    mem.save(str(tmp_path / "snapshot"))
+    mem.save()
 
-    reopened = Memory.open(str(tmp_path / "snapshot"), config=cfg)
+    reopened = Memory.open(str(snapshot), config=cfg)
     history = reopened.history("Finn", "works_at", user_id="u")
     assert {f.object for f in history} == {"IBM", "Oracle"}
     assert [f.object for f in history if f.is_live()] == ["Oracle"]
     assert "oracle" in reopened.search("Where does Finn work?", user_id="u").answer().lower()
+
+
+def test_lancedb_explicit_base_isolates_canonical_snapshots(tmp_path):
+    cfg = Config(storage="lancedb", data_path=str(tmp_path / "vectors"))
+    alice = Memory.open(str(tmp_path / "alice"), config=cfg)
+    bob = Memory.open(str(tmp_path / "bob"), config=cfg)
+    alice.add_fact("user", "likes", "apples", user_id="alice")
+    bob.add_fact("user", "likes", "bananas", user_id="bob")
+    alice.save()
+    bob.save()
+
+    assert alice.fact_store.path != bob.fact_store.path
+    assert [fact.object for fact in alice.fact_store.values()] == ["apples"]
+    assert [fact.object for fact in bob.fact_store.values()] == ["bananas"]
 
 
 def test_lancedb_open_without_data_path_isolates_each_store(tmp_path):

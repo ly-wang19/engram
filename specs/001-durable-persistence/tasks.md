@@ -56,6 +56,15 @@
 
 **Checkpoint**: User Story 1 is fully functional and independently testable with no optional extras.
 
+### Schema-v2 incremental storage follow-up
+
+- [x] Replace new full JSONL snapshots with stdlib SQLite transaction UPSERT/DELETE.
+- [x] Keep schema-v1 JSONL readable and migrate it idempotently on first successful open.
+- [x] Recover a DB-committed/manifest-lagging generation; reject a manifest ahead of the DB.
+- [x] Enforce owner-only paths, `secure_delete`, and remove migrated plaintext JSONL copies.
+- [x] Cover incremental writes, rollback recovery, migration interruption, deletion, and permissions in
+  `tests/test_persist_sqlite.py`.
+
 ---
 
 ## Phase 4: User Story 2 - LanceDB as the First Real Vector Backend (Priority: P2)

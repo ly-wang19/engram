@@ -97,7 +97,7 @@ def main() -> None:
     ap.add_argument(
         "--out",
         default="/tmp/console_stores",
-        help="directory for generated per-user JSONL store directories",
+        help="directory for generated per-user SQLite store directories",
     )
     ap.add_argument("--embedder", default="bge-small")
     ap.add_argument("--llm", default="volcano:doubao-seed-1-6-flash-250615")

@@ -1,4 +1,4 @@
-"""Explicit one-shot migration from legacy pickle snapshots to JSONL stores.
+"""Explicit one-shot migration from legacy pickle snapshots to durable SQLite stores.
 
 Normal `Memory.open()` does not read pickle anymore. This module is the quarantined compatibility path:
 use it only for trusted legacy snapshots that you intentionally want to migrate.
@@ -83,10 +83,10 @@ def migrate(from_path: str, to_path: str, dry_run: bool = False) -> dict[str, An
 def main() -> None:
     ap = argparse.ArgumentParser(
         prog="python -m engram.store.migrate",
-        description="Migrate a trusted legacy Engram pickle snapshot to the safe JSONL+manifest format.",
+        description="Migrate a trusted legacy Engram pickle snapshot to the safe SQLite+manifest format.",
     )
     ap.add_argument("--from", dest="from_path", required=True, help="legacy .pkl snapshot path")
-    ap.add_argument("--to", dest="to_path", required=True, help="target JSONL store directory")
+    ap.add_argument("--to", dest="to_path", required=True, help="target SQLite store directory")
     ap.add_argument("--dry-run", action="store_true", help="report counts without writing")
     args = ap.parse_args()
     print(json.dumps(migrate(args.from_path, args.to_path, args.dry_run), ensure_ascii=False, indent=2))

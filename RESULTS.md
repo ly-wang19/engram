@@ -1,7 +1,7 @@
 # Engram — Benchmark Results & Methodology
 
 This file is the full, reproducible record behind the headline number in the README. The project's core
-discipline (CLAUDE.md, Bet D): **a number we cannot reproduce does not exist.** Everything needed to
+discipline (AGENTS.md, Bet D): **a number we cannot reproduce does not exist.** Everything needed to
 re-run and verify is here.
 
 **Paper:** [arXiv:2606.09900](https://arxiv.org/abs/2606.09900) — the peer-reviewable write-up of the headline result below.
@@ -11,23 +11,19 @@ re-run and verify is here.
 ## Headline: LongMemEval_S, 500 questions
 
 The headline system is **`engram_lean`** — it answers from a small *retrieved* slice of memory, never the
-full history. This is the honest test of a memory system: a precisely filtered context that beats the
-noisy full window, at a fraction of the tokens.
+full history. This is the honest test of a memory system: compare a precisely filtered context with the
+noisy full window in one paired run, reporting accuracy, tokens, and latency together.
 
-| System | Overall | Avg context tokens | Errors |
-|---|---:|---:|---:|
-| **Engram** (`engram_lean`) | **83.6%** | **9.6k** | 0 / 500 |
-| full-context baseline (same answerer + judge) | 73.2% | 79k | 0 / 500 |
+| System | Overall | Avg context tokens | End-to-end latency (p50 / p95) | Errors |
+|---|---:|---:|---:|---:|
+| **Engram** (`engram_lean`) | **79.0%** | **7,283** | **93.6s / 173.7s** | 0 / 500 |
+| full-context baseline (same run, answerer, and judge) | 76.0% | 79,241 | 14.5s / 60.1s | 0 / 500 |
 
-**Engram `engram_lean` beats the full-context baseline by +10.4 points while using ~8× fewer tokens**
-(9.6k vs 79k) on this 500-question run. Both numbers are on the **official** LongMemEval judge prompts,
-with the **same answerer and judge applied to every system** in the harness; both `engram_lean` and
-`full_context` completed all 500 questions with 0 errored.
-
-> For reference, in the same 500-question run a non-lean variant that prepends the conflict-resolved facts
-> *above the full history* (`engram_full`, ~79k tokens) scores **83.4%** — i.e. lean retrieval at 9.6k
-> tokens matches the full-history-plus-facts variant at ~1/8 the context. `engram_full` had 1 errored item,
-> so its 83.4% is over 499 scored questions; the lean number is the one we headline.
+In this canonical joint run, **Engram `engram_lean` is +3.0 points on the accuracy point estimate while
+using 10.9× fewer context tokens** (7,283 vs 79,241). Both systems use the **official** LongMemEval judge
+prompts and completed all 500 questions with 0 errors. The paired accuracy difference is not statistically
+decisive (McNemar exact `p=0.195`; paired-bootstrap 95% CI `[-1.2, +7.2]` points), and Engram did not win on
+end-to-end latency in this run. Latency includes the remote answer call and is reported as measured.
 
 ---
 
@@ -35,19 +31,19 @@ with the **same answerer and judge applied to every system** in the harness; bot
 
 | Category | Score | n | Notes |
 |---|---:|---:|---|
-| single-session-assistant | 92.9% | 56 | near-ceiling |
-| single-session-user | 87.5% | 64 | profile/identity recall |
-| knowledge-update | 87.5% | 72 | bi-temporal "most-recent-wins" working |
-| abstention | 86.7% | 30 | official *unanswerable* judge |
-| temporal-reasoning | 81.1% | 127 | date-stamped context + reasoning chain |
-| multi-session | 79.3% | 121 | counting/aggregation across sessions — active area |
-| single-session-preference | 73.3% | 30 | hard industry-wide (frontier LLMs 37–48% on PersonaMem) |
-| **Overall** | **83.6%** | **500** | |
+| single-session-assistant | 100.0% | 56 | ceiling on this run |
+| knowledge-update | 91.7% | 72 | bi-temporal "most-recent-wins" working |
+| abstention | 90.0% | 30 | official *unanswerable* judge |
+| single-session-user | 84.4% | 64 | profile/identity recall |
+| temporal-reasoning | 70.9% | 127 | date-stamped context + reasoning chain |
+| multi-session | 70.2% | 121 | counting/aggregation across sessions — active area |
+| single-session-preference | 56.7% | 30 | active area |
+| **Overall** | **79.0%** | **500** | |
 
-**Efficiency:** mean retrieved context **~9.6k tokens** (~8× leaner than the ~79k full-context baseline)
-in the committed run. End-to-end answer latency for `engram_lean` is p50 **60.5s** / p95 **106.6s** in
-this log; this includes the remote doubao-seed-2.0-pro answer call and is reported as measured, not used
-as a separate retrieval latency claim.
+**Efficiency and latency:** mean retrieved context is **7,283 tokens** (10.9× leaner than the 79,241-token
+full-context baseline). End-to-end latency is p50 **93.6s** / p95 **173.7s** for `engram_lean` versus
+p50 **14.5s** / p95 **60.1s** for `full_context`. These measurements include the remote
+doubao-seed-2.0-pro answer call and are not presented as retrieval-only latency.
 
 ---
 
@@ -64,7 +60,7 @@ as a separate retrieval latency claim.
   unanswerable detection.
 - **The `engram_lean` system:** Engram retrieves a small hybrid slice — conflict-resolved bi-temporal
   facts + the most relevant raw session chunks + L2 session summaries — and answers from *that* alone
-  (~9.6k tokens), never the full history.
+  (7,283 mean context tokens in the canonical run), never the full history.
 
 ### Reproduce
 
@@ -90,8 +86,18 @@ a run (e.g. `engram_lean` vs `full_context`) is apples-to-apples by construction
 (prediction + gold + correctness + tokens + latency for every question) are written to the `--out` JSONL.
 
 **The raw logs are committed:**
-- `engram_lean` headline (83.6%, 9.6k tokens): [`results/longmemeval_s_engram_lean_v2_final.jsonl`](results/longmemeval_s_engram_lean_v2_final.jsonl) — 500 lines.
-- full-context baseline (73.2%, 500/500 scored) + the `engram_full` variant (83.4%, 499/500 scored, 1 error), same 500-question run, same answerer + judge: [`results/longmemeval_s_volcano_doubao_deepseekjudge.jsonl`](results/longmemeval_s_volcano_doubao_deepseekjudge.jsonl).
+
+- Canonical paired headline (`engram_lean` 79.0%, `full_context` 76.0%, 500/500 scored and 0 errors for
+  both): [`results/headline_500.jsonl`](results/headline_500.jsonl).
+- Historical independent lean run (`engram_lean` 83.6%, 9,568 mean tokens, 500/500 scored):
+  [`results/longmemeval_s_engram_lean_v2_final.jsonl`](results/longmemeval_s_engram_lean_v2_final.jsonl).
+- Historical separate run (`full_context` 73.2%, 500/500 scored; `engram_full` 83.4%, 499/500 scored and
+  1 error):
+  [`results/longmemeval_s_volcano_doubao_deepseekjudge.jsonl`](results/longmemeval_s_volcano_doubao_deepseekjudge.jsonl).
+
+The historical 83.6% lean score and 73.2% full-context score are retained for auditability but came from
+**different logs**. They must not be combined into a paired `+10.4`-point claim. Only
+`results/headline_500.jsonl` is the canonical paired headline.
 
 Recompute any table yourself: `python eval/report.py <file.jsonl>`. Before a log is used as published
 evidence, check the cited system(s) with
@@ -113,7 +119,7 @@ These are the kind of bugs that silently inflate or deflate memory-benchmark num
 1. **Lean, not full-history (the honest test):** an earlier headline (`engram_full`) prepended facts above
    the *entire* conversation history (~79k tokens). That system *contains* full-context, so it can't really
    lose to it — it doesn't validate the memory architecture. The headline is now `engram_lean`, which
-   retrieves a ~9.6k-token slice and is the real test of the retrieval thesis.
+   retrieves a 7,283-token mean slice in the canonical run and is the real test of the retrieval thesis.
 2. **Full-context truncation bug (was deflating the baseline, not us):** the full-context baseline was once
    capped below the `_S` haystack size, feeding it only the oldest sessions. Fixed so it gets the whole
    haystack. Any "full-context only scores 30%" claim from before that fix is a truncation artifact.
@@ -123,17 +129,20 @@ These are the kind of bugs that silently inflate or deflate memory-benchmark num
 4. **Abstention handling:** `_abs` questions are graded by the official *unanswerable* judge.
 5. **Reliability:** the LLM client uses exponential-backoff retry with jitter + transient/permanent error
    classification; the headline run completed with **0 errored questions** out of 500.
+6. **Paired evidence, not mixed runs:** the earlier public `83.6% vs 73.2% (+10.4)` statement combined a
+   lean result and baseline result from separate logs. Both runs remain published as historical evidence,
+   but the headline now comes only from the joint `results/headline_500.jsonl` run.
 
 ---
 
 ## Honest caveats
 
-- **83.6% is a real result for the current `engram_lean` configuration, not a cherry-picked slice.** Small
-  samples were repeatedly optimistic during development (an 18-item slice once read 83% when an earlier
-  full-set truth was ~58%); **only full-500 numbers appear here.**
-- The lean headline (83.6% @ 9.6k) and the full-context baseline (73.2% @ 79k) are both 500-question runs
-  under the same doubao answerer + deepseek judge; the full-context baseline depends only on
-  (questions, answerer, judge), all identical, so it is a fair reference for the lean number.
+- **83.6% remains a real historical full-500 `engram_lean` result**, not a cherry-picked slice. It is not
+  the paired headline because its comparison baseline was recorded in a different log. Small samples were
+  repeatedly optimistic during development (an 18-item slice once read 83% when an earlier full-set truth
+  was ~58%); only full-500 numbers appear here.
+- The canonical paired headline is **79.0% vs 76.0%** from one joint run. Its +3.0-point estimate is positive
+  but its confidence interval crosses zero, so we do not call it statistically decisive.
 - The hardest categories — multi-session reasoning and single-session-preference — are the active roadmap,
   updated here with the same reproduce discipline. If a future number appears in this file, the command to
   reproduce it appears next to it.

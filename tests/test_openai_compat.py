@@ -78,9 +78,16 @@ def test_chat_completion_supports_as_of_memory_view():
         seen = {}
         svc.llm = FakeLLM(handler=lambda p, s: seen.setdefault("system", s) and "" or "You worked at Tencent.")
         body = {"model": "engram", "messages": [{"role": "user", "content": "where did Wei work?"}]}
-        resp = oc.chat_completion(svc, "u", body, as_of=1_700_864_000.0)
+        resp = oc.chat_completion(
+            svc,
+            "u",
+            body,
+            as_of=1_700_864_000.0,
+            known_at=2_000_000_000.0,
+        )
 
         assert resp["engram"]["as_of"] == 1_700_864_000.0
+        assert resp["engram"]["known_at"] == 2_000_000_000.0
         assert "Tencent" in (seen["system"] or "")
         assert "Moonshot AI" not in (seen["system"] or "")
     finally:
@@ -182,12 +189,17 @@ def test_chat_completions_endpoint_supports_memory_as_of(client_with_llm):
     r = c.post("/v1/chat/completions", json={
         "model": "engram",
         "messages": [{"role": "user", "content": "where did Wei work?"}],
-        "memory": {"as_of": 1_700_864_000.0, "remember": False},
+        "memory": {
+            "as_of": 1_700_864_000.0,
+            "known_at": 2_000_000_000.0,
+            "remember": False,
+        },
     }, headers=h)
 
     assert r.status_code == 200
     data = r.json()
     assert data["engram"]["as_of"] == 1_700_864_000.0
+    assert data["engram"]["known_at"] == 2_000_000_000.0
     assert data["engram"]["remembered"] is False
     system = appmod._svc.llm.calls[-1]["system"] or ""
     assert "Tencent" in system

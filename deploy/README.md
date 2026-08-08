@@ -10,7 +10,8 @@ cp deploy/.env.example deploy/.env
 python -c 'import secrets; print(secrets.token_urlsafe(32))'
 ```
 
-把生成值写入 `deploy/.env` 的 `ENGRAM_API_KEYS=tenant:key`，然后：
+把生成值写入 `deploy/.env` 的 `ENGRAM_API_KEYS=tenant:key`。如果启用个人分身治理，
+再生成另一个强密钥写入 `ENGRAM_OWNER_KEYS=tenant:owner-key`；两个 key 不得相同。然后：
 
 ```bash
 docker compose --env-file deploy/.env -f deploy/docker-compose.yml up -d --build
@@ -37,6 +38,7 @@ ENGRAM_API_KEYS=tenant-a:key-new,tenant-a:key-old
 
 先加入新 key 并重启，切换所有客户端，确认新 key 可用后删除旧 key 再重启。一个 key 映射到两个租户会使
 服务 readiness 失败；空租户、空 key 和缺失分隔符也会被拒绝。
+分身 owner key 应独立轮换，不下发给 agent/model 运行时；与普通 API key 复用会被拒绝。
 
 ## 反向代理清单
 

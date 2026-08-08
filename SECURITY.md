@@ -25,8 +25,14 @@
 
 - 必须设置 `ENGRAM_API_KEYS`，不要在生产启用 `ENGRAM_OPEN` 或 `ENGRAM_ALLOW_ANONYMOUS`。
 - 使用至少 32 个随机字符的密钥，通过部署平台的 secret 功能注入，不要提交 `.env`。
+- 个人分身治理的 `ENGRAM_OWNER_KEYS` 必须与 `ENGRAM_API_KEYS` 完全不同，只进入人类 owner 审批面，
+  不注入 agent/MCP/模型环境；代码会拒绝两类 key 复用。
 - 服务默认只绑定本机地址；由 TLS 反向代理对外提供访问、速率限制和访问日志脱敏。
 - 为 `/data` 配置受限权限、加密磁盘、定期备份和恢复演练。
+- 0700/0600 仅是访问控制，不是应用层静态加密；macOS 开启 FileVault，Linux/容器数据盘
+  使用 LUKS/dm-crypt 或平台加密卷，并把备份、snapshot 和交换/休眠文件纳入同一边界。
+- LanceDB 删除是当前表的逻辑删除，不证明旧 fragments、SSD FTL、APFS/云 snapshot、备份或
+  同步历史已物理擦除。
 - 默认安全导出不包含敏感事实和原始对话；完整私有导出只能在用户明确授权时执行。
 - 轮换密钥时先为同一租户加入新密钥，切换客户端后再移除旧密钥。
 
@@ -34,7 +40,8 @@
 
 0.1.0 对逻辑租户 ID 使用带摘要的安全目录名，防止目录穿越和字符过滤碰撞；整租户删除只允许作用于
 数据根目录的已验证子项。静态密钥配置适合单节点自托管，不等同于完整身份平台。更多边界见
-[`docs/commercial-release-0.1.0.zh-CN.md`](docs/commercial-release-0.1.0.zh-CN.md)。
+[`docs/commercial-release-0.1.0.zh-CN.md`](docs/commercial-release-0.1.0.zh-CN.md) 和
+[`docs/storage-privacy-boundary.zh-CN.md`](docs/storage-privacy-boundary.zh-CN.md)。
 
 ---
 

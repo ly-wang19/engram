@@ -8,7 +8,8 @@ Every number in the paper is grounded in the committed logs in [`../RESULTS.md`]
 
 1. **Architecture** (TikZ, inline) — the dual-process write/consolidate/read pipeline.
 2. **Bi-temporal timeline** (TikZ, inline) — non-destructive invalidation + `supersedes` + as-of queries.
-3. **Accuracy vs. tokens** (`figs/fig_acc_tokens.pdf`) — the headline: +10.4 pts at ~8× fewer tokens.
+3. **Accuracy vs. tokens** (`figs/fig_acc_tokens.pdf`) — the canonical paired headline: +3.0-point
+   estimate at 10.9× fewer context tokens (paired interval crosses zero).
 4. **Per-category bars** (`figs/fig_percat.pdf`) — engram_lean by category, bi-temporal categories highlighted.
 
 ## Files

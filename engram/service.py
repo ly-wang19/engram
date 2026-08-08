@@ -19,7 +19,23 @@ from collections import OrderedDict
 from contextlib import contextmanager
 from typing import Any, Optional
 
+from .erasure import (
+    ErasurePlan,
+    ErasureReceipt,
+    apply_erasure,
+    plan_fact_erasure,
+    plan_session_erasure,
+    verify_erasure,
+)
 from .memory import Memory
+from .store import InMemoryVectorStore
+from .twin import (
+    ActionRequest,
+    CapabilityGrant,
+    CredentialRef,
+    PermissionLevel,
+)
+from .types import is_visible
 from .util import fmt_date, fmt_datetime
 
 DEFAULT_DATA_DIR = os.path.expanduser("~/.engram/data")
@@ -227,6 +243,34 @@ class MemoryService:
             if self._hot.get(user) is mem:
                 self._hot_versions[user] = self._store_version(user)
 
+    def _save_verified_erasure(
+        self,
+        user: str,
+        mem: Memory,
+        plan: ErasurePlan,
+        receipt: ErasureReceipt,
+    ) -> dict:
+        """Commit an erasure and verify the committed store through a fresh in-memory reopen."""
+        self._save(user, mem)
+        audit = Memory.open(
+            self._path(user),
+            embedder=self.embedder,
+            llm=self.llm,
+            config=self.config,
+            # Audit the SQLite snapshot without opening a second persistent vector backend.
+            vector_store_factory=lambda: InMemoryVectorStore(),
+        )
+        storage_verified = verify_erasure(audit, plan)
+        if not storage_verified:
+            raise RuntimeError("durable erasure verification failed")
+        payload = receipt.to_dict()
+        payload["storage_verified"] = True
+        payload["canonical_storage_verified"] = True
+        payload["live_index_verified"] = receipt.verified
+        payload["storage_backend"] = self.config.storage
+        payload["physical_media_erasure_guaranteed"] = False
+        return payload
+
     def lock(self, user: str) -> threading.Lock:
         with self._g:
             return self._locks.setdefault(user, threading.Lock())
@@ -352,12 +396,46 @@ class MemoryService:
             self._save(user, mem)
             return {"ok": True, "id": f.id, "text": f.text}
 
-    def delete_fact(self, user: str, fact_id: str) -> dict:
+    def delete_fact(self, user: str, fact_id: str, confirm: bool = False) -> dict:
+        """Erase a fact's complete provenance only after previewable confirmation."""
+        if not confirm:
+            mem = self.get(user)
+            plan = plan_fact_erasure(mem, fact_id)
+            if not plan.exists:
+                return {"ok": False, "message": "fact not found"}
+            return {
+                "ok": False,
+                "confirmation_required": True,
+                "impact": plan.counts(),
+                "message": (
+                    "set confirm=true to erase this fact, its raw source, and sibling derivations"
+                ),
+            }
         with self.write_lock(user):
             mem = self.get(user)
-            ok = mem.delete_fact(fact_id)
-            self._save(user, mem)
-            return {"ok": ok}
+            plan = plan_fact_erasure(mem, fact_id)
+            if not plan.exists:
+                return {"ok": False}
+            receipt = apply_erasure(mem, plan)
+            erasure = self._save_verified_erasure(user, mem, plan, receipt)
+            return {"ok": True, "erasure": erasure}
+
+    def erase_session(self, user: str, session_id: str, confirm: bool = False) -> dict:
+        """Permanently erase one session and its derived memory after explicit confirmation."""
+        if not confirm:
+            return {
+                "ok": False,
+                "confirmation_required": True,
+                "message": "set confirm=true to permanently erase this session and derived memory",
+            }
+        with self.write_lock(user):
+            mem = self.get(user)
+            plan = plan_session_erasure(mem, user, session_id)
+            if not plan.exists:
+                return {"ok": False, "message": "session not found"}
+            receipt = apply_erasure(mem, plan)
+            erasure = self._save_verified_erasure(user, mem, plan, receipt)
+            return {"ok": True, "erasure": erasure}
 
     def set_focus(self, user: str, track: Optional[list[str]] = None,
                   mute: Optional[list[str]] = None) -> dict:
@@ -375,11 +453,205 @@ class MemoryService:
             self._save(user, mem)
             return {"ok": True, **result}
 
+    # --- personal twin governance ------------------------------------------
+    def twin_contract(self, user: str) -> dict:
+        mem = self.get(user)
+        return {
+            "ok": True,
+            "contract": mem.twin_contract.to_dict(),
+            "model_context": mem.twin_contract.to_model_context(),
+        }
+
+    def twin_context(self, user: str) -> dict:
+        """Prompt-safe owner intent; excludes policy controls and capability state."""
+        contract = self.get(user).twin_contract
+        return {
+            "ok": True,
+            "contract_version": contract.version,
+            "model_context": contract.to_model_context(),
+        }
+
+    def twin_contract_history(self, user: str, limit: int = 100) -> dict:
+        """Return owner-visible immutable contract revisions, newest first."""
+        bounded = max(1, min(int(limit), 1000))
+        history = self.get(user).twin_contract_history[-bounded:]
+        return {
+            "ok": True,
+            "contracts": [item.to_dict() for item in reversed(history)],
+            "returned": len(history),
+        }
+
+    def revise_twin_contract(self, user: str, patch: dict[str, Any]) -> dict:
+        with self.write_lock(user):
+            mem = self.get(user)
+            contract = mem.revise_twin_contract(patch)
+            self._save(user, mem)
+            return {
+                "ok": True,
+                "contract": contract.to_dict(),
+                "model_context": contract.to_model_context(),
+            }
+
+    def capabilities(self, user: str, *, include_credential_refs: bool = False) -> dict:
+        registry = self.get(user).capability_registry.to_dict()
+        if not include_credential_refs:
+            for grant in registry["grants"]:
+                credential = grant.pop("credential_ref", None)
+                grant["credential_configured"] = credential is not None
+        return {"ok": True, "registry": registry}
+
+    def grant_capability(
+        self,
+        user: str,
+        capability: str,
+        permission: str,
+        scopes: list[str],
+        *,
+        credential_ref: Optional[dict[str, str]] = None,
+        expires_at: Optional[float] = None,
+        provenance: Optional[list[str]] = None,
+    ) -> dict:
+        with self.write_lock(user):
+            mem = self.get(user)
+            credential = CredentialRef(**credential_ref) if credential_ref else None
+            grant = CapabilityGrant(
+                capability=capability,
+                permission=PermissionLevel(permission),
+                scopes=tuple(scopes),
+                credential_ref=credential,
+                expires_at=expires_at,
+                provenance=tuple(provenance or ()),
+            )
+            mem.grant_capability(grant)
+            self._save(user, mem)
+            return {"ok": True, "grant": mem.capability_registry.to_dict()["grants"][-1]}
+
+    def revoke_capability(self, user: str, grant_id: str) -> dict:
+        with self.write_lock(user):
+            mem = self.get(user)
+            try:
+                grant = mem.revoke_capability(grant_id)
+            except KeyError:
+                return {"ok": False, "message": "capability grant not found"}
+            self._save(user, mem)
+            current = mem.capability_registry.to_dict()["grants"]
+            payload = next(item for item in current if item["id"] == grant.id)
+            return {"ok": True, "grant": payload}
+
+    def authorize_twin_action(
+        self,
+        user: str,
+        capability: str,
+        permission: str,
+        resource: str,
+        *,
+        description: str = "",
+        high_risk: bool = False,
+        external_write: bool = False,
+        human_confirmed: bool = False,
+    ) -> dict:
+        """Evaluate and audit owner policy; this method never executes the requested action.
+
+        A normal agent caller cannot assert its own human confirmation. Pending
+        decisions must be approved through the separately authenticated owner
+        control plane and then revalidated by the executor.
+        """
+        if human_confirmed:
+            raise ValueError(
+                "agent-supplied human confirmation is not accepted; use the owner confirmation endpoint"
+            )
+        with self.write_lock(user):
+            mem = self.get(user)
+            request = ActionRequest(
+                capability=capability,
+                permission=PermissionLevel(permission),
+                resource=resource,
+                description=description,
+                high_risk=high_risk,
+                external_write=external_write,
+            )
+            decision = mem.authorize_twin_action(
+                request,
+                human_confirmed=False,
+            )
+            self._save(user, mem)
+            return {
+                "ok": True,
+                "request": request.to_dict(),
+                "decision": decision.to_dict(),
+                "executed": False,
+            }
+
+    def confirm_twin_action(self, user: str, decision_id: str) -> dict:
+        """Approve one pending decision from the separately authenticated owner plane."""
+        with self.write_lock(user):
+            mem = self.get(user)
+            try:
+                decision = mem.confirm_twin_action(decision_id)
+            except KeyError:
+                return {"ok": False, "message": "authorization decision not found"}
+            self._save(user, mem)
+            request = mem.twin_decisions[decision_id][0]
+            executable, reason = mem.twin_decision_executable(decision_id)
+            return {
+                "ok": decision.allowed,
+                "request": request.to_dict(),
+                "decision": decision.to_dict(),
+                "executable": executable,
+                "message": reason,
+                "executed": False,
+            }
+
+    def twin_decision(self, user: str, decision_id: str) -> dict:
+        """Read one decision and its live executability without executing it."""
+        mem = self.get(user)
+        pair = mem.twin_decisions.get(decision_id)
+        if pair is None:
+            return {"ok": False, "message": "authorization decision not found"}
+        request, decision = pair
+        executable, reason = mem.twin_decision_executable(decision_id)
+        return {
+            "ok": True,
+            "request": request.to_dict(),
+            "decision": decision.to_dict(),
+            "executable": executable,
+            "message": reason,
+            "executed": any(
+                item.decision.id == decision_id for item in mem.twin_actions
+            ),
+        }
+
+    def record_twin_action(
+        self,
+        user: str,
+        decision_id: str,
+        outcome: str,
+        *,
+        executed_at: Optional[float] = None,
+        provenance: Optional[list[str]] = None,
+    ) -> dict:
+        with self.write_lock(user):
+            mem = self.get(user)
+            try:
+                record = mem.record_twin_action(
+                    decision_id,
+                    outcome,
+                    executed_at=executed_at,
+                    provenance=tuple(provenance or ()),
+                )
+            except KeyError:
+                return {"ok": False, "message": "authorization decision not found"}
+            except ValueError as exc:
+                return {"ok": False, "message": str(exc)}
+            self._save(user, mem)
+            return {"ok": True, "action": record.to_dict()}
+
     # --- read path ----------------------------------------------------------
     def recall(self, user: str, query: str, lean: bool = True, n_chunks: int = 6,
                session_id: Optional[str] = None, as_of: Optional[float] = None,
                redact_sensitive: bool = False,
-               answer: bool = False) -> dict:
+               answer: bool = False,
+               known_at: Optional[float] = None) -> dict:
         """A small retrieved context (lean) or a direct factual answer (lean=False). When `session_id` is
         set, the lean context also surfaces that session's ephemeral working memory.
 
@@ -390,11 +662,13 @@ class MemoryService:
         mem = self.get(user)
         if lean:
             ctx = mem.lean_context(query, user_id=user, n_chunks=n_chunks, session_id=session_id,
-                                   as_of=as_of, redact_sensitive=redact_sensitive)
+                                   as_of=as_of, redact_sensitive=redact_sensitive,
+                                   known_at=known_at)
             out = {
                 "context": ctx,
                 "tokens_est": _est_tokens(ctx),
                 "as_of": as_of,
+                "known_at": known_at,
                 "redacted_sensitive": redact_sensitive,
             }
             if answer:
@@ -402,12 +676,12 @@ class MemoryService:
                 # episode into the prompt. For as-of reads, future episodes are not part of the baseline.
                 full = "\n".join(
                     ep.content for ep in mem.episodes_doc.values()
-                    if as_of is None or ep.event_time <= as_of
+                    if is_visible(ep, as_of=as_of, known_at=known_at)
                 )
                 out["full_tokens"] = _est_tokens(full)
                 out["answer"] = _answer_from_memory(self.answerer, query, ctx)
             return out
-        res = mem.search(query, user_id=user, as_of=as_of)
+        res = mem.search(query, user_id=user, as_of=as_of, known_at=known_at)
         visible_facts = [
             f for f in res.facts[:10]
             if not redact_sensitive or not getattr(f, "sensitive", False)
@@ -421,6 +695,7 @@ class MemoryService:
             "answer": answer,
             "facts": [f.text for f in visible_facts],
             "as_of": as_of,
+            "known_at": known_at,
             "redacted_sensitive": redact_sensitive,
         }
 
@@ -588,6 +863,7 @@ class MemoryService:
                 "read_context": "engram_recall",
                 "write_memory": "engram_remember",
                 "close_session": "engram_close_session",
+                "erase_session": "engram_erase_session",
                 "inspect_facts": "engram_list_facts",
                 "correct_fact": "engram_update_fact",
                 "delete_fact": "engram_delete_fact",
@@ -769,6 +1045,7 @@ class MemoryService:
         q: str = "",
         live_only: bool = False,
         limit: Optional[int] = None,
+        known_at: float | None = None,
     ) -> dict:
         lim = _clamp_limit(limit, default=None, max_value=500)
         return self.get(user).graph_data(
@@ -778,6 +1055,7 @@ class MemoryService:
             q=q,
             live_only=live_only,
             limit=lim,
+            known_at=known_at,
         )
 
     def memories(

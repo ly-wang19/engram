@@ -38,7 +38,8 @@ INSTRUCTIONS = (
     "state that should not become a long-term profile fact. "
     "Use `engram_close_session` when a thread/task ends to finish consolidation and clear ephemeral "
     "working state for that session; use `engram_session_report` when the user asks what that session "
-    "saved; use `engram_list_sessions` when the user asks which agent/app sessions touched memory. "
+    "saved; use `engram_list_sessions` when the user asks which agent/app sessions touched memory; use "
+    "`engram_erase_session` only when the user explicitly asks to erase a whole source session. "
     "`engram_search` gives a single direct answer; `engram_agent_status` checks the current namespace, "
     "session, focus, and next memory actions without exposing memory contents; `engram_stats` checks "
     "content-free memory health; "
@@ -47,6 +48,10 @@ INSTRUCTIONS = (
     "one specific fact; `engram_get_focus` / `engram_set_focus` inspect and update the user's tracked "
     "or muted memory topics; `engram_import` bulk-loads an exported history; `engram_export` gives the "
     "user a portable memory export; `engram_forget` erases everything (irreversible)."
+    " The personal-twin tools expose a model-safe policy view, not an owner control plane or executor: "
+    "inspect owner guidance and redacted grants, call `engram_authorize_twin_action` before an action, "
+    "and record an executor-reported outcome afterward. Contract/grant changes and owner confirmation "
+    "must come from a trusted control plane. Authorization never performs the requested action."
 )
 
 mcp = FastMCP("engram_mcp", instructions=INSTRUCTIONS)
@@ -78,6 +83,12 @@ class RememberScope(str, Enum):
     AUTO = "auto"
     LONG = "long"
     WORKING = "working"
+
+
+class CapabilityPermission(str, Enum):
+    OBSERVE = "observe"
+    DRAFT = "draft"
+    EXECUTE = "execute"
 
 
 def _json(obj) -> str:
@@ -115,6 +126,21 @@ def _format_focus(focus: dict) -> str:
     return f"- Track: {track_s}\n- Mute: {mute_s}"
 
 
+def _hide_credential_refs(value):
+    """Keep vault/keychain identifiers out of the model-visible MCP transcript."""
+    if isinstance(value, dict):
+        cleaned = {}
+        for key, child in value.items():
+            if key == "credential_ref":
+                cleaned["credential_configured"] = child is not None
+            else:
+                cleaned[key] = _hide_credential_refs(child)
+        return cleaned
+    if isinstance(value, list):
+        return [_hide_credential_refs(child) for child in value]
+    return value
+
+
 # annotation presets
 _READ = dict(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False)
 _WRITE = dict(readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=False)
@@ -134,7 +160,10 @@ async def engram_recall(
     session_id: Annotated[Optional[str], Field(description="Optional conversation/thread id; when set, "
                                            "session-scoped working memory is included.")] = None,
     as_of: Annotated[Optional[float], Field(description="Optional epoch seconds for a point-in-time memory "
-                                           "view, e.g. what was believed before a later update.")] = None,
+                                           "view on the world's valid-time axis.")] = None,
+    known_at: Annotated[Optional[float], Field(description="Optional epoch seconds for the transaction-time "
+                                              "knowledge boundary. Use with as_of to ask what was known then; "
+                                              "when used alone, valid time defaults to the same instant.")] = None,
     redact_sensitive: Annotated[bool, Field(description="When true, omit facts tagged sensitive from the "
                                             "returned context.")] = False,
     response_format: ResponseFormat = ResponseFormat.MARKDOWN,
@@ -147,7 +176,8 @@ async def engram_recall(
     answer from it; if it's empty, the memory has nothing on the topic.
 
     Returns (markdown): a context block to read from, with an approximate token count.
-    Returns (json): {"context": str, "tokens_est": int, "as_of": float|null, "redacted_sensitive": bool}.
+    Returns (json): {"context": str, "tokens_est": int, "as_of": float|null,
+    "known_at": float|null, "redacted_sensitive": bool}.
     """
     try:
         data = await backend().recall(
@@ -156,6 +186,7 @@ async def engram_recall(
             lean=True,
             session_id=session_id,
             as_of=as_of,
+            known_at=known_at,
             redact_sensitive=redact_sensitive,
         )
     except Exception as e:  # noqa: BLE001
@@ -173,7 +204,10 @@ async def engram_search(
     query: Annotated[str, Field(description="A direct factual question, e.g. 'Where does the user work?'",
                                 min_length=1)],
     as_of: Annotated[Optional[float], Field(description="Optional epoch seconds for a point-in-time memory "
-                                           "view, e.g. answer as of a past date.")] = None,
+                                           "view on the world's valid-time axis.")] = None,
+    known_at: Annotated[Optional[float], Field(description="Optional epoch seconds for the transaction-time "
+                                              "knowledge boundary. Use with as_of to exclude facts learned "
+                                              "later; alone it also supplies the valid-time instant.")] = None,
     redact_sensitive: Annotated[bool, Field(description="When true, omit facts tagged sensitive and abstain "
                                             "instead of returning sensitive answers.")] = False,
     response_format: ResponseFormat = ResponseFormat.MARKDOWN,
@@ -185,10 +219,17 @@ async def engram_search(
     attribute isn't stored.
 
     Returns (markdown): the answer plus the facts it rests on.
-    Returns (json): {"answer": str, "facts": [str, ...], "as_of": float|null, "redacted_sensitive": bool}.
+    Returns (json): {"answer": str, "facts": [str, ...], "as_of": float|null,
+    "known_at": float|null, "redacted_sensitive": bool}.
     """
     try:
-        data = await backend().recall(query, lean=False, as_of=as_of, redact_sensitive=redact_sensitive)
+        data = await backend().recall(
+            query,
+            lean=False,
+            as_of=as_of,
+            known_at=known_at,
+            redact_sensitive=redact_sensitive,
+        )
     except Exception as e:  # noqa: BLE001
         return _err(e)
     if response_format == ResponseFormat.JSON:
@@ -276,6 +317,45 @@ async def engram_close_session(
         f"added {data.get('facts_added', 0)} fact(s), "
         f"created {data.get('summaries', 0)} summary(ies), "
         f"cleared {data.get('working_cleared', 0)} working item(s)."
+    )
+
+
+@mcp.tool(
+    name="engram_erase_session",
+    annotations=ToolAnnotations(title="Erase one memory session", **_DESTRUCTIVE),
+)
+async def engram_erase_session(
+    session_id: Annotated[str, Field(description="Conversation/thread id to erase.", min_length=1)],
+    confirm: Annotated[
+        bool,
+        Field(description="Must be true to erase raw source and every derived memory."),
+    ] = False,
+    response_format: ResponseFormat = ResponseFormat.MARKDOWN,
+) -> str:
+    """Permanently erase one session, its raw transcript, and all derived memory.
+
+    This is stronger than close_session, which retains provenance. Use it only after the owner explicitly
+    requests erasure. The JSON response includes a content-free, storage-verified receipt.
+    """
+    if not confirm:
+        return (
+            f"This permanently erases session `{session_id}`, its raw source, and derived memory. "
+            "Re-call with confirm=true only if the user explicitly requested it."
+        )
+    try:
+        data = await backend().erase_session(session_id, confirm=True)
+    except Exception as e:  # noqa: BLE001
+        return _err(e)
+    if response_format == ResponseFormat.JSON:
+        return _json(data)
+    if not data.get("ok"):
+        return f"Session `{session_id}` was not found."
+    erasure = data.get("erasure") or {}
+    counts = erasure.get("counts") or {}
+    return (
+        f"Erased session `{session_id}` and verified durable storage: "
+        f"{counts.get('episodes', 0)} episode(s), {counts.get('facts', 0)} fact(s), "
+        f"{counts.get('working', 0)} working item(s)."
     )
 
 
@@ -481,6 +561,183 @@ async def engram_set_focus(
     return "# Updated memory focus\n\n" + _format_focus(focus)
 
 
+@mcp.tool(
+    name="engram_get_twin_contract",
+    annotations=ToolAnnotations(title="Get personal-twin guidance", **_READ),
+)
+async def engram_get_twin_contract(
+    response_format: ResponseFormat = ResponseFormat.MARKDOWN,
+) -> str:
+    """Read the model-visible part of the owner's versioned Twin Contract.
+
+    This returns goals, principles, and owner-approved boundary descriptions. Trusted enforcement
+    details (scope patterns, boundary effects, capability grants, and credential references) are not
+    placed in model context.
+    """
+    try:
+        data = await backend().twin_contract()
+    except Exception as e:  # noqa: BLE001
+        return _err(e)
+    context = data.get("model_context") or {}
+    safe = {"ok": bool(data.get("ok", True)), "model_context": context}
+    if response_format == ResponseFormat.JSON:
+        return _json(safe)
+    lines = [
+        "# Personal-twin contract",
+        "",
+        f"- Version: {context.get('contract_version', '?')}",
+        "- This view contains guidance only; enforcement controls remain in the trusted control plane.",
+    ]
+    goals = context.get("goals") or []
+    if goals:
+        lines += ["", "Goals:"] + [f"- {item.get('title', '')}" for item in goals]
+    principles = context.get("principles") or []
+    if principles:
+        lines += ["", "Principles:"] + [f"- {item.get('statement', '')}" for item in principles]
+    boundaries = context.get("boundaries") or []
+    if boundaries:
+        lines += ["", "Owner-visible boundaries:"] + [
+            f"- {item.get('description', '')}" for item in boundaries
+        ]
+    return "\n".join(lines)
+
+
+@mcp.tool(
+    name="engram_list_capabilities",
+    annotations=ToolAnnotations(title="List personal-twin grants", **_READ),
+)
+async def engram_list_capabilities(
+    response_format: ResponseFormat = ResponseFormat.MARKDOWN,
+) -> str:
+    """Inspect scoped capability grants without revealing credential-provider references.
+
+    A listed grant is not itself permission for a particular action. Always call
+    `engram_authorize_twin_action` with the exact canonical resource before an executor acts.
+    """
+    try:
+        data = _hide_credential_refs(await backend().capabilities())
+    except Exception as e:  # noqa: BLE001
+        return _err(e)
+    if response_format == ResponseFormat.JSON:
+        return _json(data)
+    grants = (data.get("registry") or {}).get("grants") or []
+    if not grants:
+        return "No personal-twin capabilities are granted (default deny)."
+    lines = ["# Personal-twin capability grants", ""]
+    for grant in grants:
+        revoked = " (revoked)" if grant.get("revoked_at") is not None else ""
+        credential = " [credential configured]" if grant.get("credential_configured") else ""
+        lines.append(
+            f"- `{grant.get('id', '?')}` {grant.get('capability', '?')}:"
+            f"{grant.get('permission', '?')} on {', '.join(grant.get('scopes') or [])}"
+            f"{revoked}{credential}"
+        )
+    return "\n".join(lines)
+
+
+@mcp.tool(
+    name="engram_authorize_twin_action",
+    annotations=ToolAnnotations(title="Evaluate a personal-twin action", **_WRITE),
+)
+async def engram_authorize_twin_action(
+    capability: Annotated[
+        str,
+        Field(description="Capability name to evaluate, e.g. 'calendar'.", min_length=1),
+    ],
+    permission: Annotated[
+        CapabilityPermission,
+        Field(description="Requested authority: observe, draft, or execute."),
+    ],
+    resource: Annotated[
+        str,
+        Field(
+            description="Exact canonical slash-separated resource; wildcards are forbidden.",
+            min_length=1,
+        ),
+    ],
+    description: Annotated[
+        str,
+        Field(description="Content-free explanation of the intended action."),
+    ] = "",
+    high_risk: Annotated[
+        bool,
+        Field(description="True when consequences are difficult to reverse or safety-sensitive."),
+    ] = False,
+    external_write: Annotated[
+        bool,
+        Field(description="True when the intended action changes an external system."),
+    ] = False,
+    response_format: ResponseFormat = ResponseFormat.MARKDOWN,
+) -> str:
+    """Return a deterministic policy decision; this tool never executes the requested action.
+
+    MCP cannot attest human confirmation, so this surface always evaluates with
+    `human_confirmed=false`. A `requires_confirmation` decision must be resumed through a trusted owner
+    control plane; it is not permission to execute.
+    """
+    try:
+        data = await backend().authorize_twin_action(
+            capability,
+            permission.value,
+            resource,
+            description=description,
+            high_risk=high_risk,
+            external_write=external_write,
+        )
+    except Exception as e:  # noqa: BLE001
+        return _err(e)
+    # Defensive override: a backend contract violation must never make this formatter imply execution.
+    data["executed"] = False
+    if response_format == ResponseFormat.JSON:
+        return _json(data)
+    decision = data.get("decision") or {}
+    return (
+        f"Twin action decision: **{decision.get('status', 'denied')}** "
+        f"({decision.get('reason', 'no reason supplied')}). Nothing was executed."
+    )
+
+
+@mcp.tool(
+    name="engram_record_twin_action",
+    annotations=ToolAnnotations(title="Record a personal-twin outcome", **_WRITE),
+)
+async def engram_record_twin_action(
+    decision_id: Annotated[
+        str,
+        Field(description="Allowed decision id returned by engram_authorize_twin_action.", min_length=1),
+    ],
+    outcome: Annotated[
+        str,
+        Field(description="Outcome reported by the separate trusted executor; this tool does not act."),
+    ],
+    provenance: Annotated[
+        Optional[list[str]],
+        Field(description="Optional audit references produced by the executor."),
+    ] = None,
+    response_format: ResponseFormat = ResponseFormat.MARKDOWN,
+) -> str:
+    """Append an audit outcome for an already allowed decision; perform no external action.
+
+    The MCP surface intentionally cannot choose `executed_at`; Engram timestamps the audit record after
+    verifying that the referenced server-side decision is still executable.
+    """
+    try:
+        data = await backend().record_twin_action(
+            decision_id,
+            outcome,
+            executed_at=None,
+            provenance=provenance,
+        )
+    except Exception as e:  # noqa: BLE001
+        return _err(e)
+    if response_format == ResponseFormat.JSON:
+        return _json(data)
+    if not data.get("ok"):
+        return f"Could not record twin action: {data.get('message', 'unknown decision')}."
+    action = data.get("action") or {}
+    return f"Recorded audit outcome `{action.get('id', '?')}`. This tool executed nothing."
+
+
 @mcp.tool(name="engram_agent_status", annotations=ToolAnnotations(title="Get agent memory status", **_READ))
 async def engram_agent_status(
     session_id: Annotated[Optional[str], Field(description="Optional current conversation/thread id. "
@@ -631,25 +888,34 @@ async def engram_delete_fact(
     confirm: Annotated[bool, Field(description="Must be true to permanently delete this fact.")] = False,
     response_format: ResponseFormat = ResponseFormat.MARKDOWN,
 ) -> str:
-    """Permanently delete one stored fact by id.
+    """Permanently erase one stored fact and its source provenance by id.
 
-    This is for precise correction/right-to-forget requests. It does not erase the whole namespace; use
-    `engram_forget(confirm=true)` only when the user explicitly asks to wipe everything.
+    A raw source can produce several derived facts, so erasing an extracted fact also erases that source
+    episode and its sibling extractions. It does not erase the whole namespace; use `engram_forget` only
+    when the user explicitly asks to wipe everything.
 
-    Returns (json): {"ok": bool}.
+    Returns (json): {"ok": bool, "erasure": {"counts", "verified", "storage_verified", ...}}.
     """
     if not confirm:
         return (
-            f"This permanently deletes fact `{fact_id}` and cannot be undone. Re-call with confirm=true "
-            "only if the user explicitly asked to delete that fact."
+            f"This permanently erases fact `{fact_id}` plus its raw provenance and sibling extractions. "
+            "Re-call with confirm=true only if the user explicitly requested erasure."
         )
     try:
-        data = await backend().delete_fact(fact_id)
+        data = await backend().delete_fact(fact_id, confirm=True)
     except Exception as e:  # noqa: BLE001
         return _err(e)
     if response_format == ResponseFormat.JSON:
         return _json(data)
-    return f"Deleted fact `{fact_id}`." if data.get("ok") else f"Fact `{fact_id}` was not found."
+    if not data.get("ok"):
+        return f"Fact `{fact_id}` was not found."
+    erasure = data.get("erasure") or {}
+    counts = erasure.get("counts") or {}
+    return (
+        f"Erased fact `{fact_id}` and verified durable storage: "
+        f"{counts.get('episodes', 0)} source episode(s), "
+        f"{counts.get('facts', 0)} derived fact(s)."
+    )
 
 
 @mcp.tool(name="engram_import", annotations=ToolAnnotations(title="Bulk-import a history", **_WRITE))

@@ -9,7 +9,7 @@ from ..config import Config
 from ..consolidate.conflict import is_single_valued
 from ..embed import Embedder
 from ..store import GraphStore, VectorStore
-from ..types import Fact
+from ..types import Fact, is_visible, valid_time_for
 from ..util import cosine, fmt_date, now, recency, tokenize
 from .fusion import order_by_score, weighted_rrf
 from .lexical import bm25_scores, stem, stems
@@ -223,7 +223,13 @@ class HybridRetriever:
                 direct.update(hits)
         return direct
 
-    def graph_exclusion_zone(self, query: str, user_id: str, as_of: Optional[float]) -> set[str]:
+    def graph_exclusion_zone(
+        self,
+        query: str,
+        user_id: str,
+        as_of: Optional[float],
+        known_at: Optional[float] = None,
+    ) -> set[str]:
         """Directly excluded entities plus entities whose attribute value is excluded.
 
         Example: if the query says "project not in Lisbon", `Lisbon` is directly excluded and a
@@ -237,7 +243,7 @@ class HybridRetriever:
         for rel in self.graph.relations():
             if rel.predicate.lower() not in _EXCLUSION_VALUE_PREDS:
                 continue
-            live = as_of is None or (rel.valid_at <= as_of and (rel.invalid_at is None or rel.invalid_at > as_of))
+            live = is_visible(rel, as_of=as_of, known_at=known_at)
             if live and rel.object_id in direct:
                 out.add(rel.subject_id)
         return out
@@ -250,12 +256,17 @@ class HybridRetriever:
         return (subj is not None and subj.id in entity_ids) or (obj is not None and obj.id in entity_ids)
 
     def _graph_scores(
-        self, query: str, user_id: str, live: list[Fact], as_of: Optional[float]
+        self,
+        query: str,
+        user_id: str,
+        live: list[Fact],
+        as_of: Optional[float],
+        known_at: Optional[float] = None,
     ) -> tuple[dict[str, float], set[str]]:
         qids = self.query_entity_ids(query, user_id)
         if not self.config.graph_proximity:
             return {f.id: 0.0 for f in live}, qids
-        excluded = self.graph_exclusion_zone(query, user_id, as_of)
+        excluded = self.graph_exclusion_zone(query, user_id, as_of, known_at)
         qids -= excluded
         live_fact_ids = {f.id for f in live}
         node_scores: dict[str, float] = {eid: 1.0 for eid in qids}
@@ -265,7 +276,7 @@ class HybridRetriever:
             next_frontier: dict[str, float] = {}
             for eid, parent_score in frontier.items():
                 for direction in ("out", "in"):
-                    for rel in self.graph.neighbors(eid, as_of, direction):
+                    for rel in self.graph.neighbors(eid, as_of, direction, known_at):
                         if rel.fact_id not in live_fact_ids:
                             continue
                         if rel.subject_id in excluded or rel.object_id in excluded:
@@ -340,12 +351,20 @@ class HybridRetriever:
         ]
 
     def retrieve(
-        self, query: str, user_id: str, as_of: Optional[float] = None, top_k: Optional[int] = None
+        self,
+        query: str,
+        user_id: str,
+        as_of: Optional[float] = None,
+        top_k: Optional[int] = None,
+        known_at: Optional[float] = None,
     ) -> tuple[list[tuple[Fact, float]], dict]:
         top_k = top_k or self.config.top_k
-        live = [f for f in self.fact_store.values() if f.user_id == user_id and f.is_live(as_of)]
+        live = [
+            f for f in self.fact_store.values()
+            if f.user_id == user_id and is_visible(f, as_of=as_of, known_at=known_at)
+        ]
         live = self._current_slot_heads(live)
-        excluded = self.graph_exclusion_zone(query, user_id, as_of)
+        excluded = self.graph_exclusion_zone(query, user_id, as_of, known_at)
         if excluded:
             live = [f for f in live if not self._fact_touches_entities(f, excluded)]
         if not live:
@@ -364,8 +383,9 @@ class HybridRetriever:
                     sem[f.id] *= tw
         # include each fact's date as searchable tokens so time-named queries ('May 2023') match by date
         lex = bm25_scores(query, [(f.id, f"{f.text} {date_terms(f.valid_at)}") for f in live])
-        gph, qids = self._graph_scores(query, user_id, live, as_of)
-        t = now() if as_of is None else as_of
+        gph, qids = self._graph_scores(query, user_id, live, as_of, known_at)
+        t = valid_time_for(as_of, known_at)
+        t = now() if t is None else t
         rec = {f.id: recency(max(0.0, t - f.valid_at), self.config.recency_tau_days) for f in live}
         sal = {f.id: f.salience for f in live}
 

@@ -22,6 +22,21 @@ python eval/report.py results/synthetic_durable.jsonl
 
 Synthetic logs are for regression and harness-shape checks. They are not public benchmark evidence.
 
+## Personal Twin Governance Validation
+
+The personal-twin control plane has a separate deterministic, zero-key invariant harness:
+
+```bash
+python eval/twin_eval.py
+python eval/twin_eval.py --out /tmp/engram-twin-eval.jsonl
+```
+
+It traces default-deny authorization, canonical segment scopes, confirmation gates, grant expiry and
+revocation, contract versioning, durable audit records, and provenance-aware erasure. Each JSONL row is
+one stable scenario; the final summary includes the exact overall and per-category denominators plus a
+failure list. This is a local safety/governance validation suite, not model-quality benchmark evidence
+and not part of Engram's public LongMemEval headline.
+
 ## Algorithm Ablation Smoke
 
 When read-path features are added, first prove they add the intended evidence in a zero-key synthetic

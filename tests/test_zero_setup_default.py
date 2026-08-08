@@ -13,10 +13,11 @@ def test_default_memory_does_not_import_lancedb(tmp_path):
     assert "lancedb" not in sys.modules
 
 
-def test_default_save_uses_jsonl_manifest(tmp_path):
+def test_default_save_uses_sqlite_manifest(tmp_path):
     path = tmp_path / "store"
     mem = Memory()
     mem.add("I like Python.", user_id="u")
     mem.save(str(path))
     assert (path / "manifest.json").exists()
-    assert (path / "episodes.jsonl").exists()
+    assert (path / "store.sqlite3").exists()
+    assert not (path / "episodes.jsonl").exists()

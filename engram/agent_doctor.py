@@ -777,7 +777,12 @@ def _remote_http_probe(api_url: str, api_key: str) -> dict[str, Any]:
             "clear_working": True,
         })
     except urllib.error.HTTPError as exc:
-        detail = exc.read().decode("utf-8", errors="replace")[:400]
+        raw_detail = exc.read()
+        detail = (
+            raw_detail.decode("utf-8", errors="replace")
+            if isinstance(raw_detail, bytes)
+            else str(raw_detail)
+        )[:400]
         if exc.code == 401:
             detail = "HTTP 401: the Engram server rejected this API key."
         else:

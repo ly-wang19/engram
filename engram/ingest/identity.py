@@ -15,7 +15,7 @@ class IdentityResolver:
     def _find(self, x: str) -> str:
         self._parent.setdefault(x, x)
         root = x
-        while self._parent[root] != root:
+        while self._parent.setdefault(root, root) != root:
             root = self._parent[root]
         # path compression
         while self._parent[x] != root:
@@ -26,6 +26,23 @@ class IdentityResolver:
         """Return the canonical id for a handle (the handle itself until it is linked)."""
         return self._find(user_id)
 
+    def component(self, user_id: str) -> frozenset[str]:
+        """Return every known handle linked to ``user_id``, including its canonical id.
+
+        The resolver persists only ``_parent`` for backwards compatibility. Deriving membership from
+        that map keeps the component authoritative after loading old snapshots and avoids a second
+        alias index that could drift out of sync.
+        """
+        root = self._find(user_id)
+        return frozenset(handle for handle in tuple(self._parent) if self._find(handle) == root)
+
+    def components(self) -> tuple[frozenset[str], ...]:
+        """Return all known identity components in deterministic canonical-id order."""
+        grouped: dict[str, set[str]] = {}
+        for handle in tuple(self._parent):
+            grouped.setdefault(self._find(handle), set()).add(handle)
+        return tuple(frozenset(grouped[root]) for root in sorted(grouped))
+
     def link(self, a: str, b: str) -> str:
         """Declare two handles to be the same person; returns the canonical id."""
         ra, rb = self._find(a), self._find(b)
@@ -33,4 +50,8 @@ class IdentityResolver:
             # keep the lexicographically smaller root as canonical for determinism
             root, child = sorted((ra, rb))
             self._parent[child] = root
-        return self._find(a)
+        canonical = self._find(a)
+        # A compact parent map makes serialization stable regardless of link declaration order.
+        for handle in self.component(canonical):
+            self._parent[handle] = canonical
+        return canonical

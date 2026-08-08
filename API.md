@@ -22,6 +22,10 @@ curl -fsS http://127.0.0.1:8000/ready
 > 生产不要设置 `ENGRAM_OPEN`/`ENGRAM_ALLOW_ANONYMOUS`。直接 Python 部署可安装
 > `engram-memory[server]`，设置 `ENGRAM_API_KEYS="alice:key-a,bob:key-b"` 后运行 Uvicorn。
 > 同一租户轮换：`alice:key-new,alice:key-old`；一个 key 不允许映射到多个租户。
+> 如启用个人分身治理控制面，还必须配置独立的
+> `ENGRAM_OWNER_KEYS="alice:another-owner-key"`。owner key 与 `ENGRAM_API_KEYS` 中的任何 key
+> 字符串都不得复用，否则 owner 配置失效且 readiness fail closed。附带的 Compose 文件已支持
+> 从 `deploy/.env` 转发 `ENGRAM_OWNER_KEYS`。不要把 owner key 配到 agent、MCP 或模型可见环境。
 
 跨 Claude Code / Codex / Cursor / 自研 agent 的推荐生命周期见
 [`docs/cross-agent-memory.md`](docs/cross-agent-memory.md) 和
@@ -38,6 +42,16 @@ Authorization: Bearer <你的key>
 Content-Type: application/json
 ```
 
+个人分身控制面使用两类不可复用的 Bearer key：
+
+- `ENGRAM_API_KEYS`：普通 agent/app 面，用于记忆 API、prompt-safe 分身上下文、请求授权、
+  查询决策和记录执行结果。
+- `ENGRAM_OWNER_KEYS`：人类 owner 控制面，用于完整契约/历史、契约修订、capability
+  grant/revoke、完整 credential reference 查看和待定决策确认。
+
+两类 key 应映射到相同 tenant 名字以共享同一命名空间，但 key 本身必须不同。owner key
+不是普通 API key 的“更高权限版”；一个 owner 客户端如果还要读写普通记忆，需要分开保管两个 key。
+
 健康检查不需要鉴权：
 ```bash
 curl -s $B/health
@@ -53,6 +67,7 @@ curl -f $B/ready
   "version": "0.1.0",
   "auth_mode": "api_keys",
   "anonymous_allowed": false,
+  "owner_control_configured": true,
   "embedder": "HashingEmbedder",
   "llm_configured": false,
   "answerer_configured": false,
@@ -163,7 +178,7 @@ agent session。
 | GET | `/v1/conflicts` | 待确认的疑似冲突(LLM 检测，需开 `ENGRAM_CONFLICT_DETECTION=1`) |
 | POST | `/v1/conflicts/{id}/resolve` | `{"keep":"newer\|older\|both"}` 让冲突由人确认 |
 | PATCH | `/v1/facts/{id}` | 改事实 `{"object":"...","sensitive":true}` |
-| DELETE | `/v1/facts/{id}` | 删一条 |
+| DELETE | `/v1/facts/{id}` | 先返回 provenance 级联删影响预览；只有 `?confirm=true` 才执行 |
 | GET | `/v1/export?include_sensitive=false` | 安全结构化导出：仅非敏感 facts + graph；不含画像、摘要、原始对话 |
 | POST | `/v1/forget` | 需 `{"confirm":true}`；清空该 key 的全部记忆（不可逆） |
 
@@ -193,3 +208,100 @@ curl -s -X POST $B/v1/remember -H "Authorization: Bearer $K" -H "Content-Type: a
 curl -s -X POST $B/v1/recall -H "Authorization: Bearer $K" -H "Content-Type: application/json" \
   -d '{"query":"我喜欢哪个歌手"}'
 ```
+
+---
+
+## 8. 个人分身治理 API
+
+Engram 当前提供的是**个人分身的记忆与治理底座**：版本化 Twin Contract、默认拒绝的
+capability registry、短时授权决策和执行审计。它不是已经完成的自主分身：不包含自主计划循环、
+定时器、外部工具执行器，也不会代替人类做高风险确认。详细的生命周期、curl 流程与威胁边界见
+[`docs/personal-twin.zh-CN.md`](docs/personal-twin.zh-CN.md)。
+
+### 8.1 路由与凭据
+
+| 方法 | 路径 | 凭据 | 语义 |
+|---|---|---|---|
+| GET | `/v1/twin/contract` | agent key | 仅 `model_context`：可进 prompt 的 goals/principles/允许显示的 boundary 描述；无治理控制 |
+| GET | `/v1/twin/control/contract` | owner key | 完整当前契约及 prompt-safe 视图 |
+| GET | `/v1/twin/control/contract/history?limit=100` | owner key | 不可变契约修订历史，新版在前；`limit` 为 1–1000 |
+| PUT | `/v1/twin/contract` | owner key | 修订 goals/principles/boundaries/确认策略，产生 `version + 1` |
+| GET | `/v1/twin/capabilities` | agent key | 可检查的 grant 视图；隐去 `credential_ref`，只给 `credential_configured` |
+| GET | `/v1/twin/control/capabilities` | owner key | 完整 grant 视图，包含 credential reference |
+| POST | `/v1/twin/capabilities` | owner key | 新增 scoped grant |
+| POST | `/v1/twin/capabilities/{grant_id}/revoke` | owner key | 撤销 grant |
+| POST | `/v1/twin/authorize` | agent key | 只生成/持久化决策，`executed` 永远为 `false` |
+| POST | `/v1/twin/decisions/{decision_id}/confirm` | owner key | 确认一条尚未过期的 `requires_confirmation` 决策；仍不执行 |
+| GET | `/v1/twin/decisions/{decision_id}` | agent key | 执行前重新校验，查看 `executable` 和 `executed` |
+| POST | `/v1/twin/actions/record` | agent key | 为外部受信执行器已完成的动作追加 outcome 审计；本路由不执行外部动作 |
+
+`POST /v1/twin/authorize` 的 HTTP schema 没有 `human_confirmed`字段，普通 agent 不能为自己证明“人已确认”；
+服务端始终按 `false` 评估。必须由独立 owner key 调用 confirm 路由。`allowed` 也不是长期 token：
+`valid_until` 最多为决策时刻后 300 秒，如 grant 更早过期则进一步截短。契约更版、grant
+撤销/过期、boundary 变化或超过 `valid_until` 都会让 `executable=false`。受信执行器必须在每次
+真实执行前 GET decision 再检查，成功后才调用 actions/record。
+
+`credential_ref` 只是如 `{"provider":"macos-keychain","key":"engram/calendar"}` 的外部
+Vault/Keychain 定位标识，不是 token、密码或密钥材料；真实凭据不应进入 Engram 记忆库或 prompt。
+`actions/record` 中的 outcome/provenance 也是执行器回报，不是 Engram 对外部系统成功的密码学证明；
+需要强审计时，应在网关限制 record 路由，并保存外部系统的签名回执/幂等键。
+
+### 8.2 可复制最小流程
+
+以本地 Uvicorn 为例，先用两个不同强 key 启动服务：
+
+```bash
+export AGENT_KEY='replace-with-a-different-agent-key-32-chars'
+export OWNER_KEY='replace-with-a-different-owner-key-32-chars'
+export ENGRAM_API_KEYS="personal:${AGENT_KEY}"
+export ENGRAM_OWNER_KEYS="personal:${OWNER_KEY}"
+python3 -m uvicorn engram.server.app:app --host 127.0.0.1 --port 8000
+```
+
+在另一终端执行：
+
+```bash
+export B='http://127.0.0.1:8000'
+export AGENT_KEY='replace-with-a-different-agent-key-32-chars'
+export OWNER_KEY='replace-with-a-different-owner-key-32-chars'
+
+# 1) owner 建立一条最小 calendar execute grant。credential_ref 只是外部密钥库定位符。
+GRANT_JSON=$(curl -fsS -X POST "$B/v1/twin/capabilities" \
+  -H "Authorization: Bearer $OWNER_KEY" -H 'Content-Type: application/json' \
+  -d '{"capability":"calendar","permission":"execute","scopes":["calendars/personal/**"],"credential_ref":{"provider":"macos-keychain","key":"engram/calendar"},"provenance":["owner:setup"]}')
+printf '%s\n' "$GRANT_JSON"
+
+# 2) agent 请求外部写授权；此调用不会创建日历事件。
+PENDING_JSON=$(curl -fsS -X POST "$B/v1/twin/authorize" \
+  -H "Authorization: Bearer $AGENT_KEY" -H 'Content-Type: application/json' \
+  -d '{"capability":"calendar","permission":"execute","resource":"calendars/personal/events/demo-42","description":"Create an owner-visible demo event","external_write":true}')
+printf '%s\n' "$PENDING_JSON"
+DECISION_ID=$(printf '%s' "$PENDING_JSON" | python3 -c 'import json,sys; print(json.load(sys.stdin)["decision"]["id"])')
+
+# 3) 人类 owner 在独立平面确认；确认本身仍不执行。
+curl -fsS -X POST "$B/v1/twin/decisions/$DECISION_ID/confirm" \
+  -H "Authorization: Bearer $OWNER_KEY"
+
+# 4) 受信执行器在动作前立即重新查询；必须 executable=true 且 executed=false。
+LIVE_JSON=$(curl -fsS "$B/v1/twin/decisions/$DECISION_ID" \
+  -H "Authorization: Bearer $AGENT_KEY")
+printf '%s' "$LIVE_JSON" | python3 -c 'import json,sys; p=json.load(sys.stdin); assert p["executable"] and not p["executed"]; print("authorization current")'
+
+# 5) 此处由受信 calendar executor 调用真实外部 API。只有真实动作成功后才记录 outcome。
+# ./trusted-calendar-executor --decision "$DECISION_ID"
+curl -fsS -X POST "$B/v1/twin/actions/record" \
+  -H "Authorization: Bearer $AGENT_KEY" -H 'Content-Type: application/json' \
+  -d "{\"decision_id\":\"$DECISION_ID\",\"outcome\":\"owner-approved demo event created\",\"provenance\":[\"executor:calendar-demo\"]}"
+```
+
+### 8.3 擦除回执的边界
+
+`DELETE /v1/facts/{id}` 不带确认时只返回 `impact` 计数，不修改数据；只有
+`DELETE /v1/facts/{id}?confirm=true` 才会删除该 fact、其原始 source episode、同一 source 派生的
+sibling facts 及相关派生状态。`POST /v1/sessions/erase` 亦必须传
+`{"session_id":"...","confirm":true}`，它擦除整个 source session 及其派生记忆。
+
+回执里的 `verified=true` 是当前内存层校验；`storage_verified=true` 表示重新打开
+canonical snapshot 后已校验目标对象不可达。它**不证明** SSD/APFS/Time Machine/云同步历史或
+LanceDB 旧 fragment 已物理抹除。Engram 的 0700/0600 权限也不是静态加密；个人敏感记忆应放在
+FileVault、LUKS 或独立加密卷内，并单独管理备份、snapshot 与同步保留策略。

@@ -11,7 +11,7 @@ latency/scale figure is a separate, harness-measured task with a committed log (
 ```bash
 python3 - <<'PY'
 from engram import Memory
-m = Memory.open("data/qs/alice")                 # creates/opens a JSONL+manifest store directory
+m = Memory.open("data/qs/alice")                 # creates/opens a SQLite+manifest store directory
 m.add("My flight is AA100 to Boston on Friday.")
 m.add("Actually the flight changed to AA200.")   # creates a supersedes chain
 m.consolidate()
@@ -46,8 +46,9 @@ errors rather than opening a store in the wrong vector space.
 ```bash
 pytest -q tests/test_persist_crash.py
 ```
-**Expected**: a JSONL file with torn bytes after the manifest count drops only that uncommitted tail; a
-missing or malformed record inside the manifest-committed prefix raises `StoreFormatError`.
+**Expected**: an uncommitted SQLite transaction is rolled back; a committed database generation newer
+than the manifest repairs that manifest. Schema-v1 compatibility is also covered: torn bytes after the manifest count
+are ignored, while corruption inside the manifest-committed prefix raises `StoreFormatError`.
 
 ## Scenario E — LanceDB backend persists + parity (US2 · SC-005 · FR-009)
 ```bash
@@ -71,13 +72,16 @@ reopened = Memory.open("data/qs/alice-lancedb", config=cfg)
 print(reopened.search("Where do I work?", user_id="alice").answer())
 PY
 ```
-**Expected**: prints `Moonshot AI`; the JSONL manifest stores the portable snapshot and LanceDB stores the
-vector tables under `data_path`.
+**Expected**: prints `Moonshot AI`; SQLite stores the portable canonical snapshot and LanceDB stores the
+vector tables below `data_path/namespaces/store-<canonical-path-hash>`. The actual Lance root is 0700 and
+bound to this canonical snapshot. Use a fresh base when migrating an older non-empty, unmarked Lance path.
+See [`docs/storage-privacy-boundary.zh-CN.md`](../../docs/storage-privacy-boundary.zh-CN.md) for encryption
+and deletion limits.
 
 ## Scenario F — Migrate off pickle (US3 · FR-008)
 ```bash
 python3 -m engram.store.migrate --from data/legacy/alice.pkl --to data/qs/alice --dry-run  # prints counts, writes nothing
-python3 -m engram.store.migrate --from data/legacy/alice.pkl --to data/qs/alice            # writes JSONL
+python3 -m engram.store.migrate --from data/legacy/alice.pkl --to data/qs/alice            # writes SQLite
 # installed package equivalent:
 #   engram-migrate-pickle --from data/legacy/alice.pkl --to data/qs/alice
 ```

@@ -44,13 +44,28 @@ class AgenticRetriever:
         raw = self.llm.complete(DECOMP_TEMPLATE.format(query=query, hint=hint_block), system=DECOMP_SYSTEM)
         return _parse_query_list(raw, query)[: self.max_subqueries]
 
-    def gather_episodes(self, query: str, user_id: str, k: int, as_of: float | None = None):
+    def gather_episodes(
+        self,
+        query: str,
+        user_id: str,
+        k: int,
+        as_of: float | None = None,
+        known_at: float | None = None,
+    ):
         """Return up to k episodes gathered across decomposed sub-queries + one follow-up round."""
         seen: dict = {}
 
         def pull(qs: list[str]):
             for sq in qs:
-                for ep in self.mem.retrieve_episodes(sq, user_id, self.per_query_k, as_of=as_of):
+                temporal = {"as_of": as_of}
+                if known_at is not None:
+                    temporal["known_at"] = known_at
+                for ep in self.mem.retrieve_episodes(
+                    sq,
+                    user_id,
+                    self.per_query_k,
+                    **temporal,
+                ):
                     seen.setdefault(ep.id, ep)
 
         pull(self._subqueries(query))
