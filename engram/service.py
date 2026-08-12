@@ -119,6 +119,13 @@ class MemoryService:
         from .config import Config
 
         self.config = Config()
+        # ENGRAM_STORAGE selects the vector backend ('memory' default, 'lancedb' opt-in). Fail closed on
+        # anything else: silently falling back to 'memory' would misreport /health's storage field.
+        storage = os.environ.get("ENGRAM_STORAGE", "").strip().lower()
+        if storage:
+            if storage not in {"memory", "lancedb"}:
+                raise ValueError(f"ENGRAM_STORAGE must be 'memory' or 'lancedb', got {storage!r}")
+            self.config.storage = storage
         if os.environ.get("ENGRAM_MAX_HOT_FACTS"):
             self.config.max_hot_facts = int(os.environ["ENGRAM_MAX_HOT_FACTS"])
         # opt-in System-2 LLM conflict detection -> the detect->confirm loop (needs an LLM). Off by
@@ -307,11 +314,21 @@ class MemoryService:
                 data: Any = None, consolidate: bool = True, summarize: bool = True,
                 session_id: str = "imported") -> dict:
         """Bulk import: either pre-parsed `sessions` (list of ImportSession/dicts) OR raw `data` to parse
-        with `format` (chatgpt/messages/records/jsonl/transcript/auto). One batched ingest + consolidation."""
+        with `format` (chatgpt/messages/records/jsonl/transcript/auto). One batched ingest + consolidation.
+
+        A native Engram export (`format='engram'`, or auto-sniffed by its engram_export_version) takes
+        the direct restore path instead: facts/episodes keep their ids, bi-temporal stamps, and
+        supersession chains — this is how a namespace moves between instances."""
         with self.write_lock(user):
             mem = self.get(user)
             if sessions is None:
-                from .connectors import parse
+                from .connectors import parse, sniff
+                from .connectors.base import load_json
+                fmt = (format or "auto").lower().strip()
+                if fmt == "engram" or (fmt == "auto" and sniff(data) == "engram"):
+                    stats = mem.import_export(load_json(data), user_id=user)
+                    self._save(user, mem)
+                    return {"ok": True, **stats}
                 sessions = parse(data, format=format, session_id=session_id)
             stats = mem.import_messages(sessions, user_id=user, consolidate=consolidate,
                                         summarize=summarize)
@@ -879,25 +896,28 @@ class MemoryService:
         """Content-free namespace stats for dashboards/readiness probes. This intentionally avoids
         profile text, fact text, episode snippets, and data paths so it is safe to poll in production."""
         mem = self.get(user)
-        episodes = [ep for ep in mem.episodes_doc.values() if ep.user_id == user]
-        hot_facts = [f for f in mem.fact_store.values() if f.user_id == user]
-        cold_facts = [f for f in mem.cold_store.values() if f.user_id == user]
+        # Filter by the CANONICAL identity, like every other read path: after link_identity, data is
+        # written under the canonical id, so filtering by the raw handle would undercount.
+        canonical = mem.resolver.resolve(user)
+        episodes = [ep for ep in mem.episodes_doc.values() if ep.user_id == canonical]
+        hot_facts = [f for f in mem.fact_store.values() if f.user_id == canonical]
+        cold_facts = [f for f in mem.cold_store.values() if f.user_id == canonical]
         facts = hot_facts + cold_facts
         facts_by_id = {f.id: f for f in facts}
-        working = [w for w in mem.working_mem.values() if w.user_id == user]
+        working = [w for w in mem.working_mem.values() if w.user_id == canonical]
         live_facts = [f for f in facts if f.is_live()]
         superseded = [f for f in facts if not f.is_live()]
         sensitive = [f for f in facts if getattr(f, "sensitive", False)]
         pending_conflicts = [
             c for c in mem.conflicts.values()
-            if c.user_id == user and c.status == "pending"
+            if c.user_id == canonical and c.status == "pending"
         ]
         consolidated_episodes = [ep for ep in episodes if ep.consolidated]
         pending_episodes = [ep for ep in episodes if not ep.consolidated]
         ephemeral_episodes = [ep for ep in episodes if ep.metadata.get("ephemeral")]
         event_times = [ep.event_time for ep in episodes]
         fact_times = [f.valid_at for f in facts]
-        user_entities = [e for e in mem.graph.entities.values() if e.user_id == user]
+        user_entities = [e for e in mem.graph.entities.values() if e.user_id == canonical]
         all_relations = mem.graph.relations()
         user_entity_ids = {e.id for e in user_entities}
         user_relations = [
@@ -917,13 +937,13 @@ class MemoryService:
                 "episodes_ephemeral": len(ephemeral_episodes),
                 "facts_hot": len(hot_facts),
                 "facts_cold": len(cold_facts),
-                "cold_pages_out": int(mem.cold_pages_out.get(user, 0)),
-                "cold_pages_in": int(mem.cold_pages_in.get(user, 0)),
+                "cold_pages_out": int(mem.cold_pages_out.get(canonical, 0)),
+                "cold_pages_in": int(mem.cold_pages_in.get(canonical, 0)),
                 "facts_live": len(live_facts),
                 "facts_superseded": len(superseded),
                 "facts_sensitive": len(sensitive),
                 "working_live": sum(1 for w in working if w.is_live()),
-                "summaries": len([s for s in mem.summary_vec.values() if s.user_id == user]),
+                "summaries": len([s for s in mem.summary_vec.values() if s.user_id == canonical]),
                 "entities": len(user_entities),
                 "relations": sum(1 for r in user_relations if r.fact_id in facts_by_id),
                 "graph_orphan_entities": sum(1 for e in user_entities if e.id not in referenced_entity_ids),
@@ -970,7 +990,8 @@ class MemoryService:
             "focus": mem.get_focus(),
             "facts": [{
                 "id": f.id, "subject": f.subject, "predicate": f.predicate, "object": f.object,
-                "text": f.text, "source": f.source, "status": "live" if f.is_live() else "superseded",
+                "text": f.text, "display": getattr(f, "display", ""),
+                "source": f.source, "status": "live" if f.is_live() else "superseded",
                 "category": getattr(f, "category", ""), "sensitive": getattr(f, "sensitive", False),
                 "salience": round(f.salience, 3), "confidence": f.confidence,
                 "valid_at": f.valid_at, "valid_at_h": fmt_date(f.valid_at),

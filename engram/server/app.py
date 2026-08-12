@@ -521,11 +521,16 @@ class ImportReq(BaseModel):
 @app.post("/v1/import")
 def import_history(req: ImportReq, user: str = Depends(auth)):
     """Bulk-ingest an external history in one batched pass. See `python -m engram.connectors` for a CLI
-    that parses common exports and posts here."""
+    that parses common exports and posts here. A native `/v1/export` payload (format='engram' or
+    auto-sniffed) restores directly — the cross-instance migration path."""
     if req.sessions is None and req.data is None:
         raise HTTPException(400, "provide either 'sessions' (pre-parsed) or 'data' (+ 'format') to import")
-    return svc().import_(user, sessions=req.sessions, data=req.data, format=req.format,
-                         consolidate=req.consolidate, summarize=req.summarize)
+    try:
+        return svc().import_(user, sessions=req.sessions, data=req.data, format=req.format,
+                             consolidate=req.consolidate, summarize=req.summarize)
+    except ValueError as exc:
+        # a malformed payload is the CLIENT's error — 400 with the parser's reason, never a raw 500
+        raise HTTPException(400, f"import failed: {exc}") from exc
 
 
 # --- OpenAI-compatible chat with transparent memory (drop-in: point your OpenAI client's base_url here) --

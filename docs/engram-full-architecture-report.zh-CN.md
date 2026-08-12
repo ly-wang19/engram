@@ -667,6 +667,33 @@ flowchart LR
 这条链路没有改变 `Memory` 内部的抽取、冲突、图构建或检索算法。工程发布结果记录到
 `results/commercial_release_0_1_0_validation.jsonl`，不能被当作算法效果提升证据。
 
+### 10.2 跨实例迁移数据流（2026-08-12 新增）
+
+记忆的所有权锚点是「服务器 + key + namespace」，与任何厂商账号无关。换服务器/换部署时，
+`/v1/export` 的产物现在可以直接导回 `/v1/import`（原生 `engram` 格式，按 `engram_export_version` 自动嗅探）：
+
+```mermaid
+flowchart LR
+    A["实例 A\nGET /v1/export?include_sensitive=true"] --> P["export payload v1\nfacts(id/双时间戳/supersedes/provenance)\n+ episodes + summaries + focus + graph"]
+    P --> B["实例 B\nPOST /v1/import format=engram"]
+    B --> R["Memory.import_export()\n按 id 幂等跳过已存在项\n本地 embedder 重嵌入\nGraphBuilder 重建图(保留失效边)"]
+    R --> S["episodes 标记 consolidated\n(事实已随导出携带,不重复抽取)"]
+```
+
+关键规则：
+
+1. **幂等**：已存在的 fact/episode id 直接跳过、绝不覆盖（现有记忆优先），重复导入零副作用。
+2. **重嵌入即迁移**：导出不携带向量；目标端用自己的 embedder 重算——这也是更换 embedder 的官方路径
+   （此前 manifest 的 `embedder_id/embedding_dim` 硬校验导致换 embedder 等于存储报废）。
+3. **历史以历史身份迁移**：GraphBuilder 把 `invalid_at` 一并写到关系边上，superseded 事实不会复活。
+4. **share-safe 导出同样可导入**（只有非敏感 facts + graph），敏感内容不会经由默认导出泄漏到新实例。
+5. 坏 payload 由 `/v1/import` 返回 400 + 解析原因（此前是裸 500）。
+
+同时补齐的服务边界：`ENGRAM_STORAGE` 环境变量显式选择向量后端（非法值启动即失败）；MCP
+streamable-HTTP 传输新增 `--http-token`/`ENGRAM_MCP_HTTP_TOKEN` Bearer 门，非回环绑定无 token 拒绝启动
+（`ENGRAM_MCP_HTTP_OPEN=1` 才可显式豁免）；import CLI 本地模式改走 `MemoryService`，与服务端共用同一套
+摘要目录和锁；`/v1/stats` 与其它读路径一致按 canonical 身份过滤。
+
 ## 11. Eval harness 数据流
 
 评测不是附属品，是架构的一部分。Engram 的所有算法主张都应能走 `eval/bench.py`。

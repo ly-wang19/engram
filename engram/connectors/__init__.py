@@ -13,6 +13,9 @@ sessions, then `Memory.import_messages()` ingests them in a few batched calls.
     records     flat list of {content, [session_id], [speaker], [timestamp]}
     jsonl       JSON-Lines, one record per line
     transcript  plain text / markdown ("Speaker: text" lines, or freeform)
+    engram      a native `/v1/export` payload (engram_export_version) — NOT parsed into sessions;
+                it restores directly via `Memory.import_export()` (facts keep their ids, bi-temporal
+                stamps, and supersession chains instead of being re-extracted).
 """
 from __future__ import annotations
 
@@ -28,7 +31,7 @@ __all__ = [
     "extract_text", "to_epoch",
 ]
 
-FORMATS = ("chatgpt", "messages", "records", "jsonl", "transcript")
+FORMATS = ("chatgpt", "messages", "records", "jsonl", "transcript", "engram")
 
 
 def sniff(data: Any) -> str:
@@ -54,6 +57,8 @@ def sniff(data: Any) -> str:
 
 def _sniff_obj(obj: Any) -> str:
     if isinstance(obj, dict):
+        if "engram_export_version" in obj:
+            return "engram"  # a native export restores directly; it is not a message-shaped history
         if "mapping" in obj or "conversations" in obj:
             return "chatgpt"
         if "messages" in obj:
@@ -89,6 +94,13 @@ def parse(data: Any, format: str = "auto", session_id: str = "imported") -> list
     if fmt == "auto":
         fmt = sniff(data)
 
+    if fmt == "engram":
+        raise ValueError(
+            "this is a native Engram export (engram_export_version): it restores facts/episodes "
+            "directly instead of parsing into sessions. Import it via Memory.import_export(payload), "
+            "MemoryService.import_(format='engram'), POST /v1/import {'data': ..., 'format': 'engram'}, "
+            "or `python -m engram.connectors --format engram`."
+        )
     if fmt == "transcript" or fmt in ("text", "markdown", "md"):
         text = data.decode("utf-8") if isinstance(data, (bytes, bytearray)) else str(data)
         return parse_transcript(text, session_id=session_id)

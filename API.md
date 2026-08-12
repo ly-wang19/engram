@@ -164,8 +164,24 @@ agent session。
 | POST | `/v1/conflicts/{id}/resolve` | `{"keep":"newer\|older\|both"}` 让冲突由人确认 |
 | PATCH | `/v1/facts/{id}` | 改事实 `{"object":"...","sensitive":true}` |
 | DELETE | `/v1/facts/{id}` | 删一条 |
-| GET | `/v1/export?include_sensitive=false` | 安全结构化导出：仅非敏感 facts + graph；不含画像、摘要、原始对话 |
+| GET | `/v1/export?include_sensitive=false` | 安全结构化导出：仅非敏感 facts + graph；`include_sensitive=true` 为完整可迁移导出（双时间戳、supersedes 链、provenance、原始对话、摘要、focus） |
+| POST | `/v1/import` | 批量导入：`{"data":..., "format":"chatgpt\|messages\|records\|jsonl\|transcript\|engram\|auto"}`；`engram` 格式（自动嗅探）直接还原一份 `/v1/export` 导出——跨实例迁移路径 |
 | POST | `/v1/forget` | 需 `{"confirm":true}`；清空该 key 的全部记忆（不可逆） |
+
+### 跨实例迁移（换服务器 / 换账号）
+
+记忆属于用户，不属于某一个部署。把一个 namespace 从实例 A 搬到实例 B：
+
+```bash
+# 1. 从 A 完整导出（含敏感事实与原始对话）
+curl -s "$A/v1/export?include_sensitive=true" -H "Authorization: Bearer $KEY_A" > export.json
+# 2. 导入 B（事实保留原 id/双时间戳/supersedes 链；目标端用自己的 embedder 重新向量化）
+curl -s -X POST "$B/v1/import" -H "Authorization: Bearer $KEY_B" -H "Content-Type: application/json" \
+  -d "{\"data\": $(cat export.json), \"format\": \"engram\"}"
+```
+
+导入按 id 幂等：已存在的条目跳过、绝不覆盖，重复导入不会产生重复记忆。两端 embedder 可以不同——
+这也是更换 embedder 的官方迁移路径。CLI 等价：`python -m engram.connectors -f export.json --api-url $B --key $KEY_B`。
 
 ## 5. 控制台（可视化）
 浏览器开 **`<Base URL>/ui/`** → 输入你的 key → 看「画像 / 事实管理 / 时间线 / 关系图谱 / 记忆问答 / 冲突待确认」。

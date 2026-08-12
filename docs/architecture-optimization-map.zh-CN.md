@@ -1,6 +1,6 @@
 # Engram 架构优化地图
 
-最后更新：2026-07-14
+最后更新：2026-08-12
 
 用途：这是给项目负责人和后续 AI/人类贡献者看的本地中文驾驶舱。它回答四个问题：
 
@@ -100,6 +100,9 @@ flowchart TD
 | 2026-06-30 | `aggregation_constraint_filter` | Aggregation evidence / Query constraints | 当题面有月份约束时，排除局部上下文绑定到其他月份的数值候选 | `results/aggregation_constraint_filter_experiments.md`, `results/aggregation_constraint_filter_lme_s_context27.jsonl` |
 | 2026-07-09 | `chain_provenance_promotion` | Chain-aware retrieval / Raw evidence fusion | previous-value 问题中，`supersedes` 链上的旧事实也能作为 provenance raw chunk promotion 的种子，优先提升旧值源会话 | `results/chain_provenance_promotion_experiments.md`, `results/chain_provenance_promotion_ablation.jsonl`, `results/chain_provenance_promotion_context_sample.jsonl` |
 | 2026-07-14 | `commercial_release_0_1_0` | Service boundary / Namespace storage / Deployment / Release gate | 修复命名空间路径穿越与字符过滤碰撞；默认鉴权失败关闭；增加 request limits、liveness/readiness、非 root 容器和统一发布门禁 | `results/commercial_release_0_1_0_validation.jsonl`, `specs/003-commercial-release/` |
+| 2026-08-12 | `cross_instance_portability` | Connectors / Memory facade / Service import 路由 / HTTP `/v1/import` | 导出无法导回（POST 导出 JSON 得到 500）——补上原生 `engram` 导入格式：事实保留原 id/双时间戳/supersedes 链/provenance，目标端用本地 embedder 重嵌入（即官方换 embedder 迁移路径），按 id 幂等；`/v1/import` 对坏 payload 返回 400 | `tests/test_cross_account_portability.py`, `tests/test_server_import_export.py`（工程验收，非算法实验） |
+| 2026-08-12 | `mcp_http_bearer_gate` | MCP streamable-HTTP 传输边界 | MCP HTTP 模式此前无任何鉴权，仅靠默认 127.0.0.1；新增 `--http-token`/`ENGRAM_MCP_HTTP_TOKEN` Bearer 门，非回环绑定无 token 时启动即拒绝（失败关闭，与 REST 的 `ENGRAM_API_KEYS` 同哲学） | `tests/test_mcp_http_auth.py` |
+| 2026-08-12 | `engram_storage_env` + 一致性修复 | Service 配置边界 / stats / import CLI | 服务器此前永远 `storage="memory"`（无环境变量可选 LanceDB）；新增 `ENGRAM_STORAGE`（非法值失败关闭）。`/v1/stats` 改按 canonical 身份过滤（与其它读路径一致）；import CLI 本地模式改走 `MemoryService`，目录命名与服务端统一 | `tests/test_cross_account_portability.py` |
 
 ## 最近 PR 对架构的影响
 

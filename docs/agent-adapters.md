@@ -334,6 +334,19 @@ Then connect the client to:
 http://127.0.0.1:8765/mcp
 ```
 
+The HTTP transport is loopback-only by default. To expose it beyond localhost (e.g. for a remote MCP
+client), you MUST set a Bearer token — a non-loopback bind without one refuses to start:
+
+```bash
+python -m engram.mcp --http --host 0.0.0.0 --port 8765 \
+  --http-token "$(openssl rand -hex 24)" \
+  --api-url http://localhost:8000 \
+  --api-key me
+```
+
+Clients then send `Authorization: Bearer <token>` (most MCP clients accept a headers map in their
+remote-server config). Terminate TLS at a reverse proxy in front of it, same as the REST server.
+
 ## OpenAI-Compatible Apps
 
 If your app already uses the OpenAI SDK, point it at Engram and pass the memory extension.
