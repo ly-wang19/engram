@@ -136,6 +136,11 @@ flowchart TD
 - 但**到榜首的 +1.6 差距低于分辨率**——不是「还没追上」，是这套测量判定不了真假。
 - 因此：**只做期望增益 > 3 点的改动**，并优先攻占比最大的弱类别 multi-session（121 题 70.2%）与
   temporal-reasoning（127 题 70.9%，合计 248/500）；单类别 +10 点才换来整体约 +2.5 点。
+- **两个大类的失效形态不同，需要两种机制**（`results/error_modes_headline.md`）：
+  multi-session 的错 **76% 是数值**（计数/聚合），temporal 的错 **63% 是弃答**（该答却说没有）。
+  且数值误差**双向**（低估 16 / 高估 12），排除了"证据召回不足"这个解释——是计数本身失败。
+- 单点机制打单个类别恰好卡在可测边缘（multi-session 数值 19 题 = +3.8；temporal 弃答 15 题 = +3.0）。
+  **必须两条线一起做**（合计 34 题 = +6.8 点）才是舒服高于地板的实验。
 - 想分辨更小的增益，只能加分辨率（更多题目 / 更确定性的 answerer），那是测量投资，
   但它是所有算法投资的前置条件。
 
@@ -199,7 +204,12 @@ flowchart TD
 - 算法说明：`docs/algorithm-architecture.md`
 - 结果日志规则：`results/README.md`
 - 公开结果：`RESULTS.md`
-- 当前 headline 原始日志：`results/headline_500.jsonl`
+- 当前 headline 原始日志（**两个数字来自两次运行**，同 answerer + judge、同 500 题）：
+  - `engram_lean` 83.6% → `results/longmemeval_s_engram_lean_v2_final.jsonl`
+  - `full_context` 73.2% → `results/longmemeval_s_volcano_doubao_deepseekjudge.jsonl`
+    （同一份日志内还有严格同轮对照：`engram_full` 83.4% vs `full_context` 73.2%）
+  - ⚠️ `results/headline_500.jsonl` **不是** headline 日志，它是另一次配置的运行（79.0% / 76.0%）。
+    此处此前指向该文件，任何人照着复现都会对不上。
 
 ## 当前结论
 
