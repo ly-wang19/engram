@@ -237,6 +237,37 @@ TypeScript SDK 的 `engram.export()` 默认走这个安全导出；只有用户�
 `engram.memories({ factsLimit, factsOffset, episodesLimit, status, query, includeSensitive })`。
 独立关系图接口默认也是安全视图；只有明确要完整私有图谱时才传 `/v1/graph?include_sensitive=true`。
 
+### Python SDK（零运行时依赖）
+
+Agent 生态是 Python 优先的，所以 SDK 直接装在核心包里，走 stdlib `urllib`，装 Engram 依然不会额外
+拉进任何依赖：
+
+```python
+from engram.client import EngramClient
+
+engram = EngramClient(base_url="http://localhost:8000", api_key="sk-engram-...")
+engram.remember("我住在深圳，做检索相关的工作。")
+print(engram.recall("我住在哪儿？")["context"])
+
+# 重试安全：同一个 key 会重放首次响应，而不是写第二遍
+engram.remember("...", idempotency_key="2026-08-16-abc")
+```
+
+`EngramError` 带 `status`，调用方不用解析文案就能分支——`401` 密钥错、`429` 该退避
+（`err.retry_after` 就是服务端的 `Retry-After`）、`503` 是服务端配置有问题而不是请求有问题。
+`transport` 钩子可以把 HTTP 层换成 `httpx`/`requests` 或进程内测试客户端。
+
+### 运行时密钥、限流与运行指标（自托管用）
+
+- **运行时签发密钥**：`POST /v1/admin/keys` 不重启就能签发/吊销租户密钥；只落盘 SHA-256 摘要，
+  明文只在签发响应里出现一次。管理面由独立的 `ENGRAM_ADMIN_TOKEN` 把守，**不设置就完全不存在**。
+- **按租户限流**：`ENGRAM_RATE_LIMIT_PER_MIN`（默认 0 = 关闭），超限返回 `429` + `Retry-After`。
+- **重试安全**：`/v1/remember` 与 `/v1/import` 支持 `Idempotency-Key` 头。
+- **运行指标**：`GET /metrics` 给出实时延迟分位数、token 总量和防护计数。载荷按构造只含聚合量——
+  无命名空间名、无查询、无正文——所以可以和 `/health` 一样开放。
+
+细节见 [`API.md`](API.md)。
+
 ### 自部署（数据完全在你自己机器上）
 
 ```bash
