@@ -35,6 +35,7 @@ except Exception as exc:  # noqa: BLE001
 
 from .. import __version__
 from ..service import MemoryService
+from .keys import KeyStore, KeyStoreError
 from .limits import IdempotencyCache, RateLimiter, idempotency_ttl, rate_limit_per_min
 
 
@@ -181,6 +182,8 @@ async def request_limits_and_security_headers(request: Request, call_next):
     return _apply_security_headers(await call_next(request), path)
 
 
+_keystore: Optional[KeyStore] = None
+_keystore_path: Optional[str] = None
 _limiter: Optional[RateLimiter] = None
 _limiter_per_min = -1
 _idempotency: Optional[IdempotencyCache] = None
@@ -254,12 +257,49 @@ def auth(authorization: str = Header(default="")) -> str:
     return user
 
 
+def keystore() -> KeyStore:
+    """Runtime-issued keys, persisted beside the data dir. Built lazily so importing the app touches
+    no disk, and rebuilt when the service is (tests point it at a temp dir)."""
+    global _keystore, _keystore_path
+    path = os.path.join(svc().data_dir, "api_keys.json")
+    if _keystore is None or _keystore_path != path:
+        _keystore = KeyStore(path)
+        _keystore_path = path
+    return _keystore
+
+
+def admin_auth(authorization: str = Header(default="")) -> bool:
+    """Gate the key-management surface behind its own token.
+
+    Fails closed: with ENGRAM_ADMIN_TOKEN unset there is no admin surface at all, so an open-mode
+    deployment cannot have keys minted against it by anyone who finds the endpoint.
+    """
+    expected = os.environ.get("ENGRAM_ADMIN_TOKEN", "").strip()
+    if not expected:
+        raise HTTPException(403, "admin surface disabled — set ENGRAM_ADMIN_TOKEN to manage API keys")
+    token = _bearer_token(authorization)
+    if not token or not hmac.compare_digest(token, expected):
+        raise HTTPException(401, "invalid admin token")
+    return True
+
+
 def _resolve_user(authorization: str) -> str:
     try:
         keys = _load_keys()
     except AuthConfigError as exc:
         raise HTTPException(503, "invalid API key configuration") from exc
     token = _bearer_token(authorization)
+
+    # Runtime-issued keys are consulted first so a revoked key cannot be resurrected by a stale env
+    # entry, and so a hosted deployment can mint tenants without a restart. An unreadable key store is
+    # a 503, never an open door.
+    try:
+        issued_user = keystore().resolve(token)
+    except KeyStoreError as exc:
+        raise HTTPException(503, "invalid API key store") from exc
+    if issued_user:
+        return issued_user
+
     if keys:
         matched_user = None
         for key, user in keys.items():
@@ -278,7 +318,48 @@ def _resolve_user(authorization: str) -> str:
             "missing bearer namespace: in ENGRAM_OPEN mode send Authorization: Bearer <namespace>, "
             "or set ENGRAM_ALLOW_ANONYMOUS=1 to allow shared anonymous memory",
         )
-    raise HTTPException(401, "set ENGRAM_API_KEYS (user:key,...) or ENGRAM_OPEN=1")
+    raise HTTPException(
+        401,
+        "no API key recognized — issue one via POST /v1/admin/keys (needs ENGRAM_ADMIN_TOKEN), "
+        "or set ENGRAM_API_KEYS (user:key,...) or ENGRAM_OPEN=1",
+    )
+
+
+class IssueKeyReq(BaseModel):
+    user: str = Field(min_length=1, max_length=512)
+    label: str = Field(default="", max_length=256)
+
+
+@app.post("/v1/admin/keys")
+def issue_key(req: IssueKeyReq, _: bool = Depends(admin_auth)):
+    """Mint a key for a tenant. The plaintext is in this response and nowhere else — it is hashed at
+    rest, so a lost key is reissued, never recovered."""
+    try:
+        return keystore().issue(req.user, label=req.label)
+    except KeyStoreError as exc:
+        raise HTTPException(503, "invalid API key store") from exc
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.get("/v1/admin/keys")
+def list_keys(user: Optional[str] = None, _: bool = Depends(admin_auth)):
+    """Key records, newest first. Never includes a secret or its digest."""
+    try:
+        return {"keys": keystore().list(user)}
+    except KeyStoreError as exc:
+        raise HTTPException(503, "invalid API key store") from exc
+
+
+@app.delete("/v1/admin/keys/{key_id}")
+def revoke_key(key_id: str, _: bool = Depends(admin_auth)):
+    try:
+        revoked = keystore().revoke(key_id)
+    except KeyStoreError as exc:
+        raise HTTPException(503, "invalid API key store") from exc
+    if not revoked:
+        raise HTTPException(404, "no such live key")
+    return {"ok": True, "id": key_id, "revoked": True}
 
 
 class RememberReq(BaseModel):
