@@ -148,11 +148,13 @@ class LanceDBVectorStore(VectorStore):
         table = self._open()
         if table is None:
             return None
-        rows = table.to_arrow().to_pylist()
-        for row in rows:
-            if row.get("key") == key:
-                return _decode_payload(row["payload"])
-        return None
+        # A filter-only query (no vector) so the key predicate runs inside LanceDB. Materialising the
+        # table and scanning it in Python made a single-key read cost the whole store, which turns any
+        # id-at-a-time access pattern quadratic.
+        rows = table.search().where(f"key = {_quote(key)}").limit(1).to_list()
+        if not rows:
+            return None
+        return _decode_payload(rows[0]["payload"])
 
     def delete(self, key: str) -> None:
         table = self._open()

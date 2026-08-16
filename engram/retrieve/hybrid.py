@@ -63,10 +63,38 @@ _ENTITY_ANCHOR_STOP = frozenset({
     "the", "and", "for", "with", "from", "inc", "ltd", "llc", "corp", "co", "company", "project",
     "user", "assistant", "team", "group", "system", "ai",
 })
+# (cue, how many words may sit between the cue and the entity name). Both exclusion regexes are built
+# from this one list so the cheap pre-test below can never drift out of sync with the real matcher.
+_EXCLUSION_CUES: tuple[tuple[str, int], ...] = (
+    (r"\bnot\b", 5),
+    (r"\bexcept\b", 4),
+    (r"\bexcluding\b", 4),
+    (r"\bexclude\b", 4),
+    (r"\bother\s+than\b", 4),
+    (r"\brather\s+than\b", 4),
+    (r"\bbesides\b", 4),
+    ("不是", 0),
+    ("不在", 0),
+    ("排除", 0),
+    ("除了", 0),
+)
 _EXCLUSION_BEFORE_RE = re.compile(
-    r"(?:\bnot\b(?:\s+\w+){0,5}|\bexcept\b(?:\s+\w+){0,4}|\bexcluding\b(?:\s+\w+){0,4}|"
-    r"\bexclude\b(?:\s+\w+){0,4}|\bother\s+than\b(?:\s+\w+){0,4}|"
-    r"\brather\s+than\b(?:\s+\w+){0,4}|\bbesides\b(?:\s+\w+){0,4}|不是|不在|排除|除了)\s*$",
+    "(?:"
+    + "|".join(cue + (rf"(?:\s+\w+){{0,{gap}}}" if gap else "") for cue, gap in _EXCLUSION_CUES)
+    + r")\s*$",
+    re.IGNORECASE,
+)
+# A necessary condition for _EXCLUSION_BEFORE_RE to match any substring of the query: the query must
+# contain at least one cue somewhere. _EXCLUSION_BEFORE_RE is anchored to the end of the text preceding
+# an entity mention, so it cannot be run against the whole query directly — but if no cue appears at all,
+# no slice of the query can contain one either, and the entity scan can be skipped outright.
+#
+# The trailing \b is dropped deliberately, making this test weaker than the real matcher. It has to be:
+# the slice ends where an entity name begins, and a non-ASCII name carries no boundary guard, so in
+# "not上海" the slice "not" ends on a word boundary that does not exist in the full string. Over-matching
+# only costs a scan that finds nothing; under-matching would silently drop an exclusion.
+_EXCLUSION_CUE_RE = re.compile(
+    "|".join(cue[:-2] if cue.endswith(r"\b") else cue for cue, _ in _EXCLUSION_CUES),
     re.IGNORECASE,
 )
 _EXCLUSION_VALUE_PREDS = frozenset({
@@ -197,6 +225,11 @@ class HybridRetriever:
         if not (self.config.graph_proximity and self.config.graph_negative_constraints):
             return set()
         query_l = query.lower()
+        # Most queries carry no negation at all. Checking the query once is exactly equivalent to
+        # checking every entity name against it (see _EXCLUSION_CUE_RE) and skips a scan of the whole
+        # entity set — which every retrieval paid, since query_entity_ids() ends by calling this.
+        if not _EXCLUSION_CUE_RE.search(query_l):
+            return set()
         direct: set[str] = set()
         entities = [ent for ent in self.graph.entities.values() if ent.user_id == user_id]
         for ent in entities:

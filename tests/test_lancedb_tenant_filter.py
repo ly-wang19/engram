@@ -104,3 +104,18 @@ def test_legacy_table_without_tenant_column_still_works(tmp_path):
 
     hits = store.search([1.0, 0.0, 0.0], 10, user_id="alice")
     assert {p.id for _s, p in hits} == {legacy.id, fresh.id}
+
+
+def test_get_by_key_is_pushed_down(tmp_path):
+    """Single-key reads must not materialise the table (that makes id-at-a-time access quadratic)."""
+    store = LanceDBVectorStore(str(tmp_path / "db"), "facts")
+    made = [_fact("alice", f"note {i}", [1.0, 0.01 * i, 0.0]) for i in range(5)]
+    for f in made:
+        store.upsert(f.id, f.embedding or [], f)
+
+    assert store.get(made[3].id).id == made[3].id
+    assert store.get("no-such-key") is None
+
+    store.delete(made[3].id)
+    assert store.get(made[3].id) is None
+    assert len(store.values()) == 4
