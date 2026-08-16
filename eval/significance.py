@@ -188,10 +188,19 @@ def verdict(result: dict, interval: dict, alpha: float = 0.05) -> str:
             f"NOT DISTINGUISHABLE (p={result['p_value']:.3f}) — this difference is what chance produces. "
             f"The true gap is somewhere in [{interval['low']*100:+.1f}, {interval['high']*100:+.1f}] points."
         )
-    direction = "B beats A" if result["difference"] > 0 else "A beats B"
+    b_ahead = result["difference"] > 0
+    direction = "B beats A" if b_ahead else "A beats B"
+    # The interval is stated B-minus-A. When A is the winner the sentence names A first, so the interval
+    # has to be reoriented to match — otherwise it reads "A beats B by 10 points, plausibly [-13, -7]",
+    # and a reader cannot tell whether the effect is positive or negative.
+    low, high = (
+        (interval["low"] * 100, interval["high"] * 100)
+        if b_ahead
+        else (-interval["high"] * 100, -interval["low"] * 100)
+    )
     return (
         f"SIGNIFICANT (p={result['p_value']:.4f}) — {direction} by {abs(result['difference'])*100:.1f} "
-        f"points, plausibly [{interval['low']*100:+.1f}, {interval['high']*100:+.1f}]."
+        f"points, plausibly [{low:+.1f}, {high:+.1f}]."
     )
 
 

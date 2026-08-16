@@ -12,6 +12,11 @@ from __future__ import annotations
 import json
 import sys
 from collections import defaultdict
+from pathlib import Path
+
+# Run as a script (`python3 eval/report.py …`), so the repo root is not on the path and `eval` is not
+# importable as a package. The sibling analysis modules need it to be.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 def load(path: str) -> list[dict]:
     with open(path, encoding="utf-8") as fh:
@@ -162,12 +167,53 @@ def format_bench_report(path: str, rows: list[dict]) -> str:
     return "\n".join(lines)
 
 
+def format_significance(rows: list[dict]) -> str:
+    """Whether the gaps in the table above are real, for every pair of systems in the run.
+
+    Two accuracy percentages side by side invite the reader to subtract them and believe the result. On
+    this benchmark an unchanged configuration moves several answers by itself, so a gap can be smaller
+    than the apparatus. Printing the test next to the table means nobody has to remember to ask.
+    """
+    from eval.significance import bootstrap_difference, mcnemar_exact, verdict
+
+    systems: list[str] = []
+    for row in rows:
+        for name in (row.get("sys") or {}):
+            if name not in systems:
+                systems.append(name)
+    if len(systems) < 2:
+        return ""
+
+    lines = ["  significance (paired McNemar over questions both systems scored)", ""]
+    for index, system_a in enumerate(systems):
+        for system_b in systems[index + 1:]:
+            pairs = []
+            for row in rows:
+                results = row.get("sys") or {}
+                a, b = results.get(system_a), results.get(system_b)
+                if not a or not b or a.get("err") or b.get("err"):
+                    continue
+                pairs.append((row.get("qid"), bool(a.get("ok")), bool(b.get("ok"))))
+            if not pairs:
+                continue
+            result = mcnemar_exact(pairs)
+            interval = bootstrap_difference(pairs, iterations=2000, seed=0)
+            lines.append(f"  {system_a} vs {system_b}:")
+            lines.append(f"    {verdict(result, interval)}")
+            lines.append("")
+    return "\n".join(lines)
+
+
 def main() -> None:
     if len(sys.argv) < 2:
         print("usage: python eval/report.py <bench_output.jsonl> [more.jsonl ...]")
         return
     for path in sys.argv[1:]:
-        print(format_bench_report(path, load(path)))
+        rows = load(path)
+        print(format_bench_report(path, rows))
+        report = format_significance(rows)
+        if report:
+            print(report)
 
 
 if __name__ == "__main__":

@@ -167,3 +167,15 @@ def test_abstentions_are_scored_as_wrong_not_dropped():
     log_b = {"q1": {"s": {"ok": True}}}
     pairs = paired_outcomes(log_a, log_b, "s", "s")
     assert pairs == [("q1", False, True)]
+
+
+def test_the_interval_is_oriented_to_match_the_stated_winner():
+    """"A beats B by 10 points, plausibly [-13, -7]" tells a reader nothing about the sign of the
+    effect. When the sentence names A as the winner, the interval must be stated A-minus-B too."""
+    a_ahead = mcnemar_exact(_pairs(both=337, only_a=81, only_b=29, neither=53))
+    text = verdict(a_ahead, {"low": -0.144, "high": -0.064})
+    assert "A beats B" in text
+    assert "[+6.4, +14.4]" in text, text
+
+    b_ahead = mcnemar_exact(_pairs(both=337, only_a=29, only_b=81, neither=53))
+    assert "[+6.4, +14.4]" in verdict(b_ahead, {"low": 0.064, "high": 0.144})
