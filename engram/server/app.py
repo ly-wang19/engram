@@ -210,6 +210,19 @@ def _idempotency_cache() -> IdempotencyCache:
     return _idempotency
 
 
+def _count(name: str) -> None:
+    """Bump an aggregate counter, never at the cost of the request.
+
+    Instrumentation must not change behaviour. Building the service can itself fail (a misconfigured
+    backend), and that failure surfacing from inside an exception handler would replace a precise 401
+    with a generic 500 — losing the very diagnosis the counter exists to support.
+    """
+    try:
+        svc().metrics.count(name)
+    except Exception:  # noqa: BLE001 - a missing metric is never worth failing a request over
+        pass
+
+
 def _enforce_rate_limit(user: str) -> None:
     limiter = _rate_limiter()
     if not limiter.enabled:
@@ -218,6 +231,9 @@ def _enforce_rate_limit(user: str) -> None:
         limiter.prune()
     allowed, retry_after = limiter.check(user)
     if not allowed:
+        # Counted, not logged per tenant: /metrics is unauthenticated, so a per-tenant breakdown would
+        # tell any caller which tenants exist. An operator needs to know throttling is happening at all.
+        _count("rate_limited")
         # Retry-After is what makes a 429 actionable rather than a client guessing and hammering.
         raise HTTPException(
             429, "rate limit exceeded", headers={"Retry-After": str(int(retry_after) + 1)}
@@ -238,6 +254,9 @@ def idempotent(user: str, request: Request, compute):
     cache = _idempotency_cache()
     cached = cache.get(user, key)
     if cached is not None:
+        # A replay is work the server did not have to redo. Counting it is how an operator learns the
+        # header is actually being used, rather than assuming clients set it.
+        _count("idempotent_replays")
         return cached
     result = compute()
     cache.put(user, key, result)
@@ -252,7 +271,16 @@ def auth(authorization: str = Header(default="")) -> str:
     itself as the namespace, so anyone can try it without pre-provisioned keys while still avoiding
     shared anonymous memory unless it is explicitly enabled.
     """
-    user = _resolve_user(authorization)
+    try:
+        user = _resolve_user(authorization)
+    except HTTPException as exc:
+        # A rising rejection count is how a misconfigured deployment or a credential-stuffing attempt
+        # becomes visible. Bucketed by status only -- the presented token is never recorded anywhere.
+        if exc.status_code in {401, 403}:
+            _count("auth_rejected")
+        elif exc.status_code == 503:
+            _count("auth_misconfigured")
+        raise
     _enforce_rate_limit(user)
     return user
 

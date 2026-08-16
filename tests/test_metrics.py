@@ -162,3 +162,74 @@ def test_metrics_endpoint_is_open_and_aggregate(tmp_path, monkeypatch):
     after = client.get("/metrics").json()
     assert after["ops"]["remember"]["n"] >= 1
     assert "tenant-x" not in json.dumps(after)
+
+
+# --- defence counters ---
+#
+# The rate limiter, the idempotency cache and key resolution are otherwise black boxes: an operator
+# cannot tell whether they are doing anything. These counters are aggregate on purpose — /metrics is
+# unauthenticated, so a per-tenant breakdown would reveal which tenants exist.
+
+
+def _guarded_client(tmp_path, monkeypatch, **env):
+    fastapi = pytest.importorskip("fastapi")
+    del fastapi
+    from fastapi.testclient import TestClient
+
+    monkeypatch.setenv("ENGRAM_DATA_DIR", str(tmp_path))
+    monkeypatch.delenv("ENGRAM_API_KEYS", raising=False)
+    monkeypatch.delenv("ENGRAM_ADMIN_TOKEN", raising=False)
+    monkeypatch.setenv("ENGRAM_OPEN", "1")
+    for name, value in env.items():
+        monkeypatch.setenv(name, value)
+
+    import engram.server.app as app_module
+
+    app_module._svc = None
+    app_module._keystore = None
+    app_module._keystore_path = None
+    app_module._limiter = None
+    app_module._idempotency = None
+    return TestClient(app_module.app), app_module
+
+
+def test_rate_limited_requests_are_counted(tmp_path, monkeypatch):
+    client, _ = _guarded_client(tmp_path, monkeypatch, ENGRAM_RATE_LIMIT_PER_MIN="1")
+    headers = {"Authorization": "Bearer tenant-a"}
+    client.post("/v1/remember", json={"content": "one"}, headers=headers)
+    assert client.post("/v1/remember", json={"content": "two"}, headers=headers).status_code == 429
+
+    assert client.get("/metrics").json()["counts"]["rate_limited"] == 1
+
+
+def test_idempotent_replays_are_counted(tmp_path, monkeypatch):
+    client, _ = _guarded_client(tmp_path, monkeypatch)
+    headers = {"Authorization": "Bearer tenant-a", "Idempotency-Key": "retry-1"}
+    body = {"content": "Alice visited Kyoto."}
+    client.post("/v1/remember", json=body, headers=headers)
+    counts = client.get("/metrics").json()["counts"]
+    assert "idempotent_replays" not in counts, "the first call is work, not a replay"
+
+    client.post("/v1/remember", json=body, headers=headers)
+    assert client.get("/metrics").json()["counts"]["idempotent_replays"] == 1
+
+
+def test_rejected_auth_is_counted(tmp_path, monkeypatch):
+    client, _ = _guarded_client(tmp_path, monkeypatch, ENGRAM_API_KEYS="carol:sk-carol")
+    monkeypatch.delenv("ENGRAM_OPEN", raising=False)
+    assert client.post(
+        "/v1/remember", json={"content": "hi"}, headers={"Authorization": "Bearer wrong-key"}
+    ).status_code == 401
+    assert client.get("/metrics").json()["counts"]["auth_rejected"] == 1
+
+
+def test_defence_counters_never_name_a_tenant(tmp_path, monkeypatch):
+    """The privacy boundary: /metrics is open, so counting must not enumerate tenants."""
+    client, _ = _guarded_client(tmp_path, monkeypatch, ENGRAM_RATE_LIMIT_PER_MIN="1")
+    secret_tenant = "acme-industries-prod"
+    headers = {"Authorization": f"Bearer {secret_tenant}", "Idempotency-Key": "k"}
+    client.post("/v1/remember", json={"content": "hi"}, headers=headers)
+    client.post("/v1/remember", json={"content": "hi"}, headers=headers)
+
+    payload = client.get("/metrics").text
+    assert secret_tenant not in payload
