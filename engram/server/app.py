@@ -271,6 +271,17 @@ def ready():
     return JSONResponse(payload, status_code=200 if payload["ready"] else 503)
 
 
+@app.get("/metrics")
+def metrics():
+    """Live latency, volume and token aggregates for the running service.
+
+    Unauthenticated, like /health, and safe to be: the payload is aggregate-only by construction — it
+    carries no namespace names, queries or content, so it cannot reveal that a given tenant exists, let
+    alone what they stored. Operators who still want it private should not expose it at the proxy.
+    """
+    return svc().metrics.snapshot()
+
+
 # The production console (the React app in frontend/) is served at /ui once built; "/" redirects
 # there. When it ISN'T built (fresh clone, tests, the zero-setup demo) we fall back to the tiny inline
 # dashboard below — so the server is always usable with no build step (CLAUDE.md zero-setup invariant).

@@ -20,6 +20,7 @@ from contextlib import contextmanager
 from typing import Any, Optional
 
 from .memory import Memory
+from .metrics import Metrics, timed
 from .util import fmt_date, fmt_datetime
 
 DEFAULT_DATA_DIR = os.path.expanduser("~/.engram/data")
@@ -119,6 +120,8 @@ class MemoryService:
         from .config import Config
 
         self.config = Config()
+        # Live latency/volume/token counters (aggregate-only; see engram/metrics.py).
+        self.metrics = Metrics()
         # ENGRAM_STORAGE selects the vector backend ('memory' default, 'lancedb' opt-in). Fail closed on
         # anything else: silently falling back to 'memory' would misreport /health's storage field.
         storage = os.environ.get("ENGRAM_STORAGE", "").strip().lower()
@@ -286,6 +289,7 @@ class MemoryService:
         return len(self._hot)
 
     # --- write path ---------------------------------------------------------
+    @timed("remember")
     def remember(self, user: str, content: str, session_id: str = "default",
                  scope: str = "auto") -> dict:
         """Store a message + run System-2 consolidation/summarization (best-effort: a transient model
@@ -305,11 +309,15 @@ class MemoryService:
                 mem.summarize_episodes(list(mem.episodes_doc.values()))
             except Exception as exc:  # noqa: BLE001 — keep the raw episode no matter what
                 self._save(user, mem)
+                # Degraded writes still succeed, so they are invisible in error rates and latency alike.
+                # Counting them is the only way an operator learns consolidation is silently failing.
+                self.metrics.count("remember_degraded")
                 return {"ok": True, "extracted": 0, "degraded": type(exc).__name__, "stored_raw": True}
             self._save(user, mem)
             return {"ok": True, "scope": "long", "extracted": added,
                     "total_facts": len([f for f in _all_facts(mem) if f.is_live()])}
 
+    @timed("import")
     def import_(self, user: str, sessions: Optional[list] = None, format: str = "auto",
                 data: Any = None, consolidate: bool = True, summarize: bool = True,
                 session_id: str = "imported") -> dict:
@@ -393,6 +401,7 @@ class MemoryService:
             return {"ok": True, **result}
 
     # --- read path ----------------------------------------------------------
+    @timed("recall")
     def recall(self, user: str, query: str, lean: bool = True, n_chunks: int = 6,
                session_id: Optional[str] = None, as_of: Optional[float] = None,
                redact_sensitive: bool = False,
@@ -423,6 +432,9 @@ class MemoryService:
                 )
                 out["full_tokens"] = _est_tokens(full)
                 out["answer"] = _answer_from_memory(self.answerer, query, ctx)
+            # The baseline is only computed on the answer path, so the savings ratio is derived from
+            # those calls alone (see Metrics.tokens) rather than mixing two different call sets.
+            self.metrics.tokens(out["tokens_est"], out.get("full_tokens"))
             return out
         res = mem.search(query, user_id=user, as_of=as_of)
         visible_facts = [
@@ -498,6 +510,7 @@ class MemoryService:
             self._save(user, mem)
             return {"ok": True, "cleared": n}
 
+    @timed("close_session")
     def close_session(
         self,
         user: str,
