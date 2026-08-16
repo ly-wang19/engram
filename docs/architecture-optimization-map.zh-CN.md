@@ -101,6 +101,7 @@ flowchart TD
 | 2026-07-09 | `chain_provenance_promotion` | Chain-aware retrieval / Raw evidence fusion | previous-value 问题中，`supersedes` 链上的旧事实也能作为 provenance raw chunk promotion 的种子，优先提升旧值源会话 | `results/chain_provenance_promotion_experiments.md`, `results/chain_provenance_promotion_ablation.jsonl`, `results/chain_provenance_promotion_context_sample.jsonl` |
 | 2026-07-14 | `commercial_release_0_1_0` | Service boundary / Namespace storage / Deployment / Release gate | 修复命名空间路径穿越与字符过滤碰撞；默认鉴权失败关闭；增加 request limits、liveness/readiness、非 root 容器和统一发布门禁 | `results/commercial_release_0_1_0_validation.jsonl`, `specs/003-commercial-release/` |
 | 2026-08-16 | `bounded_candidates`（默认关） | Read path / Hybrid retrieval / Store 索引层 | 读路径此前对每次查询全量扫描存活事实（`hybrid.py` 的 `fact_store.values()`），实测为 O(n)：每千条事实耗时恒定 ~17–20ms，10000 条时单查询 177ms，已超宪章 <100ms 目标。新增倒排/槽位索引（`engram/store/indexed.py`）+ 存储装饰器，让融合阶段只对有界候选集打分 | `results/bounded_candidates_scaling.md`，`eval/scaling.py`，`tests/test_bounded_candidates.py`（8 测试，含逐位等价性） |
+| 2026-08-16 | `layered_proxy_wiring`（opt-in） | 接入层 / OpenAI 兼容代理 | 代理此前把整个检索切片放进 system prompt，导致 system 块每轮都变、provider 的 prompt-cache 一个前缀都匹配不上（这也推翻了 `layered.py` 原docstring「调用方放进 user turn」的前提）。改为 stable 半置于 system 最前、本轮证据移入 user turn，system 块跨轮字节相同（去重数 5→1），稳定前缀 61 tokens。响应新增 `engram.cacheable_tokens_est` 让调用方不必猜。**同内容对比下 token −1.1%（中性）**，收益是「system 块不再每轮失效」这个此前不存在的性质，是否值得取决于 provider 的 cache-read 定价，本测量不计价格 | `results/layered_context_tokens.md`，`tests/test_layered_context.py`（+4 测试，含前缀稳定性与「拆分不丢证据」） |
 | 2026-08-16 | `defence_counters` | 服务可观测层 | 限流、幂等、密钥解析三层防护此前是黑盒：运维无法判断它们是否在生效。`/metrics` 新增 `rate_limited` / `idempotent_replays` / `auth_rejected` / `auth_misconfigured` 四个聚合计数。**刻意不按租户分桶**——该端点不鉴权，分桶会暴露有哪些租户存在。埋点统一走 `_count()`，其中吞掉自身异常：埋点不得改变请求行为，而在异常处理器里构造服务失败会把一个精确的 401 换成笼统的 500，恰好丢掉计数本来要支撑的诊断 | `tests/test_metrics.py`（+4 测试，含首次调用不算重放、以及计数载荷不含租户名的隐私断言） |
 | 2026-08-16 | `python_sdk` | 接入层 / 客户端 | 主干只有 TS 客户端，而 Agent 生态是 Python 优先的。新增 `engram/client.py`：零运行时依赖（stdlib urllib）、方法名对齐 TS SDK 避免两者漂移、覆盖今日全部端点（含新增的 `/metrics`、`/v1/admin/keys`、`Idempotency-Key`）。**transport 契约改为返回 `(status, headers, body)`**——最初只返回 `(status, body)`，导致 `EngramError.retry_after` 永远为 `None`，因为 `Retry-After` 在响应头里；发一个永远为空的字段比不发更糟 | `tests/test_client.py`（17 测试，全部通过可注入 transport 打到**真实 app**而非 mock——mock 只能证明 SDK 自洽，而客户端库的典型失效恰恰是与服务端漂移） |
 | 2026-08-16 | `self_serve_api_keys` | 服务边界 / 鉴权（多租户） | 此前只能靠静态 `ENGRAM_API_KEYS`（改环境变量+重启）或开放模式。新增 `engram/server/keys.py`：运行时签发 `sk-engram-*`、**只落盘 SHA-256 摘要**（泄露的密钥文件不可重放）、立即吊销、可列出；`/v1/admin/keys` 由独立的 `ENGRAM_ADMIN_TOKEN` 把守，未设置即 403（开放模式部署不会被路人签发租户）。解析顺序为「运行时密钥 → 静态映射 → 开放模式」，密钥库不可读时返回 503 而非放行。**修正了保全版的一处数据丢失风险**：原实现在密钥文件损坏时静默以空状态启动，随后任一次签发都会 `_save()` 覆盖该文件、永久销毁全部已签发记录；改为拒绝启动并保持文件原样。另修掉锁外改 `last_used_at` 的数据竞争，并把密钥文件权限收紧为仅属主可读写 | `tests/test_api_keys.py`（20 测试，含失败关闭、吊销后拒绝、损坏文件不被覆盖、跨租户隔离用 bob 自己的密钥走 API 验证） |
@@ -145,6 +146,11 @@ flowchart TD
 | `candidate_vector_channel=False` 作为默认 | **不采用**。它确实快 14.5x 且次线性，但会丢"语义相关却无共享查询词"的事实，正是 M1 已验证 hybrid 论点依赖的召回。需真 ANN 后端或 keyed harness 证明召回损失可接受 | 同上 |
 | 上下文拆分接进 `lean_context` 默认路径 | **不采用**。实测 5 轮以下是净亏（stable 半虽只计费一次，但扁平上下文本身小，首轮结构开销收不回），且已发布数字均由扁平路径产出。保留为独立方法 `Memory.layered_context()`，由调用方按会话长度选择 | `results/layered_context_tokens.md` |
 | 上下文导航图（MEMORY MAP）默认开启 | **不采用**。它是扁平上下文里本来没有的新增内容，约 20 轮才回本；最初的对比实为"扁平 vs 扁平+导航图"，缓存收益被吃光还倒欠。改为 `map_limit=0` 默认关闭 | 同上 |
+| 代理侧叠加 `RECALL_GUIDE` | **不采用**。代理已用 `_MEMORY_PREAMBLE` 框定记忆，再叠一层是同一条指令的第二份拷贝，实测 +14% prompt tokens 且不改变行为。代理显式传 `guide=False` | `results/layered_context_tokens.md` |
+| 上下文拆分作为代理默认 | **不采用**，保持 opt-in（`{"memory":{"layered":true}}`）。同内容对比下 token 收益仅 −1.1%（噪声级），真实价值是 61 tokens 的可缓存稳定前缀，是否划算取决于 provider 的 cache-read 定价，尚未用真实计费验证 | 同上 |
+
+> ⚠️ **同一个测量陷阱已踩两次**：把"扁平 vs 扁平+新增块"当作公平对比（第一次是 MEMORY MAP，第二次是
+> RECALL_GUIDE），两次都先得出"拆分更贵"的错误结论。任何对比先确认两边内容集合相同，只有放置方式不同。
 
 ## 验收分层规则
 

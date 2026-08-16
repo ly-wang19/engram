@@ -770,6 +770,9 @@ def chat_completions(req: ChatCompletionReq, background: BackgroundTasks, user: 
             as_of=opts.get("as_of"),
             redact_sensitive=bool(opts.get("redact_sensitive", False)),
             session_id=session_id,
+            # Opt-in: it pays off across a multi-turn session and costs a little on a one-shot call
+            # (results/layered_context_tokens.md), so the caller who knows which they are decides.
+            layered=bool(opts.get("layered", False)),
         )
     except oc.NoLLMConfigured as exc:
         raise HTTPException(503, str(exc))

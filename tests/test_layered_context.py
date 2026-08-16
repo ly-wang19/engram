@@ -153,3 +153,84 @@ def test_memory_method_matches_the_module():
     assert mem.layered_context("where does alice work", "u1").stable == (
         layered_context(mem, "where does alice work", "u1").stable
     )
+
+
+# --- OpenAI-compatible proxy wiring ---
+#
+# The proxy already put the whole retrieved slice in the SYSTEM prompt, so the system block changed on
+# every turn and no provider prompt cache could ever match a prefix. The split's job on this surface is
+# to make that block byte-identical; the tests below pin both halves of that claim.
+
+
+def _proxy_setup():
+    from engram.server import openai_compat as oc
+
+    mem = _memory()
+
+    class _Svc:
+        """Only what chat_completion touches."""
+
+        def __init__(self, memory):
+            self._mem = memory
+            self.llm = self
+
+        def get(self, _user):
+            return self._mem
+
+        def recall(self, _user, query, **kwargs):
+            return {"context": self._mem.lean_context(query, user_id="u1")}
+
+        def complete(self, prompt, system=None):
+            return "ok"
+
+    return oc, _Svc(mem)
+
+
+def test_proxy_system_block_is_stable_across_turns_when_layered():
+    oc, svc = _proxy_setup()
+    flat, layered = set(), set()
+    for query in QUERIES:
+        body = {"model": "engram", "messages": [{"role": "user", "content": query}]}
+        ctx = svc.recall("u1", query)["context"]
+        flat.add(oc.build_prompt(body["messages"], ctx)[0])
+        parts = svc.get("u1").layered_context(query, user_id="u1", guide=False)
+        layered.add(oc.build_prompt(body["messages"], parts.dynamic, parts.stable)[0])
+
+    # Not "one block per query": two questions can retrieve the same slice. The property is that the
+    # unsplit block varies at all — that alone is enough to miss a prefix cache on those turns.
+    assert len(flat) > 1, "precondition: today's system block varies across turns"
+    assert len(layered) == 1, "the split must make the system block byte-identical, or caching never hits"
+
+
+def test_proxy_reports_the_cacheable_prefix_size():
+    """A caller cannot reason about caching without knowing how much of the prompt is stable."""
+    oc, svc = _proxy_setup()
+    body = {"model": "engram", "messages": [{"role": "user", "content": "where does alice work"}]}
+
+    plain = oc.chat_completion(svc, "u1", body)
+    assert plain["engram"]["cacheable_tokens_est"] == 0, "nothing is stable without the split"
+
+    split = oc.chat_completion(svc, "u1", body, layered=True)
+    assert split["engram"]["cacheable_tokens_est"] > 0
+
+
+def test_proxy_keeps_the_evidence_when_splitting():
+    """Moving evidence to the user turn must not drop it."""
+    oc, svc = _proxy_setup()
+    body = {"model": "engram", "messages": [{"role": "user", "content": "where does alice work"}]}
+    parts = svc.get("u1").layered_context("where does alice work", user_id="u1", guide=False)
+    system, prompt = oc.build_prompt(body["messages"], parts.dynamic, parts.stable)
+
+    assert parts.stable in (system or "")
+    assert parts.dynamic in prompt
+    assert "where does alice work" in prompt
+
+
+def test_proxy_is_unchanged_when_not_layered():
+    """The default path must behave exactly as before."""
+    oc, svc = _proxy_setup()
+    messages = [{"role": "user", "content": "where does alice work"}]
+    ctx = svc.recall("u1", "where does alice work")["context"]
+    system, prompt = oc.build_prompt(messages, ctx)
+    assert ctx.strip() in (system or ""), "unsplit memory still rides in the system block"
+    assert prompt == "where does alice work"
