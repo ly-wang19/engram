@@ -62,12 +62,31 @@
 | `cool-chebyshev-aa0347` | consolidate 三模块改动 72 行 + `tests/test_profile.py`(40) |
 | `nostalgic-clarke-dda32e` | 480 行 diff |
 
-⚠️ **隐私**：`nostalgic-clarke-dda32e` 含 `examples/seed_zhangyuwei.py` 与 `examples/zhangyuwei_memory.md`，
-疑似真实人名。`CONTRIBUTING.md` 禁止提交真实个人数据与姓名——这两个文件在确认为化名前不得提交。
+### 处置结果（2026-08-16）
 
-⚠️ **不要盲目抢救**：这些均为 2026-06 的工作，主干此后新增了 `retrieve/evidence.py` 与
-`retrieve/aggregate.py`。`router.py` / `segment.py` / `recall_pipeline.py` 很可能已被覆盖，
-需逐个判定"仍有价值 vs 已过时"。
+隐私前置条件已由仓库所有者确认：`zhangyuwei` 为**化名**；另对该语料扫描了邮箱、手机号、证件号与
+账号类标识，**未发现**其它可识别信息，满足 `CONTRIBUTING.md` 的提交门槛。
+
+全部未提交工作已**按原样提交到各自分支保全**（每个 worktree 现为 main+1、工作区清空）。保全 ≠ 合并：
+这些都是 2026-06 的代码，主干此后走了 100+ 个 commit，需逐个对照今日主干重新验证后才能移植。
+
+| worktree | 保全提交 | 判定 |
+| --- | --- | --- |
+| `wonderful-tereshkova-b63377` | `c6912df` | **部分仍有效**。`segment.py` 记录的缺陷**今天仍在**：`retrieve/rerank.py` 的 cross-encoder 仍是 `max_length=512` 且无分段，重排 ~2000 token 的 session 会静默只对前 512 token 打分（实测 70.0%→57.5%）。主干 rerank 默认关闭，限制了影响面但没有修复。`router.py` 的按查询路由与优化地图上仍未关闭的 P2「runtime profiles」高度重合 |
+| `vigilant-mahavira-73886f` | `21e7baa` | **未被覆盖**。把上下文拆成可缓存的 STABLE 块（进 system prompt）与每轮变化的 DYNAMIC 块，主干 `lean_context` 至今仍拍平成单个字符串。同样证据、更少重复计费——属 Bet A 三联表里 tokens/latency 那两维。无测试 |
+| `sweet-haibt-7231c5` | `d3f4f70` | **真实缺口**。`engram/metrics.py`（99 行）+ 测试（119 行）+ `/metrics` 端点，主干至今没有可观测层。纯 stdlib、只暴露聚合量（不含命名空间名与查询文本） |
+| `laughing-tesla-360ff1` | `103359c` | 730 行文档。主干此后自建了文档体系，重合度未知，且其中数字未按「每个公开数字可追溯到已提交日志」的规则复核过 |
+| `cool-chebyshev-aa0347` | `7ee1123` | consolidate 三模块改动 + `tests/test_profile.py`。主干此后重写了大部分 consolidation，需重新对照 |
+| `nostalgic-clarke-dda32e` | `2ccfe15` | 车载记忆演示语料 + 控制台接线。`memory.py`/`server/app.py`/前端在主干均已大改 |
+
+**未提交但未保全的**（判定为可再生或无价值，故意留在原处）：
+`distracted-tereshkova` 的 `paper/main_anon.{pdf,bbl}`（匿名构建产物，可由已提交的开关重新生成）、
+`hardcore-nobel` 的 `frontend/package-lock.json`（前端与 CI 用 pnpm，该 npm 锁文件是残留）、
+`sharp-chandrasekhar` 与 `peaceful-almeida` 的 `TECHNIQUES.md`（与 `103359c` 中已保全的同名文档重复）。
+
+**main 工作区的未跟踪文件未处理**：`IDENTITY.md` / `SOUL.md` / `USER.md` 和 11 个
+`results/*.jsonl`。后者是实验日志，按 Bet D「每个公开数字可追溯到已提交日志」的规则**可能应当提交**，
+但提交到 main 属于仓库所有者的决定，未擅自执行。
 
 ## 结论
 
