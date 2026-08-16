@@ -141,6 +141,10 @@ flowchart TD
   且数值误差**双向**（低估 16 / 高估 12），排除了"证据召回不足"这个解释——是计数本身失败。
 - 单点机制打单个类别恰好卡在可测边缘（multi-session 数值 19 题 = +3.8；temporal 弃答 15 题 = +3.0）。
   **必须两条线一起做**（合计 34 题 = +6.8 点）才是舒服高于地板的实验。
+- **机制必须做在「证据到手之后」这一层**（`results/retrieval_diagnosis.md`）：82 道错题里
+  79 道（96%）答案会话已被检索到，其中 **73% 在前 2 名以全文展示**——答题模型拿着原文仍然答错。
+  提升召回的上限只有 3 题（+0.6 点）；扩大全文窗口到 15 的名义上限 +3.8 点，但 60 题已证明
+  全文条件下仍会失败，转化率远低于 1，且 token 成本朝全上下文回退、与 headline 论点冲突。
 - 想分辨更小的增益，只能加分辨率（更多题目 / 更确定性的 answerer），那是测量投资，
   但它是所有算法投资的前置条件。
 
@@ -152,7 +156,7 @@ flowchart TD
 | --- | --- | --- | --- |
 | P0 | Raw evidence fusion hardening | Engram 已验证 facts-only 会丢细节，hybrid 是 load-bearing 发现 | 已把 chain facts 接入 provenance promotion；下一步继续把 raw chunks、facts、graph paths、summary/provenance 证据类型化，减少重复和噪声 |
 | P0 | Chain-aware retrieval | knowledge-update 强项还可以转化成更稳定的 temporal/current-vs-past 能力 | 已落地 previous-value 源会话提升；下一步扩展到多段属性演化和 profile-level chain |
-| P1 | Graph proximity / multi-hop | multi-session、multi-hop 是长期记忆系统最难类别，也是差异化战场 | 轻量 n-hop/PPR-style expansion，先用真实错例切片验证 |
+| ~~P1~~ **降级** | ~~Graph proximity / multi-hop（提升召回）~~ | **已被错例证据降级**：82 道错题里 79 道（96%）答案会话本来就被检索到了，其中 73% 还在前 2 名以全文展示。任何"多检索一点"的机制上限是 3 题 = +0.6 点，低于 2.94 分辨率地板——做了也测不出来 | 证据：`results/retrieval_diagnosis.md`。图能力本身仍可用于证据**组织**（如跨会话可数项的结构化），但不要以提升召回为目标 |
 | P1 | Temporal interval reasoning | temporal-reasoning 仍低于 full-context，需要更强的区间和 duration 证据 | 显式 start/end pair、invalid_at span、date arithmetic block |
 | P2 | Runtime profiles | 让用户选择 lite/standard/graph/consolidated，并用同一 harness 报三联表 | 在 `Config`/bench 层定义可测 profile，而不是手动组合开关 |
 | ~~P0~~ 已落地 | ~~向量存储的过滤 ANN~~ | 已修复，见下方台账 `tenant_filter_pushdown` | 剩余：`InMemoryVectorStore` 仍是暴力扫描（参考实现，设计如此）；`query_entity_ids()` 仍扫 `graph.entities.values()`，需实体名索引；`LanceDBVectorStore.get()` 仍全表物化后线性找 key |

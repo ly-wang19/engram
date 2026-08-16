@@ -68,15 +68,20 @@ def check_item(item: dict, embedder, k_sessions: int) -> dict:
         session_of_episode[episode.id] = session_id
 
     retrieved = mem.retrieve_episodes(item["question"], "u", k=k_sessions)
-    got = {session_of_episode.get(ep.id, ep.session_id) for ep in retrieved}
+    ordered = [session_of_episode.get(ep.id, ep.session_id) for ep in retrieved]
     wanted = set(item.get("answer_session_ids") or [])
+    # Rank, not just membership. The read path shows only the top few sessions in FULL detail and the
+    # rest as summaries, so "somewhere in the top 15" and "shown as evidence the answerer can read" are
+    # different claims — and they point at different layers to fix.
+    rank = next((i + 1 for i, sid in enumerate(ordered) if sid in wanted), None)
     return {
         "qid": item["question_id"],
         "cat": item.get("question_type"),
         "answer_sessions": len(wanted),
         "haystack_sessions": len(item["haystack_session_ids"]),
-        "hit": bool(wanted & got),
-        "retrieved": len(got),
+        "hit": rank is not None,
+        "rank": rank,
+        "retrieved": len(ordered),
     }
 
 
@@ -132,6 +137,19 @@ def main() -> int:
         print(f"{mode:<16}{len(subset):>9}{f'{hits}/{len(subset)}  ({hits/len(subset):.0%})':>26}")
     total_hits = sum(1 for r in rows if r["hit"])
     print(f"{'ALL':<16}{len(rows):>9}{f'{total_hits}/{len(rows)}  ({total_hits/len(rows):.0%})':>26}")
+
+    # Where in the ranking it landed decides which layer is at fault: inside the full-detail window means
+    # the answerer read it and still failed; outside means context assembly showed only a summary.
+    ranks = [r["rank"] for r in rows if r["rank"]]
+    if ranks:
+        print("\nrank of the answer session within the retrieved slice:")
+        for cut in (1, 2, 3, 5, 10, 15):
+            within = sum(1 for r in ranks if r <= cut)
+            print(f"  top-{cut:<3} {within:>4}/{len(rows)}  ({within/len(rows):.0%})")
+        print(
+            "\n  The run under analysis rendered its top 2 sessions in full and the rest as summaries,\n"
+            "  so top-2 is the share where the answerer had the raw evidence in front of it."
+        )
     print(
         "\nA high hit rate means the evidence was in the retrieved slice and the failure happened after\n"
         "retrieval — so recall expansion would buy nothing. A low one makes retrieval the target."
