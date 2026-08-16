@@ -32,6 +32,7 @@ from .retrieve import (
     render_aggregation_candidates,
 )
 from .retrieve.lexical import bm25_scores, overlap_terms, stems
+from .retrieve.rerank import rerank_long
 from .store import (
     GraphStore,
     IndexedVectorStore,
@@ -2436,7 +2437,16 @@ class Memory:
                 eps = [eps[i] for i in fused_order]
 
         if self.reranker is not None and len(eps) > k:
-            ranked = self.reranker.rerank(query, [(i, ep.content) for i, ep in enumerate(eps)], k)
+            # Segment-level, because a session is ~2000 tokens and the cross-encoder reads ~512: scoring
+            # whole sessions silently ranks each one on its opening quarter (the known _S regression
+            # noted in lean_context). Each session scores as its best segment.
+            ranked = rerank_long(
+                self.reranker,
+                query,
+                [(i, ep.content) for i, ep in enumerate(eps)],
+                k,
+                max_words=self.config.rerank_segment_words,
+            )
             return [eps[i] for i, _ in ranked]
         return eps[:k]
 

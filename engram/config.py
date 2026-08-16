@@ -48,6 +48,10 @@ class Config:
     # missing facts that are semantically relevant but share no query term. Flip it off only with a real
     # ANN backend, or after a keyed harness run shows the recall loss is acceptable.
     candidate_vector_channel: bool = True
+    # Segment size for reranking long documents. Cross-encoders read a bounded window (512 tokens for the
+    # BGE rerankers) and truncate silently past it, so raw sessions are scored segment-by-segment and take
+    # their best segment's score. ~300 words sits inside that window once the query is added.
+    rerank_segment_words: int = 300
     rrf_k: int = 60  # Reciprocal Rank Fusion constant
     max_hops: int = 2  # multi-hop planner depth
     max_hot_facts: int = 10_000  # heat-tier cap; cold facts remain durable and can page back on hot miss
