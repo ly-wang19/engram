@@ -78,3 +78,24 @@ def test_a_narrow_slice_can_miss_a_session_a_wide_one_finds():
 
     row = check_item(_item(answer_index=0, sessions=8), _Embedder(), k_sessions=1)
     assert row["retrieved"] <= 1
+
+
+def test_coverage_counts_all_answer_sessions_not_just_the_first():
+    """The correction this file exists to hold.
+
+    A counting question whose answer spans four sessions cannot be answered from the one that ranked
+    highest. Reporting only the first hit said "the evidence was retrieved" for exactly the questions
+    that could not possibly be counted correctly.
+    """
+    from eval.retrieval_check import check_item
+
+    item = _item(answer_index=0, sessions=5)
+    item["answer_session_ids"] = ["s0", "s3"]  # answer spans two sessions, only one ranks first
+    row = check_item(item, _Embedder(), k_sessions=5)
+
+    assert row["answer_sessions"] == 2
+    assert row["rank"] == 1, "the top-ranked answer session is still found"
+    assert row["covered_top2"] < row["answer_sessions"], (
+        "and coverage must show that the full-detail window did not hold all of them"
+    )
+    assert row["covered_all"] == 2, "both were retrieved somewhere in the slice"

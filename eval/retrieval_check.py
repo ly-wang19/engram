@@ -74,7 +74,14 @@ def check_item(item: dict, embedder, k_sessions: int) -> dict:
     # rest as summaries, so "somewhere in the top 15" and "shown as evidence the answerer can read" are
     # different claims — and they point at different layers to fix.
     rank = next((i + 1 for i, sid in enumerate(ordered) if sid in wanted), None)
+    # Coverage, not just the first hit. A counting question whose answer spans four sessions cannot be
+    # answered from one of them, however highly that one ranked — so "the answer session was retrieved"
+    # is the wrong measure for exactly the questions that fail most.
+    covered_top2 = sum(1 for sid in ordered[:2] if sid in wanted)
+    covered_all = sum(1 for sid in ordered if sid in wanted)
     return {
+        "covered_top2": covered_top2,
+        "covered_all": covered_all,
         "qid": item["question_id"],
         "cat": item.get("question_type"),
         "answer_sessions": len(wanted),
@@ -140,6 +147,20 @@ def main() -> int:
 
     # Where in the ranking it landed decides which layer is at fault: inside the full-detail window means
     # the answerer read it and still failed; outside means context assembly showed only a summary.
+    multi = [r for r in rows if r["answer_sessions"] > 1]
+    if multi:
+        full = sum(1 for r in multi if r["covered_top2"] == r["answer_sessions"])
+        any_all = sum(1 for r in multi if r["covered_all"] == r["answer_sessions"])
+        print(
+            f"\nquestions whose answer spans several sessions: {len(multi)}\n"
+            f"  every answer session inside the full-detail window: {full}/{len(multi)}"
+            f"  ({full/len(multi):.0%})\n"
+            f"  every answer session retrieved at all:              {any_all}/{len(multi)}"
+            f"  ({any_all/len(multi):.0%})\n"
+            "  A count cannot come out right from a subset of the sessions it has to cover, so for these\n"
+            "  the question is coverage, not whether the top-ranked one was found."
+        )
+
     ranks = [r["rank"] for r in rows if r["rank"]]
     if ranks:
         print("\nrank of the answer session within the retrieved slice:")
