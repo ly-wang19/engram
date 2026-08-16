@@ -24,6 +24,7 @@ from __future__ import annotations
 import argparse
 import collections
 import re
+import statistics
 import sys
 from pathlib import Path
 
@@ -76,6 +77,9 @@ def attribute(log: dict, system: str) -> dict:
     scored: dict[str, int] = collections.Counter()
     direction = collections.Counter()
     examples: dict[str, list] = collections.defaultdict(list)
+    # Context size per outcome. A refusal on a context as large as the ones that answered correctly is
+    # not retrieval starvation — the evidence budget was spent, and something after retrieval failed.
+    tokens: dict[str, list[int]] = collections.defaultdict(list)
 
     for qid, entry in log.items():
         # Same split report.py makes: `_abs` items are the benchmark's *unanswerable* variants, graded
@@ -87,10 +91,13 @@ def attribute(log: dict, system: str) -> dict:
         if not result or result.get("err"):
             continue
         scored[category] += 1
+        context_tokens = int(result.get("tok") or 0)
         if result.get("ok"):
+            tokens["correct"].append(context_tokens)
             continue
         pred, gold = result.get("pred") or "", result.get("gold") or ""
         mode = classify(pred, gold)
+        tokens[mode].append(context_tokens)
         by_category[category][mode] += 1
         totals[mode] += 1
         if len(examples[f"{category}/{mode}"]) < 3:
@@ -105,6 +112,9 @@ def attribute(log: dict, system: str) -> dict:
         "totals": dict(totals),
         "scored": dict(scored),
         "numeric_direction": dict(direction),
+        "median_context_tokens": {
+            mode: statistics.median(values) for mode, values in tokens.items() if values
+        },
         "examples": dict(examples),
         "n": sum(scored.values()),
     }
@@ -163,6 +173,18 @@ def main() -> int:
         points = 100.0 * count / n
         verdict = "measurable" if points > floor else "BELOW THE FLOOR — unmeasurable alone"
         print(f"  {mode:<14} {count:>4} questions  =  {points:+.1f} points   {verdict}")
+
+    medians = report.get("median_context_tokens") or {}
+    if len(medians) > 1:
+        print("\nmedian retrieved context, by outcome:")
+        for mode, value in sorted(medians.items(), key=lambda kv: -kv[1]):
+            print(f"  {mode:<14} {value:>8.0f} tokens")
+        spread = (max(medians.values()) - min(medians.values())) / max(1.0, max(medians.values()))
+        if spread < 0.15:
+            print(
+                "  Within a few percent of each other: the refusals and the misses were given as much\n"
+                "  evidence as the correct answers. Whatever failed, it was not retrieval running dry."
+            )
 
     if args.examples:
         print("\nexamples:")

@@ -80,3 +80,22 @@ def test_numeric_direction_is_reported():
 
 def test_empty_log_reports_nothing_rather_than_dividing_by_zero():
     assert attribute({}, "s")["n"] == 0
+
+
+def test_context_size_is_reported_per_outcome():
+    """A refusal on as much evidence as the correct answers got is not retrieval running dry — the
+    distinction decides whether the next mechanism belongs before or after retrieval."""
+    log = {
+        "q1": {"_cat": "c", "s": {"ok": True, "tok": 9600}},
+        "q2": {"_cat": "c", "s": {"ok": False, "pred": "I don't know", "gold": "4 days", "tok": 9650}},
+        "q3": {"_cat": "c", "s": {"ok": False, "pred": "3", "gold": "4", "tok": 9500}},
+    }
+    medians = attribute(log, "s")["median_context_tokens"]
+    assert medians["correct"] == 9600
+    assert medians["abstained"] == 9650
+    assert medians["numeric"] == 9500
+
+
+def test_missing_token_counts_do_not_break_the_report():
+    log = {"q1": {"_cat": "c", "s": {"ok": False, "pred": "x", "gold": "y"}}}
+    assert attribute(log, "s")["median_context_tokens"]["wrong_value"] == 0
