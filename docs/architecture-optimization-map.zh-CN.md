@@ -127,6 +127,20 @@ flowchart TD
 | 本次 `chain_provenance_promotion` | `supersedes` 链接入 provenance chunk promotion | 影响 previous/current-vs-past 问题的 raw source evidence | 复用 `chain_evidence` 开关 + 24/24 离线 ablation + LongMemEval sample context 0 errors |
 | 本次 `commercial_release_0_1_0` | 服务安全、租户落盘、部署和发布门禁收束 | 不改变 extraction/retrieval/fusion；影响所有 HTTP 自托管入口和新命名空间目录 | 危险路径/跨租户/鉴权/请求测试 + 全量 pytest + zero-setup + SDK/frontend/package/container 验收 |
 
+## 算法迭代的前置条件（先读这条再决定跑什么）
+
+`eval/significance.py` 量出了这套评测的分辨率：**500 题、22% 分歧率下，最小可检测增益 2.94 点**。
+
+- 公开 headline（`engram_lean` 83.6% vs `full_context` 73.2%）**显著**：p<0.0001，
+  95% 区间 [+6.4, +14.4]，81:29 的分歧比。声称成立。
+- 但**到榜首的 +1.6 差距低于分辨率**——不是「还没追上」，是这套测量判定不了真假。
+- 因此：**只做期望增益 > 3 点的改动**，并优先攻占比最大的弱类别 multi-session（121 题 70.2%）与
+  temporal-reasoning（127 题 70.9%，合计 248/500）；单类别 +10 点才换来整体约 +2.5 点。
+- 想分辨更小的增益，只能加分辨率（更多题目 / 更确定性的 answerer），那是测量投资，
+  但它是所有算法投资的前置条件。
+
+证据与复现命令：`results/significance_headline.md`。
+
 ## 当前重点区域
 
 | 优先级 | 模块 | 为什么重要 | 下一步形态 |
