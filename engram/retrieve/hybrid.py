@@ -9,7 +9,7 @@ from ..config import Config
 from ..consolidate.conflict import is_single_valued
 from ..embed import Embedder
 from ..store import GraphStore, VectorStore
-from ..types import Fact
+from ..types import Entity, Fact
 from ..util import cosine, indexed_text, now, recency, tokenize
 from ..util import date_terms as date_terms  # noqa: F401  re-export: callers import it from here
 from .fusion import order_by_score, weighted_rrf
@@ -149,12 +149,21 @@ def graph_relation_relevance(query: str, fact: Fact) -> float:
     return 0.0
 
 
+def _is_anchor_term(term: str) -> bool:
+    """Whether a stemmed term is distinctive enough to anchor a query to a single entity.
+
+    A property of the term alone, never of the entity holding it — which is what lets the same decision be
+    made from an index keyed on terms as from a walk over every entity.
+    """
+    return len(term) >= 3 and not term.isdigit() and term not in _ENTITY_ANCHOR_STOP
+
+
 def _entity_anchor_terms(name: str, aliases: list[str]) -> set[str]:
     terms: set[str] = set()
     for text in (name, *aliases):
         for tok in tokenize(text):
             term = stem(tok)
-            if len(term) >= 3 and not term.isdigit() and term not in _ENTITY_ANCHOR_STOP:
+            if _is_anchor_term(term):
                 terms.add(term)
     return terms
 
@@ -189,20 +198,47 @@ class HybridRetriever:
         from ..embed import HashingEmbedder
         self._semantic = not isinstance(embedder, HashingEmbedder)
 
+    def _anchor_scope(self, q: set[str], user_id: str) -> tuple[list[Entity], Optional[dict[str, set[str]]]]:
+        """Entities worth testing against the query, and per-term owner sets when the backend indexes them.
+
+        An entity can only anchor a query it shares a term with, so walking the whole store to find that
+        out is wasted work. When the graph can look terms up, both the candidate list and the alias-anchor
+        uniqueness counts come straight from the query's own terms. Backends without the lookup fall back
+        to the full scan, which is what the GraphStore interface actually guarantees.
+        """
+        lookup = getattr(self.graph, "entities_by_terms", None)
+        if lookup is None:
+            return [ent for ent in self.graph.entities.values() if ent.user_id == user_id], None
+        hits = lookup(user_id, q)
+        by_term = {term: {ent.id for ent in ents} for term, ents in hits.items()}
+        seen: dict[str, Entity] = {}
+        for ents in hits.values():
+            for ent in ents:
+                seen[ent.id] = ent
+        return list(seen.values()), by_term
+
     def query_entity_ids(self, query: str, user_id: str) -> set[str]:
         """Entity nodes whose full name appears in the query (the query's anchor entities)."""
         q = set(stems(query)) | set(tokenize(query))
         ids: set[str] = set()
-        entities = [ent for ent in self.graph.entities.values() if ent.user_id == user_id]
+        entities, indexed_terms = self._anchor_scope(q, user_id)
         for ent in entities:
             names = (ent.name, *ent.aliases)
             if any((toks := [stem(t) for t in tokenize(name)]) and all(t in q for t in toks) for name in names):
                 ids.add(ent.id)
         if self.config.graph_entity_alias_anchor:
-            term_to_ids: dict[str, set[str]] = {}
-            for ent in entities:
-                for term in _entity_anchor_terms(ent.name, ent.aliases):
-                    term_to_ids.setdefault(term, set()).add(ent.id)
+            if indexed_terms is None:
+                term_to_ids: dict[str, set[str]] = {}
+                for ent in entities:
+                    for term in _entity_anchor_terms(ent.name, ent.aliases):
+                        term_to_ids.setdefault(term, set()).add(ent.id)
+            else:
+                # The index keys on every name/alias term; the anchor filter tests the term, not the
+                # entity (see _is_anchor_term), so applying it to the query's terms selects exactly the
+                # owner sets the full build would have produced.
+                term_to_ids = {
+                    term: owners for term, owners in indexed_terms.items() if _is_anchor_term(term)
+                }
             for term in q:
                 hits = term_to_ids.get(term)
                 if hits is not None and len(hits) == 1:
