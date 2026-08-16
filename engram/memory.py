@@ -2306,6 +2306,15 @@ class Memory:
             return self._fit_blocks_by_evidence_budget(blocks, char_budget, need)
         return assembled[:char_budget]
 
+    def layered_context(self, query: str, user_id: str = "default", **kwargs):
+        """`lean_context` split into a cacheable half and a per-query half (see retrieve/layered.py).
+
+        Same evidence, same retrieval — it only changes where a caller can put each part, so a multi-turn
+        session stops re-sending the profile and the memory map on every turn."""
+        from .retrieve.layered import layered_context
+
+        return layered_context(self, query, user_id=user_id, **kwargs)
+
     # --- read path ---
     def search(
         self,
