@@ -354,9 +354,9 @@ class HybridRetriever:
         ids = index.lexical_candidates(query, pool, user_id=user_id)
 
         if self.config.candidate_vector_channel:
-            for _score, payload in self.fact_store.search(
-                qvec, pool, where=lambda f: getattr(f, "user_id", None) == user_id
-            ):
+            # Declarative tenant filter, not a Python predicate: a backend can push the former into its
+            # own index, while the latter forces it to scan every row before ranking.
+            for _score, payload in self.fact_store.search(qvec, pool, user_id=user_id):
                 fid = getattr(payload, "id", None)
                 if isinstance(fid, str):
                     ids.add(fid)

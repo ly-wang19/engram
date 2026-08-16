@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import statistics
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -103,6 +104,64 @@ def measure(
     }
 
 
+def measure_backend_filter(sizes: list[int], trials: int) -> None:
+    """How much the tenant filter costs on the scale backend, pushed down vs. applied in Python.
+
+    Separate from the retriever benchmark above because it isolates one question: can the vector backend
+    narrow to a tenant inside its own index, or must it hand every row to Python first? Multi-tenant
+    retrieval filters by user on every single query, so this is the difference between having a vector
+    index and merely having a vector file.
+    """
+    try:
+        import lancedb  # noqa: PLC0415 - optional backend
+    except ImportError:
+        print("\n(lancedb not installed - skipping the backend filter benchmark)")
+        return
+
+    from engram.store.lancedb_store import LanceDBVectorStore, _encode_payload  # noqa: PLC0415
+
+    print(f"\n{'rows':>8}  {'pushed down':>13}  {'python predicate':>18}  {'speedup':>9}")
+    print("-" * 56)
+    t = now()
+    for n in sizes:
+        with tempfile.TemporaryDirectory() as tmp:
+            rows = []
+            for i in range(n):
+                # A skewed tenant mix: the minority tenant's rows sit outside the query's unfiltered
+                # neighbourhood, which is exactly the case a post-filter handles badly.
+                user = "alice" if i % 10 else "bob"
+                f = Fact(
+                    user_id=user, subject="s", predicate="p", object=f"o{i}",
+                    text=f"fact number {i} about things", valid_at=t - i * 86400.0,
+                    embedding=[1.0, i / max(1, n), (i % 7) / 7],
+                )
+                rows.append(
+                    {"key": f.id, "vector": f.embedding, "payload": _encode_payload(f), "user_id": user}
+                )
+            lancedb.connect(tmp).create_table("facts", data=rows, mode="overwrite")
+            store = LanceDBVectorStore(tmp, "facts")
+            q = [1.0, 0.5, 0.3]
+
+            def timed(call) -> float:
+                call()  # warm
+                samples = []
+                for _ in range(trials):
+                    t0 = time.perf_counter()
+                    call()
+                    samples.append((time.perf_counter() - t0) * 1000.0)
+                return statistics.median(samples)
+
+            pushed = timed(lambda: store.search(q, 15, user_id="bob"))
+            scanned = timed(lambda: store.search(q, 15, where=lambda p: p.user_id == "bob"))
+            ratio = scanned / pushed if pushed else float("nan")
+            print(f"{n:>8}  {pushed:>11.2f}ms  {scanned:>16.2f}ms  {ratio:>8.1f}x")
+
+    print(
+        "\nA flat 'pushed down' column is the index working. The predicate column is what every\n"
+        "multi-tenant query cost before the tenant id became a real column."
+    )
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="Measure read-path cost vs. fact-store size.")
     ap.add_argument("--sizes", default="100,500,2000,10000", help="comma-separated fact counts")
@@ -151,10 +210,12 @@ def main() -> int:
         growth = rows[-1]["p50_ms"] / rows[0]["p50_ms"] if rows[0]["p50_ms"] else float("nan")
         print(f"  {name:>13}: per-query cost grew {growth:>6.1f}x")
     print(
-        "\n'+vec' asks the vector store for semantic candidates. Neither shipped backend has a real ANN\n"
-        "index, so that call is itself a full scan — which is why bounding the lexical and fusion work\n"
-        "alone does not pay off. '-vec' is what the read path costs once no channel scans the store."
+        "\n'+vec' asks the vector store for semantic candidates. The in-memory reference store is\n"
+        "brute-force by design, so that call is itself a full scan — which is why bounding the lexical\n"
+        "and fusion work alone does not pay off here. '-vec' is what the read path costs once nothing\n"
+        "scans the store. The scale backend does have an index; the benchmark below measures it."
     )
+    measure_backend_filter(sizes, args.trials)
     return 0
 
 

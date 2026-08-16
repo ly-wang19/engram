@@ -237,9 +237,14 @@ class IndexedVectorStore(VectorStore):
         self.index.add(key, payload)
 
     def search(
-        self, vector: list[float], top_k: int, where: Optional[Predicate] = None
+        self,
+        vector: list[float],
+        top_k: int,
+        where: Optional[Predicate] = None,
+        *,
+        user_id: Optional[str] = None,
     ) -> list[tuple[float, Any]]:
-        return self.inner.search(vector, top_k, where)
+        return self.inner.search(vector, top_k, where, user_id=user_id)
 
     def get(self, key: str) -> Any | None:
         return self.inner.get(key)

@@ -18,12 +18,20 @@ class InMemoryVectorStore(VectorStore):
         self._d[key] = (vector, payload)
 
     def search(
-        self, vector: list[float], top_k: int, where: Optional[Predicate] = None
+        self,
+        vector: list[float],
+        top_k: int,
+        where: Optional[Predicate] = None,
+        *,
+        user_id: Optional[str] = None,
     ) -> list[tuple[float, Any]]:
+        # No index to push a tenant filter into, so it is just another equality check here. The reference
+        # store is brute-force by design (see the module docstring); scale comes from a real backend.
         scored = [
             (cosine(vector, vec), payload)
             for vec, payload in self._d.values()
-            if where is None or where(payload)
+            if (user_id is None or getattr(payload, "user_id", None) == user_id)
+            and (where is None or where(payload))
         ]
         scored.sort(key=lambda x: x[0], reverse=True)
         return scored[:top_k]

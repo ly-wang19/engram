@@ -40,6 +40,30 @@ python3 eval/scaling.py --sizes 100,500,2000,10000 --trials 15 --pool 400
 3. **候选池设计本身是有效的。** 去掉语义通道后 10000 条事实上快 14.5x，且每千条耗时从 6.17
    降到 1.23——真正的次线性。卡住 Bet E 的是缺失的 ANN 索引，不是候选池思路。
 
+## 追加：规模后端的租户过滤下推（同日）
+
+上面第 2 条指出的根因已修复。`user_id` 从不透明的 JSON payload 中提升为 LanceDB 的真实列，
+`VectorStore.search()` 增加声明式 `user_id=` 参数（与通用 Python 谓词并存），多租户检索因此
+可以走 `where(..., prefilter=True)` 在索引内部收窄。
+
+| 行数 | 下推 prefilter | Python 谓词 | 加速 |
+| ---: | ---: | ---: | ---: |
+| 500 | 1.13ms | 4.04ms | 3.6x |
+| 2000 | 1.16ms | 15.18ms | 13.1x |
+| 10000 | 1.35ms | 75.38ms | 56.0x |
+| 40000 | 1.83ms | 302.36ms | **165.4x** |
+
+行数增长 80x（500→40000）时，下推路径延迟只从 1.13ms 涨到 1.83ms——**基本是平的**，而谓词路径
+是严格线性的。这就是 Bet E 在规模后端上的兑现。
+
+正确性由 `tests/test_lancedb_tenant_filter.py` 保证，其中
+`test_prefilter_finds_hits_beyond_the_unfiltered_neighbourhood` 是专门设计来证伪"过滤发生在
+ANN 之后"的：让多数租户的行填满查询的整个最近邻域，少数租户的行全部远离查询。若过滤是后置的，
+top_k 里一条目标租户的行都没有，返回空。该测试通过，说明 prefilter 真实生效。
+
+向后兼容：旧版本写出的表没有 `user_id` 列。`_has_tenant_column()` 按真实 schema 探测而非假设，
+旧表继续可读可写（退回扫描），不会因 schema 不匹配而报错或损坏数据。
+
 ## 未采用/暂缓原因
 
 - `candidate_vector_channel=False` **不作为默认**：它会丢掉"语义相关但与查询无共享词"的事实，

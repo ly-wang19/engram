@@ -101,6 +101,7 @@ flowchart TD
 | 2026-07-09 | `chain_provenance_promotion` | Chain-aware retrieval / Raw evidence fusion | previous-value 问题中，`supersedes` 链上的旧事实也能作为 provenance raw chunk promotion 的种子，优先提升旧值源会话 | `results/chain_provenance_promotion_experiments.md`, `results/chain_provenance_promotion_ablation.jsonl`, `results/chain_provenance_promotion_context_sample.jsonl` |
 | 2026-07-14 | `commercial_release_0_1_0` | Service boundary / Namespace storage / Deployment / Release gate | 修复命名空间路径穿越与字符过滤碰撞；默认鉴权失败关闭；增加 request limits、liveness/readiness、非 root 容器和统一发布门禁 | `results/commercial_release_0_1_0_validation.jsonl`, `specs/003-commercial-release/` |
 | 2026-08-16 | `bounded_candidates`（默认关） | Read path / Hybrid retrieval / Store 索引层 | 读路径此前对每次查询全量扫描存活事实（`hybrid.py` 的 `fact_store.values()`），实测为 O(n)：每千条事实耗时恒定 ~17–20ms，10000 条时单查询 177ms，已超宪章 <100ms 目标。新增倒排/槽位索引（`engram/store/indexed.py`）+ 存储装饰器，让融合阶段只对有界候选集打分 | `results/bounded_candidates_scaling.md`，`eval/scaling.py`，`tests/test_bounded_candidates.py`（8 测试，含逐位等价性） |
+| 2026-08-16 | `tenant_filter_pushdown` | Store / 向量检索索引层（Bet E） | 多租户检索每次都必须按 user 过滤，而唯一的表达方式是 Python 谓词——后端看不进去，只能先物化全表再排序。于是"接了 LanceDB"从未换来任何 ANN 收益。现把 `user_id` 从 JSON payload 提升为真实列，`VectorStore.search()` 增加声明式 `user_id=` 参数，LanceDB 走 `prefilter=True` 在索引内收窄。40000 行时 **165x**，且延迟基本随行数不变 | `results/bounded_candidates_scaling.md`，`tests/test_lancedb_tenant_filter.py`（5 测试，含专门证伪"后置过滤"的用例 + 旧 schema 兼容） |
 | 2026-08-12 | `cross_instance_portability` | Connectors / Memory facade / Service import 路由 / HTTP `/v1/import` | 导出无法导回（POST 导出 JSON 得到 500）——补上原生 `engram` 导入格式：事实保留原 id/双时间戳/supersedes 链/provenance，目标端用本地 embedder 重嵌入（即官方换 embedder 迁移路径），按 id 幂等；`/v1/import` 对坏 payload 返回 400 | `tests/test_cross_account_portability.py`, `tests/test_server_import_export.py`（工程验收，非算法实验） |
 | 2026-08-12 | `mcp_http_bearer_gate` | MCP streamable-HTTP 传输边界 | MCP HTTP 模式此前无任何鉴权，仅靠默认 127.0.0.1；新增 `--http-token`/`ENGRAM_MCP_HTTP_TOKEN` Bearer 门，非回环绑定无 token 时启动即拒绝（失败关闭，与 REST 的 `ENGRAM_API_KEYS` 同哲学） | `tests/test_mcp_http_auth.py` |
 | 2026-08-12 | `engram_storage_env` + 一致性修复 | Service 配置边界 / stats / import CLI | 服务器此前永远 `storage="memory"`（无环境变量可选 LanceDB）；新增 `ENGRAM_STORAGE`（非法值失败关闭）。`/v1/stats` 改按 canonical 身份过滤（与其它读路径一致）；import CLI 本地模式改走 `MemoryService`，目录命名与服务端统一 | `tests/test_cross_account_portability.py` |
@@ -125,7 +126,7 @@ flowchart TD
 | P1 | Graph proximity / multi-hop | multi-session、multi-hop 是长期记忆系统最难类别，也是差异化战场 | 轻量 n-hop/PPR-style expansion，先用真实错例切片验证 |
 | P1 | Temporal interval reasoning | temporal-reasoning 仍低于 full-context，需要更强的区间和 duration 证据 | 显式 start/end pair、invalid_at span、date arithmetic block |
 | P2 | Runtime profiles | 让用户选择 lite/standard/graph/consolidated，并用同一 harness 报三联表 | 在 `Config`/bench 层定义可测 profile，而不是手动组合开关 |
-| **P0** | **向量存储的过滤 ANN** | Bet E 的真正卡点。两个后端都没有真 ANN 索引：`InMemoryVectorStore.search()` 暴力 cosine + 全量排序；`LanceDBVectorStore.search()` 一旦传 Python 谓词就 `to_arrow().to_pylist()` 全表物化。多租户检索必带 user 过滤，所以线上永远走不到索引 | 把 user 过滤下推为 LanceDB SQL 谓词。这是解锁 `bounded_candidates` 已测得的 14.5x 加速的唯一前提——候选池代码已就位，见 `results/bounded_candidates_scaling.md` |
+| ~~P0~~ 已落地 | ~~向量存储的过滤 ANN~~ | 已修复，见下方台账 `tenant_filter_pushdown` | 剩余：`InMemoryVectorStore` 仍是暴力扫描（参考实现，设计如此）；`query_entity_ids()` 仍扫 `graph.entities.values()`，需实体名索引；`LanceDBVectorStore.get()` 仍全表物化后线性找 key |
 
 ## 未采用/回滚原因
 
