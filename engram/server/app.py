@@ -35,6 +35,7 @@ except Exception as exc:  # noqa: BLE001
 
 from .. import __version__
 from ..service import MemoryService
+from .limits import IdempotencyCache, RateLimiter, idempotency_ttl, rate_limit_per_min
 
 
 DEFAULT_MAX_REQUEST_BYTES = 2 * 1024 * 1024
@@ -180,10 +181,80 @@ async def request_limits_and_security_headers(request: Request, call_next):
     return _apply_security_headers(await call_next(request), path)
 
 
+_limiter: Optional[RateLimiter] = None
+_limiter_per_min = -1
+_idempotency: Optional[IdempotencyCache] = None
+
+# Beyond this many tracked tenants, sweep the ones whose windows have emptied. Opportunistic rather than
+# on a timer so the server needs no background thread.
+_PRUNE_ABOVE = 1_000
+
+
+def _rate_limiter() -> RateLimiter:
+    """The shared limiter, rebuilt when the configured limit changes so a reconfigure takes effect."""
+    global _limiter, _limiter_per_min
+    per_min = rate_limit_per_min()
+    if _limiter is None or per_min != _limiter_per_min:
+        _limiter = RateLimiter(per_min)
+        _limiter_per_min = per_min
+    return _limiter
+
+
+def _idempotency_cache() -> IdempotencyCache:
+    global _idempotency
+    if _idempotency is None:
+        _idempotency = IdempotencyCache(ttl_seconds=idempotency_ttl())
+    return _idempotency
+
+
+def _enforce_rate_limit(user: str) -> None:
+    limiter = _rate_limiter()
+    if not limiter.enabled:
+        return
+    if limiter.tracked_tenants > _PRUNE_ABOVE:
+        limiter.prune()
+    allowed, retry_after = limiter.check(user)
+    if not allowed:
+        # Retry-After is what makes a 429 actionable rather than a client guessing and hammering.
+        raise HTTPException(
+            429, "rate limit exceeded", headers={"Retry-After": str(int(retry_after) + 1)}
+        )
+
+
+def idempotent(user: str, request: Request, compute):
+    """Return the cached response for this Idempotency-Key, or compute it and cache it.
+
+    Applied to the endpoints that both mutate state and do expensive work, because that is where a
+    client's timeout-and-retry is most costly: the first request succeeded, only its response was lost.
+    Only successful results are cached -- replaying an exception would turn a transient failure into a
+    permanent one for the lifetime of the entry.
+    """
+    key = (request.headers.get("Idempotency-Key") or "").strip()[:256]
+    if not key:
+        return compute()
+    cache = _idempotency_cache()
+    cached = cache.get(user, key)
+    if cached is not None:
+        return cached
+    result = compute()
+    cache.put(user, key, result)
+    return result
+
+
 def auth(authorization: str = Header(default="")) -> str:
-    """Resolve the caller's user_id from the Bearer key. Dev open mode uses the key text itself as the
-    namespace, so anyone can try it without pre-provisioned keys while still avoiding shared anonymous
-    memory unless it is explicitly enabled."""
+    """Resolve the caller's user_id from the Bearer key, then apply their rate limit.
+
+    The limit lives here because this is the one place every protected route already passes through to
+    learn who is calling — a new endpoint cannot forget to be limited. Dev open mode uses the key text
+    itself as the namespace, so anyone can try it without pre-provisioned keys while still avoiding
+    shared anonymous memory unless it is explicitly enabled.
+    """
+    user = _resolve_user(authorization)
+    _enforce_rate_limit(user)
+    return user
+
+
+def _resolve_user(authorization: str) -> str:
     try:
         keys = _load_keys()
     except AuthConfigError as exc:
@@ -388,10 +459,16 @@ async function delFact(id){ if(!confirm('永久删除这条记忆?'))return; awa
 
 
 @app.post("/v1/remember")
-def remember(req: RememberReq, user: str = Depends(auth)):
+def remember(req: RememberReq, request: Request, user: str = Depends(auth)):
     # Route by ephemerality inside the service: either way the dated episode is stored (history stays
     # answerable); transient state also goes to working memory and is NOT promoted into a durable fact.
-    return svc().remember(user, req.content, session_id=req.session_id, scope=req.scope)
+    # Idempotency-Key guards the retry-after-timeout case, which would otherwise store the episode twice
+    # and pay to consolidate it twice.
+    return idempotent(
+        user,
+        request,
+        lambda: svc().remember(user, req.content, session_id=req.session_id, scope=req.scope),
+    )
 
 
 @app.post("/v1/recall")
@@ -530,15 +607,21 @@ class ImportReq(BaseModel):
 
 
 @app.post("/v1/import")
-def import_history(req: ImportReq, user: str = Depends(auth)):
+def import_history(req: ImportReq, request: Request, user: str = Depends(auth)):
     """Bulk-ingest an external history in one batched pass. See `python -m engram.connectors` for a CLI
     that parses common exports and posts here. A native `/v1/export` payload (format='engram' or
     auto-sniffed) restores directly — the cross-instance migration path."""
     if req.sessions is None and req.data is None:
         raise HTTPException(400, "provide either 'sessions' (pre-parsed) or 'data' (+ 'format') to import")
     try:
-        return svc().import_(user, sessions=req.sessions, data=req.data, format=req.format,
-                             consolidate=req.consolidate, summarize=req.summarize)
+        # The most expensive mutating endpoint there is, so a lost response is the most expensive thing
+        # to replay: an Idempotency-Key makes the retry free.
+        return idempotent(
+            user,
+            request,
+            lambda: svc().import_(user, sessions=req.sessions, data=req.data, format=req.format,
+                                  consolidate=req.consolidate, summarize=req.summarize),
+        )
     except ValueError as exc:
         # a malformed payload is the CLIENT's error — 400 with the parser's reason, never a raw 500
         raise HTTPException(400, f"import failed: {exc}") from exc
