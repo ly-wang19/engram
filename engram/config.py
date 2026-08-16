@@ -33,6 +33,21 @@ class Config:
     recency_tau_days: float = 45.0
     top_k: int = 5
     candidate_k: int = 24  # per-retriever candidate pool before fusion
+    # Bounded candidate retrieval (Bet E). OFF by default: it changes which facts get *scored*, and the
+    # published numbers were produced by the full scan, so turning it on silently would break the
+    # "every number traces to a committed log" rule. With `candidate_pool` >= the live fact count the two
+    # paths are provably identical (tests/test_bounded_candidates.py) — the flag buys speed at scale, and
+    # its ranking behaviour at scale still needs a keyed harness run before it becomes the default.
+    bounded_candidates: bool = False
+    candidate_pool: int = 400  # per-channel candidate budget before fusion when bounded_candidates is on
+    # Whether bounded retrieval asks the vector store for semantic candidates. Measured cost/benefit:
+    # neither shipped backend has a real ANN index (the in-memory store brute-forces cosine and sorts;
+    # LanceDB materialises the whole table whenever a Python predicate is supplied), so this channel
+    # re-introduces the very O(n) pass the candidate pool exists to avoid. Leaving it ON is the
+    # recall-safe default; turning it OFF is what makes the read path genuinely bounded, at the cost of
+    # missing facts that are semantically relevant but share no query term. Flip it off only with a real
+    # ANN backend, or after a keyed harness run shows the recall loss is acceptable.
+    candidate_vector_channel: bool = True
     rrf_k: int = 60  # Reciprocal Rank Fusion constant
     max_hops: int = 2  # multi-hop planner depth
     max_hot_facts: int = 10_000  # heat-tier cap; cold facts remain durable and can page back on hot miss

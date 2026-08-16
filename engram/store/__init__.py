@@ -1,4 +1,5 @@
 from .base import DocStore, GraphStore, VectorStore
+from .indexed import FactIndex, IndexedVectorStore
 from .memory_store import InMemoryDocStore, InMemoryGraphStore, InMemoryVectorStore
 from .persist import (
     DimensionMismatchError,
@@ -17,6 +18,8 @@ __all__ = [
     "InMemoryVectorStore",
     "InMemoryDocStore",
     "InMemoryGraphStore",
+    "FactIndex",
+    "IndexedVectorStore",
     "PersistenceError",
     "IncompatibleStoreError",
     "DimensionMismatchError",

@@ -34,6 +34,33 @@ def fmt_datetime(epoch: float) -> str:
         return "?"
 
 
+_MONTHS = ("january", "february", "march", "april", "may", "june", "july", "august",
+           "september", "october", "november", "december")
+
+
+def date_terms(epoch: float) -> str:
+    """Render a fact's date as searchable tokens (year, numeric month, month name) so a query that names
+    a time ('May 2023', 'in 2024') matches the right-dated facts via BM25 — dates otherwise live only in
+    valid_at and are invisible to retrieval. This is query-time temporal matching done as a lexical signal
+    (MemoryScope time_ratio in spirit), with no score multiplier that could override relevance.
+
+    Lives here, in the dependency-free base layer, because BOTH the retriever (which scores) and the
+    lexical index (which precomputes corpus statistics) must tokenize a fact identically — otherwise the
+    index's global IDF would describe a different corpus than the one being scored."""
+    try:
+        d = fmt_date(epoch)  # YYYY-MM-DD
+        y, m, _ = d.split("-")
+        return f"{d} {y} {m} {_MONTHS[int(m) - 1]}"
+    except (ValueError, IndexError):
+        return ""
+
+
+def indexed_text(text: str, epoch: float) -> str:
+    """The exact string the lexical channel treats as a fact's document. Single source of truth so the
+    index and the scorer never drift apart."""
+    return f"{text} {date_terms(epoch)}"
+
+
 def now() -> float:
     """Current wall-clock time in epoch seconds."""
     return time.time()

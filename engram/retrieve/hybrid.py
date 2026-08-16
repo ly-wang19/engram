@@ -10,26 +10,16 @@ from ..consolidate.conflict import is_single_valued
 from ..embed import Embedder
 from ..store import GraphStore, VectorStore
 from ..types import Fact
-from ..util import cosine, fmt_date, now, recency, tokenize
+from ..util import cosine, indexed_text, now, recency, tokenize
+from ..util import date_terms as date_terms  # noqa: F401  re-export: callers import it from here
 from .fusion import order_by_score, weighted_rrf
 from .lexical import bm25_scores, stem, stems
 
-_MONTHS = ("january", "february", "march", "april", "may", "june", "july", "august",
-           "september", "october", "november", "december")
+# `date_terms` now lives in engram.util so the lexical index can tokenize facts identically — the index's
+# corpus statistics must describe the same documents the scorer scores. Imported (not redefined) here
+# because callers already do `from .hybrid import date_terms`.
+
 _GRAPH_HOP_DECAY = 0.65
-
-
-def date_terms(epoch: float) -> str:
-    """Render a fact's date as searchable tokens (year, numeric month, month name) so a query that names
-    a time ('May 2023', 'in 2024') matches the right-dated facts via BM25 — dates otherwise live only in
-    valid_at and are invisible to retrieval. This is query-time temporal matching done as a lexical signal
-    (MemoryScope time_ratio in spirit), with no score multiplier that could override relevance."""
-    try:
-        d = fmt_date(epoch)  # YYYY-MM-DD
-        y, m, _ = d.split("-")
-        return f"{d} {y} {m} {_MONTHS[int(m) - 1]}"
-    except Exception:  # noqa: BLE001
-        return ""
 
 # Predicates that mark a durable identity or preference fact (vs. an incidental event mention). Used for
 # type-weighted fusion — these get a retrieval boost (CLAUDE.md §3.3; MemoryScope/OMEGA convergent finding).
@@ -339,11 +329,76 @@ class HybridRetriever:
             if not is_single_valued(fact.predicate) or heads.get(fact.slot) is fact
         ]
 
+    def _bounded_candidates(
+        self, query: str, user_id: str, as_of: Optional[float], qvec: list[float]
+    ) -> Optional[list[Fact]]:
+        """A bounded candidate set for fusion, or None when the store has no index to select from.
+
+        Three channels are unioned, because dropping any one loses recall the hybrid thesis depends on
+        (CLAUDE.md M1 — facts-only lost recall; so does vectors-only):
+
+          * **lexical** — exact names, numbers, dates. Vector-weak, retrieval-decisive.
+          * **semantic** — paraphrases no shared token would catch.
+          * **graph** — facts hanging off the entities the query names, which is how cross-session links
+            surface at all. Read from the relations incident to those entities, so it stays bounded.
+
+        Then each candidate's conflict slot is completed. Without that, `_current_slot_heads` could see a
+        superseded fact whose head happened to fall outside the pool and let the stale value through —
+        a correctness bug, not a ranking one.
+        """
+        index = getattr(self.fact_store, "index", None)
+        if index is None:
+            return None
+        pool = max(1, self.config.candidate_pool)
+
+        ids = index.lexical_candidates(query, pool, user_id=user_id)
+
+        if self.config.candidate_vector_channel:
+            for _score, payload in self.fact_store.search(
+                qvec, pool, where=lambda f: getattr(f, "user_id", None) == user_id
+            ):
+                fid = getattr(payload, "id", None)
+                if isinstance(fid, str):
+                    ids.add(fid)
+
+        for eid in self.query_entity_ids(query, user_id):
+            for direction in ("out", "in"):
+                for rel in self.graph.neighbors(eid, as_of, direction):
+                    fid = getattr(rel, "fact_id", None)
+                    if fid:
+                        ids.add(fid)
+
+        matched = [f for f in index.resolve(ids) if f.user_id == user_id]
+        slots = {f.slot for f in matched if is_single_valued(f.predicate)}
+        if not slots:
+            return matched
+        # Resolve once over the completed id set rather than appending: `resolve` returns store order,
+        # and appending slot-mates at the end would put the candidates in a different order than the
+        # full scan sees, which rank-based fusion would turn into a different result.
+        return [f for f in index.resolve(ids | index.slot_members(slots)) if f.user_id == user_id]
+
     def retrieve(
         self, query: str, user_id: str, as_of: Optional[float] = None, top_k: Optional[int] = None
     ) -> tuple[list[tuple[Fact, float]], dict]:
         top_k = top_k or self.config.top_k
-        live = [f for f in self.fact_store.values() if f.user_id == user_id and f.is_live(as_of)]
+        qvec = self.embedder.embed(query)
+
+        # Bounded retrieval scores a candidate pool instead of the whole store (Bet E). It is off by
+        # default: with `candidate_pool` >= the live fact count the two paths return the same ranking,
+        # but below that they can differ, and the published numbers came from the full scan.
+        corpus = None
+        candidates = (
+            self._bounded_candidates(query, user_id, as_of, qvec)
+            if self.config.bounded_candidates
+            else None
+        )
+        if candidates is None:
+            live = [f for f in self.fact_store.values() if f.user_id == user_id and f.is_live(as_of)]
+        else:
+            live = [f for f in candidates if f.is_live(as_of)]
+            # Corpus statistics must describe the tenant's collection, not the pool — see corpus_for().
+            corpus = self.fact_store.index.corpus_for(user_id, stems(query))
+
         live = self._current_slot_heads(live)
         excluded = self.graph_exclusion_zone(query, user_id, as_of)
         if excluded:
@@ -351,7 +406,6 @@ class HybridRetriever:
         if not live:
             return [], {"sem": {}, "lex": {}, "qids": set()}
 
-        qvec = self.embedder.embed(query)
         sem = {f.id: cosine(qvec, f.embedding or []) for f in live}
         # Type-weighted retrieval: scale the SEMANTIC score by fact type. Because an off-topic fact has
         # sem≈0, the multiplier only reorders among genuinely-relevant candidates (a preference fact beats
@@ -363,7 +417,9 @@ class HybridRetriever:
                 if tw != 1.0:
                     sem[f.id] *= tw
         # include each fact's date as searchable tokens so time-named queries ('May 2023') match by date
-        lex = bm25_scores(query, [(f.id, f"{f.text} {date_terms(f.valid_at)}") for f in live])
+        lex = bm25_scores(
+            query, [(f.id, indexed_text(f.text, f.valid_at)) for f in live], corpus=corpus
+        )
         gph, qids = self._graph_scores(query, user_id, live, as_of)
         t = now() if as_of is None else as_of
         rec = {f.id: recency(max(0.0, t - f.valid_at), self.config.recency_tau_days) for f in live}

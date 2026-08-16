@@ -34,6 +34,7 @@ from .retrieve import (
 from .retrieve.lexical import bm25_scores, overlap_terms, stems
 from .store import (
     GraphStore,
+    IndexedVectorStore,
     InMemoryDocStore,
     InMemoryGraphStore,
     InMemoryVectorStore,
@@ -157,7 +158,13 @@ class Memory:
 
         self.episodes_doc = InMemoryDocStore()
         self.episodes_vec = make_vector_store("episodes_vec")
-        self.fact_store = make_vector_store("fact_store")  # HOT tier: the fast, frequently-retrieved working set
+        # HOT tier: the fast, frequently-retrieved working set. Decorated with a lexical/slot index when
+        # bounded candidate retrieval is on, so the retriever can pick candidates without scanning every
+        # fact. A decorator (not a new store) keeps every existing .upsert()/.delete() call site — here,
+        # in the consolidation engine, and in the persistence loader — indexing for free.
+        self.fact_store = make_vector_store("fact_store")
+        if self.config.bounded_candidates:
+            self.fact_store = IndexedVectorStore(self.fact_store)
         self.cold_store = make_vector_store("cold_store")  # COLD tier: aged-out facts, preserved (never deleted)
         self.summary_vec = make_vector_store("summary_vec")  # L2 session summaries, retrievable for a lean read slice
         self.graph = graph_store_factory()
