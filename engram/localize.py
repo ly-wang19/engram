@@ -31,7 +31,7 @@ _ZH: dict[str, str] = {
     "owns": "拥有 {o}", "has": "有 {o}", "has_pet": "养了 {o}",
     "visited": "去过 {o}", "traveled_to": "去过 {o}", "been_to": "去过 {o}", "went_to": "去过 {o}",
     "bought": "买了 {o}", "ordered": "点了 {o}", "plans": "计划 {o}", "plans_to": "计划 {o}",
-    "wants": "想要 {o}", "needs": "需要 {o}", "goal": "目标：{o}", "uses": "用 {o}",
+    "wants": "想要 {o}", "needs": "需要 {o}", "goal": "目标：{o}",
     "has_disease": "患有 {o}", "medication": "在用药 {o}", "salary": "薪资 {o}", "income": "收入 {o}",
     "plays": "会 {o}", "watches": "看 {o}", "reads": "读 {o}", "listens_to": "听 {o}",
     "studies": "学 {o}", "learns": "学 {o}", "learning": "在学 {o}", "drives": "开 {o}",

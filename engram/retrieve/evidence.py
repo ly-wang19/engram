@@ -254,7 +254,11 @@ def _multi_hop_subqueries(query: str) -> tuple[str, ...]:
     return _dedupe(candidates, query)
 
 
-def plan_evidence(query: str, aggregation_recall_expansion: bool = True) -> EvidenceNeed:
+def plan_evidence(
+    query: str,
+    aggregation_recall_expansion: bool = True,
+    aggregation_chunk_cap: int = 0,
+) -> EvidenceNeed:
     """Return the evidence structure a question needs, using only question text.
 
     The output is deliberately coarse and explainable; it never inspects benchmark labels or gold answers.
@@ -353,6 +357,25 @@ def plan_evidence(query: str, aggregation_recall_expansion: bool = True) -> Evid
     if multi_hop:
         subquery_items.extend(_multi_hop_subqueries(query))
     subqueries = _dedupe(subquery_items, query)
+
+    # A count needs COVERAGE, not ranking. Everything else asks "which session answers this?" and the
+    # best-ranked one does; "how many X have I done" is answered by all of them at once, and a detail
+    # window narrower than the evidence set produces a confident wrong number rather than a miss.
+    #
+    # Measured on the committed headline log: the counting failures needed a median of 3 answer sessions
+    # and this planner already generated a median of 3 subqueries to find them — then asked for 1 chunk.
+    # Coverage of the answer sessions inside the detail window came out at 48%, and the numeric errors ran
+    # in both directions, which is the signature of counting from a subset rather than of bad retrieval
+    # (results/retrieval_diagnosis.md).
+    #
+    # The subquery count is the right budget because it is derived from the question alone — the same
+    # signal at eval time and in production. Sizing off the benchmark's answer_session_ids would score
+    # well and ship nothing.
+    if aggregation and subqueries and aggregation_chunk_cap:
+        # +1 so the original question keeps a slot of its own alongside the decomposed angles. Capped
+        # because the budget has to stay bounded: without a ceiling a six-way decomposition would render
+        # seven full sessions and walk the lean context back toward the full-history baseline it beats.
+        n_chunks = max(n_chunks, min(len(subqueries) + 1, aggregation_chunk_cap))
 
     return EvidenceNeed(
         kinds=kinds,

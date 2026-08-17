@@ -173,6 +173,8 @@ flowchart TD
 | 只把词汇/融合环节收敛为有界候选池（保留语义通道） | **净收益 ≈ 0**（10000 事实：177.03ms vs 全扫 177.88ms）。语义通道自身就是一次全量扫描，省下的又赔回去，还多付索引维护成本。不是候选池思路错，是缺 ANN 索引 | `results/bounded_candidates_scaling.md` |
 | `candidate_vector_channel=False` 作为默认 | **不采用**。它确实快 14.5x 且次线性，但会丢"语义相关却无共享查询词"的事实，正是 M1 已验证 hybrid 论点依赖的召回。需真 ANN 后端或 keyed harness 证明召回损失可接受 | 同上 |
 | 上下文拆分接进 `lean_context` 默认路径 | **不采用**。实测 5 轮以下是净亏（stable 半虽只计费一次，但扁平上下文本身小，首轮结构开销收不回），且已发布数字均由扁平路径产出。保留为独立方法 `Memory.layered_context()`，由调用方按会话长度选择 | `results/layered_context_tokens.md` |
+| 聚合类扩大全文预算（`aggregation_chunk_cap`） | **不采用**。覆盖率 38%→56%（cap=5）→59%（cap=12）即饱和，预算翻 2.4 倍只换 3 个百分点；名义上限 +1.2 点，低于 2.94 地板，且渲染量翻倍朝全上下文回退。**真正的约束是选块策略而非预算**：89% 的答案会话在主查询 top-15 里，子查询轮询只选出 59% | `results/aggregation_coverage.md` |
+| 「44 题 × 50% 转化率 = +4.4 点」的收益估算 | **作废**。该估算默认机制能达成完整覆盖，实测未达成。教训：先测机制的直接效果，再谈转化率 | 同上 |
 | 上下文导航图（MEMORY MAP）默认开启 | **不采用**。它是扁平上下文里本来没有的新增内容，约 20 轮才回本；最初的对比实为"扁平 vs 扁平+导航图"，缓存收益被吃光还倒欠。改为 `map_limit=0` 默认关闭 | 同上 |
 | 代理侧叠加 `RECALL_GUIDE` | **不采用**。代理已用 `_MEMORY_PREAMBLE` 框定记忆，再叠一层是同一条指令的第二份拷贝，实测 +14% prompt tokens 且不改变行为。代理显式传 `guide=False` | `results/layered_context_tokens.md` |
 | 上下文拆分作为代理默认 | **不采用**，保持 opt-in（`{"memory":{"layered":true}}`）。同内容对比下 token 收益仅 −1.1%（噪声级），真实价值是 61 tokens 的可缓存稳定前缀，是否划算取决于 provider 的 cache-read 定价，尚未用真实计费验证 | 同上 |

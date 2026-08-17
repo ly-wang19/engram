@@ -328,3 +328,48 @@ test('forget requires explicit confirmation before sending destructive request',
   assert.deepEqual(JSON.parse(calls[0].init.body), { confirm: true })
   assert.equal(done.ok, true)
 })
+
+test('a 429 surfaces Retry-After so callers can back off', async () => {
+  // The regression this guards: retryAfterOf() existed but assertOk() never called it, so retryAfter
+  // was undefined on every response including the one status it exists for. A caller writing a backoff
+  // around it would have had that backoff silently never fire.
+  const client = new EngramClient({
+    baseUrl: 'http://x',
+    apiKey: 'k',
+    fetch: async () =>
+      new Response(JSON.stringify({ detail: 'rate limit exceeded' }), {
+        status: 429,
+        headers: { 'Content-Type': 'application/json', 'Retry-After': '7' },
+      }),
+  })
+
+  await assert.rejects(
+    () => client.remember('hi'),
+    (err) => {
+      assert.equal(err.status, 429)
+      assert.equal(err.retryAfter, 7)
+      return true
+    },
+  )
+})
+
+test('an error without Retry-After leaves retryAfter undefined rather than guessing', async () => {
+  const client = new EngramClient({
+    baseUrl: 'http://x',
+    apiKey: 'k',
+    fetch: async () =>
+      new Response(JSON.stringify({ detail: 'invalid or missing API key' }), {
+        status: 401,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+  })
+
+  await assert.rejects(
+    () => client.remember('hi'),
+    (err) => {
+      assert.equal(err.status, 401)
+      assert.equal(err.retryAfter, undefined)
+      return true
+    },
+  )
+})

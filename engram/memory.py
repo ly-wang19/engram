@@ -2021,6 +2021,7 @@ class Memory:
             plan_evidence(
                 query,
                 aggregation_recall_expansion=self.config.aggregation_recall_expansion,
+                aggregation_chunk_cap=self.config.aggregation_chunk_cap,
             )
             if self.config.evidence_planner
             else None

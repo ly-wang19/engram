@@ -42,3 +42,7 @@ paper/*.out
 # Keep curated benchmark logs (committable evidence)
 !results/
 results/*.tmp
+
+# 第三方评测数据集：按 eval/locomo.py 的文档下载到此路径，2.8MB，不入库。
+# .gitignore 里原本只有 data/，挡住的是备选路径 eval/data/locomo10.json，主路径漏网。
+eval/locomo10.json
