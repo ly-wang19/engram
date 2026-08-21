@@ -116,6 +116,11 @@ class MemoryService:
         # otherwise reuse the main LLM. Lets the Ask page show a real answer, not just the context.
         answerer_name = os.environ.get("ENGRAM_ANSWERER", "")
         self.answerer = make_llm(answerer_name) if answerer_name else self.llm
+        # Vision captioner for multimodal ingest (CLAUDE.md §6): turns an image into searchable caption
+        # text. Defaults to the main LLM (many chat models are vision-capable); set ENGRAM_VISION_LLM for a
+        # dedicated vision model. None => images stored as a placeholder, so the offline path stays text-only.
+        vision_name = os.environ.get("ENGRAM_VISION_LLM", "")
+        self.captioner = make_llm(vision_name) if vision_name else self.llm
         from .config import Config
 
         self.config = Config()
@@ -317,6 +322,37 @@ class MemoryService:
                                         summarize=summarize)
             self._save(user, mem)
             return {"ok": True, **stats}
+
+    def import_document(self, user: str, data, filename: Optional[str] = None,
+                        content_type: Optional[str] = None, session_id: str = "document",
+                        consolidate: bool = True, summarize: bool = True) -> dict:
+        """Ingest one uploaded document or image (CLAUDE.md §6 multimodal). PDF/DOCX/text are flattened to
+        text; an image is captioned by the vision model (or stored as a placeholder when none is configured)
+        — either way it enters the same System-2 pipeline as everything else, so it's immediately searchable."""
+        from .connectors.documents import detect_kind, document_text, to_data_url, to_session
+        from .llm import vision
+
+        kind = detect_kind(data, filename, content_type)
+        if kind == "image":
+            cap = vision.caption_image(self.captioner, to_data_url(data, content_type))
+            text = f"[image] {cap}" if cap else "[image] (no caption — set ENGRAM_VISION_LLM to describe images)"
+            session = to_session(text, filename=filename, session_id=session_id,
+                                 metadata={"kind": "image", "media_type": content_type or ""})
+        else:
+            try:
+                text = document_text(data, kind)
+            except ImportError as exc:  # optional extractor dep missing -> actionable error, not a 500
+                return {"ok": False, "kind": kind, "error": str(exc)}
+            if not text:
+                return {"ok": False, "kind": kind, "error": f"no extractable text in {filename or kind}"}
+            session = to_session(text, filename=filename, session_id=session_id,
+                                 metadata={"kind": kind, "media_type": content_type or ""})
+        with self.write_lock(user):
+            mem = self.get(user)
+            stats = mem.import_messages([session], user_id=user, consolidate=consolidate,
+                                        summarize=summarize)
+            self._save(user, mem)
+        return {"ok": True, "kind": kind, **stats}
 
     def add_fact(
         self,

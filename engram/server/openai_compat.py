@@ -47,6 +47,28 @@ def latest_user_text(messages: list) -> str:
     return ""
 
 
+def _latest_user_message(messages: list) -> Optional[dict]:
+    for m in reversed(messages or []):
+        if isinstance(m, dict) and m.get("role") == "user":
+            return m
+    return None
+
+
+def remembered_text(captioner: Any, messages: list) -> str:
+    """The text to persist for the latest user turn: its text PLUS a caption for any image parts, so an
+    image sent through the proxy leaves a searchable trace (CLAUDE.md §6 multimodal). Degrades to exactly
+    `latest_user_text` when there's no image or no vision captioner — the text-only path is unchanged."""
+    from ..llm.vision import caption_content
+
+    m = _latest_user_message(messages)
+    if m is None:
+        return ""
+    text = _content(m).strip()
+    caps = caption_content(captioner, m.get("content"))  # [] when no image parts
+    lines = ([text] if text else []) + caps
+    return "\n".join(lines).strip()
+
+
 def build_prompt(messages: list, memory_context: str) -> tuple[Optional[str], str]:
     """Render the request's messages into a (system, prompt) pair for the LLM.complete interface:
       * system = the injected memory block + any of the request's own system messages

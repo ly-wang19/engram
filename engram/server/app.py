@@ -556,6 +556,33 @@ def import_history(req: ImportReq, user: str = Depends(auth)):
                          consolidate=req.consolidate, summarize=req.summarize)
 
 
+class DocumentReq(BaseModel):
+    """Upload one document/image as memory. Send raw bytes base64 in `data_base64` (PDF/DOCX/image), or
+    pre-extracted `text`. Images are captioned by the vision model (ENGRAM_VISION_LLM) into searchable text."""
+    filename: Optional[str] = Field(default=None, max_length=512)
+    content_type: Optional[str] = Field(default=None, max_length=256)
+    data_base64: Optional[str] = None  # raw file bytes, base64-encoded (bounded by the request-size cap)
+    text: Optional[str] = Field(default=None, max_length=1_000_000)  # or already-extracted plain text
+    session_id: str = Field(default="document", min_length=1, max_length=512)
+
+
+@app.post("/v1/documents")
+def import_document(req: DocumentReq, user: str = Depends(auth)):
+    """Ingest a PDF/DOCX/text document or an image as long-term memory (multimodal, CLAUDE.md §6)."""
+    if req.text is not None:
+        data: object = req.text
+    elif req.data_base64:
+        import base64
+        try:
+            data = base64.b64decode(req.data_base64)
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(400, f"data_base64 is not valid base64: {exc}")
+    else:
+        raise HTTPException(400, "provide 'data_base64' (raw file bytes) or 'text'")
+    return svc().import_document(user, data, filename=req.filename, content_type=req.content_type,
+                                 session_id=req.session_id)
+
+
 # --- OpenAI-compatible chat with transparent memory (drop-in: point your OpenAI client's base_url here) --
 class ChatCompletionReq(BaseModel):
     model_config = ConfigDict(extra="allow")  # accept (and ignore) temperature/top_p/etc.
@@ -594,7 +621,9 @@ def chat_completions(req: ChatCompletionReq, background: BackgroundTasks, user: 
     except oc.NoLLMConfigured as exc:
         raise HTTPException(503, str(exc))
 
-    user_text = oc.latest_user_text(body.get("messages", []))
+    # remember the turn's text + a caption for any image parts (multimodal); identical to the plain text
+    # when there's no image/captioner, so the text-only drop-in path is unchanged.
+    user_text = oc.remembered_text(svc().captioner, body.get("messages", []))
     if opts.get("remember", True) and user_text:
         background.add_task(
             svc().remember,

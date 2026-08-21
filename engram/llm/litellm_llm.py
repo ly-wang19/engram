@@ -6,6 +6,13 @@ from typing import Optional
 
 from .base import LLM
 
+# Default instruction for caption(): a dense, retrieval-friendly description (names, text, numbers visible
+# in the image) — what later becomes the searchable memory of an otherwise-opaque image.
+_CAPTION_PROMPT = (
+    "Describe this image for long-term memory. Be specific and concise: name the key objects, people, "
+    "places, and any visible text or numbers. One short paragraph, no preamble."
+)
+
 
 class LiteLLMClient(LLM):
     def __init__(
@@ -39,14 +46,12 @@ class LiteLLMClient(LLM):
         "permissiondenied", "permission denied", "no api key", "api key not",
     )
 
-    def complete(self, prompt: str, system: Optional[str] = None, **kwargs) -> str:
+    def _run(self, messages: list, **kwargs) -> str:
+        """Call the model on a ready-made `messages` list with the resilient backoff loop. Shared by the
+        text `complete()` and the multimodal `caption()` so both get the same retry/fast-fail behavior."""
         import random
         import time
 
-        messages = []
-        if system:
-            messages.append({"role": "system", "content": system})
-        messages.append({"role": "user", "content": prompt})
         params = dict(
             model=self.model,
             messages=messages,
@@ -80,3 +85,20 @@ class LiteLLMClient(LLM):
                 delay = min(self.retry_base * (2 ** attempt), self.retry_cap)
                 time.sleep(delay * (0.5 + random.random()))  # full jitter: 0.5x..1.5x
         raise last_exc  # type: ignore[misc]
+
+    def complete(self, prompt: str, system: Optional[str] = None, **kwargs) -> str:
+        messages = []
+        if system:
+            messages.append({"role": "system", "content": system})
+        messages.append({"role": "user", "content": prompt})
+        return self._run(messages, **kwargs)
+
+    def caption(self, image_ref: str, prompt: Optional[str] = None) -> str:
+        """Describe an image (a data: URL or an http(s) URL) as plain text — the multimodal path. The
+        caller routes only image bytes/URLs here; a non-vision model will just error and the caller falls
+        back to a placeholder. Uses the same OpenAI multimodal content shape every vision provider accepts."""
+        content = [
+            {"type": "text", "text": prompt or _CAPTION_PROMPT},
+            {"type": "image_url", "image_url": {"url": image_ref}},
+        ]
+        return self._run([{"role": "user", "content": content}])
