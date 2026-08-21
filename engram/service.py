@@ -22,6 +22,7 @@ from typing import Any, Optional
 
 from .memory import Memory
 from .metrics import Metrics, timed
+from .store.persist import DimensionMismatchError, EmbedderMismatchError
 from .util import fmt_date, fmt_datetime
 
 DEFAULT_DATA_DIR = os.path.expanduser("~/.engram/data")
@@ -269,7 +270,20 @@ class MemoryService:
                 else:
                     self._hot.move_to_end(user)
                     return self._hot[user]
-        mem = Memory.open(self._path(user), embedder=self.embedder, llm=self.llm, config=self.config)
+        try:
+            mem = Memory.open(self._path(user), embedder=self.embedder, llm=self.llm, config=self.config)
+        except (DimensionMismatchError, EmbedderMismatchError):
+            # The store's vectors are from a different embedder (ENGRAM_EMBEDDER changed). Refusing is
+            # the safe default (mixing spaces silently corrupts retrieval); with the opt-in flag we
+            # migrate in place on first touch — re-embed everything from text and persist, after which
+            # the manifest matches the new embedder.
+            if os.environ.get("ENGRAM_REEMBED_ON_MISMATCH") != "1":
+                raise
+            with self._user_file_lock(user):
+                mem = Memory.open(self._path(user), allow_mismatch=True,
+                                  embedder=self.embedder, llm=self.llm, config=self.config)
+                mem.reembed()
+                mem.save()
         version = self._store_version(user)
         with self._g:
             self._hot[user] = mem

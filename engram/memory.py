@@ -253,8 +253,11 @@ class Memory:
         self._persist_path = path
 
     @classmethod
-    def open(cls, path: str, **kwargs) -> "Memory":
-        """Open a persistent Memory from a JSONL+manifest store, or start empty if it does not exist."""
+    def open(cls, path: str, allow_mismatch: bool = False, **kwargs) -> "Memory":
+        """Open a persistent Memory from a JSONL+manifest store, or start empty if it does not exist.
+
+        `allow_mismatch=True` bypasses the embedding-space guards ONLY so `.reembed()` can migrate the
+        store to the attached embedder — opening mismatched for any other purpose corrupts retrieval."""
         cfg = kwargs.get("config")
         if (
             cfg is not None
@@ -264,11 +267,63 @@ class Memory:
         ):
             kwargs["config"] = replace(cfg, data_path=f"{path}/lancedb")
         mem = cls(**kwargs)
-        if load_memory(mem, path):
+        if load_memory(mem, path, allow_mismatch=allow_mismatch):
             mem._rewire()
             mem._classify()  # backfill category/sensitivity on facts saved before feature ⑤
         mem._persist_path = path
         return mem
+
+    def reembed(self, embedder: Optional[Embedder] = None) -> dict[str, int]:
+        """Migrate every stored vector into `embedder`'s space (default: the currently attached one) —
+        the supported path for switching embedding models over an existing store (the manifest guards
+        refuse a mismatched open; this is the escape hatch they point to). Re-embeds facts (hot + cold),
+        episode contents, session summaries, and working memory from their source TEXT. Entity nodes are
+        skipped: retrieval matches entities by name, not embedding. Call `.save()` afterwards — the
+        manifest then records the new embedder identity, so the next open is clean."""
+        if embedder is not None:
+            self.embedder = embedder
+
+        def _clear(store) -> None:
+            for payload in list(store.values()):
+                key = getattr(payload, "id", None)
+                if key is not None:
+                    store.delete(key)
+
+        counts: dict[str, int] = {}
+        for name, store in (("facts", self.fact_store), ("cold", self.cold_store)):
+            facts = store.values()
+            _clear(store)
+            vecs = self.embedder.embed_batch([f.text for f in facts]) if facts else []
+            for f, v in zip(facts, vecs):
+                f.embedding = v
+                store.upsert(f.id, v, f)
+            counts[name] = len(facts)
+
+        episodes = list(self.episodes_doc.values())  # the doc log is the source of truth for episode text
+        _clear(self.episodes_vec)
+        vecs = self.embedder.embed_batch([ep.content for ep in episodes]) if episodes else []
+        for ep, v in zip(episodes, vecs):
+            ep.embedding = v
+            self.episodes_vec.upsert(ep.id, v, ep)
+        counts["episodes"] = len(episodes)
+
+        summarized = [ep for ep in episodes if ep.summary]
+        _clear(self.summary_vec)
+        # same embedding source as summarize_episodes: the summary, falling back to a content excerpt
+        vecs = (self.embedder.embed_batch([ep.summary or ep.content[:200] for ep in summarized])
+                if summarized else [])
+        for ep, v in zip(summarized, vecs):
+            ep.summary_embedding = v
+            self.summary_vec.upsert(ep.id, v, ep)
+        counts["summaries"] = len(summarized)
+
+        for wm in self.working_mem.values():
+            wm.embedding = self.embedder.embed(wm.content)
+        counts["working"] = len(self.working_mem)
+
+        self._persona_cache.clear()
+        self._rewire()  # the retriever/engine hold embedder refs (and the semantic gate) — rebind
+        return counts
 
     # --- write path ---
     def add(
