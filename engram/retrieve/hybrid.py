@@ -305,6 +305,38 @@ class HybridRetriever:
             scores[f.id] = score
         return scores, qids
 
+    # --- candidate generation (opt-in scale path; config.ann_candidates) -------------------------------
+    def _ann_candidates(
+        self, query: str, user_id: str, as_of: Optional[float], qvec: list[float]
+    ) -> list[Fact]:
+        """A bounded candidate set for large stores: the vector-ANN pool UNION the facts backing relations
+        incident to the query's anchor entities. The graph union keeps a relational match from being
+        silently dropped when its vector isn't in the ANN pool (the worst recall hole of ANN-only) — it's
+        the cheap half of the proper vector∪lexical∪graph union (a real lexical index is still TODO)."""
+        pool = max(self.config.ann_pool, self.config.top_k)
+        hits = self.fact_store.search(
+            qvec, pool, where=lambda f: f.user_id == user_id and f.is_live(as_of)
+        )
+        live = [f for _, f in hits]
+        seen = {f.id for f in live}
+        for f in self._graph_neighbor_facts(query, user_id, as_of):
+            if f.id not in seen:
+                live.append(f)
+                seen.add(f.id)
+        return live
+
+    def _graph_neighbor_facts(self, query: str, user_id: str, as_of: Optional[float]) -> list[Fact]:
+        """Live facts backing relations incident to the query's anchor entities (1-hop, both directions),
+        fetched by fact_id — so a relational hit survives even if it's outside the vector pool."""
+        out: list[Fact] = []
+        for eid in self.query_entity_ids(query, user_id):
+            for direction in ("out", "in"):
+                for rel in self.graph.neighbors(eid, as_of, direction):
+                    f = self.fact_store.get(rel.fact_id)
+                    if f is not None and f.is_live(as_of):
+                        out.append(f)
+        return out
+
     def _current_slot_heads(self, facts: list[Fact]) -> list[Fact]:
         """For single-valued (current-state) slots, retrieve only the slot head.
 
@@ -343,7 +375,16 @@ class HybridRetriever:
         self, query: str, user_id: str, as_of: Optional[float] = None, top_k: Optional[int] = None
     ) -> tuple[list[tuple[Fact, float]], dict]:
         top_k = top_k or self.config.top_k
-        live = [f for f in self.fact_store.values() if f.user_id == user_id and f.is_live(as_of)]
+        qvec = self.embedder.embed(query)
+        # Candidate set. Default: scan ALL of the user's live facts (exact, fine to ~thousands). Opt-in
+        # (config.ann_candidates): a bounded ANN pool from the vector index ∪ the query's graph-neighbor
+        # facts — the sub-linear read path for large stores. Everything downstream (slot-head collapsing,
+        # exclusion zones, the 5-signal fusion) is identical; only WHICH facts get scored changes. When the
+        # pool covers all facts the two are equal.
+        if self.config.ann_candidates:
+            live = self._ann_candidates(query, user_id, as_of, qvec)
+        else:
+            live = [f for f in self.fact_store.values() if f.user_id == user_id and f.is_live(as_of)]
         live = self._current_slot_heads(live)
         excluded = self.graph_exclusion_zone(query, user_id, as_of)
         if excluded:
@@ -351,7 +392,6 @@ class HybridRetriever:
         if not live:
             return [], {"sem": {}, "lex": {}, "qids": set()}
 
-        qvec = self.embedder.embed(query)
         sem = {f.id: cosine(qvec, f.embedding or []) for f in live}
         # Type-weighted retrieval: scale the SEMANTIC score by fact type. Because an off-topic fact has
         # sem≈0, the multiplier only reorders among genuinely-relevant candidates (a preference fact beats
