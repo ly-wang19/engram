@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import queue
 import re
 import shutil
 import threading
@@ -20,6 +21,8 @@ from contextlib import contextmanager
 from typing import Any, Optional
 
 from .memory import Memory
+from .metrics import Metrics, timed
+from .store.persist import DimensionMismatchError, EmbedderMismatchError
 from .util import fmt_date, fmt_datetime
 
 DEFAULT_DATA_DIR = os.path.expanduser("~/.engram/data")
@@ -116,6 +119,11 @@ class MemoryService:
         # otherwise reuse the main LLM. Lets the Ask page show a real answer, not just the context.
         answerer_name = os.environ.get("ENGRAM_ANSWERER", "")
         self.answerer = make_llm(answerer_name) if answerer_name else self.llm
+        # Vision captioner for multimodal ingest (CLAUDE.md §6): turns an image into searchable caption
+        # text. Defaults to the main LLM (many chat models are vision-capable); set ENGRAM_VISION_LLM for a
+        # dedicated vision model. None => images stored as a placeholder, so the offline path stays text-only.
+        vision_name = os.environ.get("ENGRAM_VISION_LLM", "")
+        self.captioner = make_llm(vision_name) if vision_name else self.llm
         from .config import Config
 
         self.config = Config()
@@ -129,6 +137,21 @@ class MemoryService:
         self._hot_versions: dict[str, tuple[int, int] | None] = {}
         self._locks: dict[str, threading.Lock] = {}
         self._g = threading.Lock()
+        # Live service metrics (Bet D online): latency percentiles on the SLO-bearing paths + the token-
+        # savings ratio, exposed aggregate-only at GET /metrics. See engram/metrics.py.
+        self.metrics = Metrics()
+        # System-1 / System-2 split (CLAUDE.md Bet F). When enabled, remember() does only the fast System-1
+        # write (append + light embed + a durable save) and hands consolidation to a background worker, so
+        # the write path stays low-latency. OFF by default — the synchronous path keeps the
+        # remember-then-immediately-queryable semantics the console, tests, and current callers rely on.
+        self._async = os.environ.get("ENGRAM_ASYNC_CONSOLIDATION") == "1"
+        self._queue: "Optional[queue.Queue]" = None
+        self._pending: set[str] = set()  # users with consolidation queued (coalesce repeat enqueues)
+        self._worker: Optional[threading.Thread] = None
+        if self._async:
+            self._queue = queue.Queue()
+            self._worker = threading.Thread(target=self._consume, name="engram-system2", daemon=True)
+            self._worker.start()
 
     # --- namespace lifecycle ------------------------------------------------
     def _safe_user(self, user: str) -> str:
@@ -247,7 +270,20 @@ class MemoryService:
                 else:
                     self._hot.move_to_end(user)
                     return self._hot[user]
-        mem = Memory.open(self._path(user), embedder=self.embedder, llm=self.llm, config=self.config)
+        try:
+            mem = Memory.open(self._path(user), embedder=self.embedder, llm=self.llm, config=self.config)
+        except (DimensionMismatchError, EmbedderMismatchError):
+            # The store's vectors are from a different embedder (ENGRAM_EMBEDDER changed). Refusing is
+            # the safe default (mixing spaces silently corrupts retrieval); with the opt-in flag we
+            # migrate in place on first touch — re-embed everything from text and persist, after which
+            # the manifest matches the new embedder.
+            if os.environ.get("ENGRAM_REEMBED_ON_MISMATCH") != "1":
+                raise
+            with self._user_file_lock(user):
+                mem = Memory.open(self._path(user), allow_mismatch=True,
+                                  embedder=self.embedder, llm=self.llm, config=self.config)
+                mem.reembed()
+                mem.save()
         version = self._store_version(user)
         with self._g:
             self._hot[user] = mem
@@ -278,7 +314,70 @@ class MemoryService:
     def hot_count(self) -> int:
         return len(self._hot)
 
+    def metrics_snapshot(self) -> dict:
+        """The /metrics payload: latency percentiles + counters + token savings (from Metrics), plus the
+        service-level gauges (hot namespaces in RAM, async System-2 backlog). Aggregate numbers only."""
+        snap = self.metrics.snapshot()
+        snap["users_hot"] = self.hot_count
+        snap["async"] = {
+            "enabled": self._async,
+            "queue_depth": self._queue.qsize() if self._queue is not None else 0,
+            "pending_users": len(self._pending),
+        }
+        return snap
+
+    # --- async System-2 consolidation (CLAUDE.md Bet F; opt-in via ENGRAM_ASYNC_CONSOLIDATION=1) --------
+    def _enqueue(self, user: str) -> None:
+        """Schedule a user's pending episodes for background consolidation, coalescing repeat requests."""
+        with self._g:
+            if user in self._pending:
+                return
+            self._pending.add(user)
+        self._queue.put(user)  # type: ignore[union-attr]
+
+    def _consume(self) -> None:
+        """Background worker: drain the queue and run System-2 (consolidate + summarize) off the write path."""
+        while True:
+            user = self._queue.get()  # type: ignore[union-attr]
+            if user is None:  # shutdown sentinel
+                self._queue.task_done()  # type: ignore[union-attr]
+                break
+            # Clear pending BEFORE consolidating, so an episode that arrives mid-pass re-enqueues a follow-up
+            # pass instead of being silently skipped (consolidate() only drains not-yet-consolidated episodes,
+            # so a redundant pass is cheap and idempotent).
+            with self._g:
+                self._pending.discard(user)
+            try:
+                self._consolidate_now(user)
+            except Exception:  # noqa: BLE001 — a bad job must never kill the worker
+                pass
+            finally:
+                self._queue.task_done()  # type: ignore[union-attr]
+
+    def _consolidate_now(self, user: str) -> None:
+        with self.write_lock(user):
+            mem = self.get(user)
+            try:
+                mem.consolidate()
+                mem.summarize_episodes(list(mem.episodes_doc.values()))
+            finally:
+                self._save(user, mem)
+
+    def flush(self) -> None:
+        """Block until all queued System-2 consolidation has completed (for tests / graceful shutdown).
+        No-op in synchronous mode."""
+        if self._queue is not None:
+            self._queue.join()
+
+    def close(self) -> None:
+        """Stop the background worker (best-effort). Safe to call when async is off."""
+        if self._worker is not None and self._queue is not None:
+            self._queue.put(None)  # sentinel
+            self._worker.join(timeout=5)
+            self._worker = None
+
     # --- write path ---------------------------------------------------------
+    @timed("remember")
     def remember(self, user: str, content: str, session_id: str = "default",
                  scope: str = "auto") -> dict:
         """Store a message + run System-2 consolidation/summarization (best-effort: a transient model
@@ -293,30 +392,72 @@ class MemoryService:
                 return {"ok": True, "scope": "working", "kind": routed["kind"],
                         "id": routed["working_id"], "episode_id": routed["episode_id"],
                         "note": "kept in dated history (askable later); not added to the durable profile"}
+            if self._async:
+                # System-1 only: the episode is embedded + durably saved here; System-2 (consolidate +
+                # summarize) runs in the background worker so the write returns immediately (Bet F).
+                self._save(user, mem)
+                self._enqueue(user)
+                return {"ok": True, "scope": "long", "queued": True, "episode_id": routed.get("episode_id"),
+                        "note": "consolidation scheduled off the write path (async System-2)"}
             try:
                 added = mem.consolidate().get("facts_added", 0)
                 mem.summarize_episodes(list(mem.episodes_doc.values()))
             except Exception as exc:  # noqa: BLE001 — keep the raw episode no matter what
                 self._save(user, mem)
+                self.metrics.count("remember_degraded")
                 return {"ok": True, "extracted": 0, "degraded": type(exc).__name__, "stored_raw": True}
             self._save(user, mem)
             return {"ok": True, "scope": "long", "extracted": added,
                     "total_facts": len([f for f in _all_facts(mem) if f.is_live()])}
 
+    @timed("import")
     def import_(self, user: str, sessions: Optional[list] = None, format: str = "auto",
                 data: Any = None, consolidate: bool = True, summarize: bool = True,
-                session_id: str = "imported") -> dict:
+                session_id: str = "imported", dedupe: bool = True) -> dict:
         """Bulk import: either pre-parsed `sessions` (list of ImportSession/dicts) OR raw `data` to parse
-        with `format` (chatgpt/messages/records/jsonl/transcript/auto). One batched ingest + consolidation."""
+        with `format` (chatgpt/messages/records/jsonl/transcript/auto). One batched ingest + consolidation.
+        Idempotent by default: re-posting the same export skips already-ingested episodes (`skipped`)."""
         with self.write_lock(user):
             mem = self.get(user)
             if sessions is None:
                 from .connectors import parse
                 sessions = parse(data, format=format, session_id=session_id)
             stats = mem.import_messages(sessions, user_id=user, consolidate=consolidate,
-                                        summarize=summarize)
+                                        summarize=summarize, dedupe=dedupe)
             self._save(user, mem)
             return {"ok": True, **stats}
+
+    @timed("import_document")
+    def import_document(self, user: str, data, filename: Optional[str] = None,
+                        content_type: Optional[str] = None, session_id: str = "document",
+                        consolidate: bool = True, summarize: bool = True) -> dict:
+        """Ingest one uploaded document or image (CLAUDE.md §6 multimodal). PDF/DOCX/text are flattened to
+        text; an image is captioned by the vision model (or stored as a placeholder when none is configured)
+        — either way it enters the same System-2 pipeline as everything else, so it's immediately searchable."""
+        from .connectors.documents import detect_kind, document_text, to_data_url, to_session
+        from .llm import vision
+
+        kind = detect_kind(data, filename, content_type)
+        if kind == "image":
+            cap = vision.caption_image(self.captioner, to_data_url(data, content_type))
+            text = f"[image] {cap}" if cap else "[image] (no caption — set ENGRAM_VISION_LLM to describe images)"
+            session = to_session(text, filename=filename, session_id=session_id,
+                                 metadata={"kind": "image", "media_type": content_type or ""})
+        else:
+            try:
+                text = document_text(data, kind)
+            except ImportError as exc:  # optional extractor dep missing -> actionable error, not a 500
+                return {"ok": False, "kind": kind, "error": str(exc)}
+            if not text:
+                return {"ok": False, "kind": kind, "error": f"no extractable text in {filename or kind}"}
+            session = to_session(text, filename=filename, session_id=session_id,
+                                 metadata={"kind": kind, "media_type": content_type or ""})
+        with self.write_lock(user):
+            mem = self.get(user)
+            stats = mem.import_messages([session], user_id=user, consolidate=consolidate,
+                                        summarize=summarize)
+            self._save(user, mem)
+        return {"ok": True, "kind": kind, **stats}
 
     def add_fact(
         self,
@@ -376,6 +517,7 @@ class MemoryService:
             return {"ok": True, **result}
 
     # --- read path ----------------------------------------------------------
+    @timed("recall")
     def recall(self, user: str, query: str, lean: bool = True, n_chunks: int = 6,
                session_id: Optional[str] = None, as_of: Optional[float] = None,
                redact_sensitive: bool = False,
@@ -406,6 +548,9 @@ class MemoryService:
                 )
                 out["full_tokens"] = _est_tokens(full)
                 out["answer"] = _answer_from_memory(self.answerer, query, ctx)
+            # live token-saving accounting (Bet D online): context size always; the full-history baseline
+            # only when this call computed it anyway — measuring must not add cost to the hot path.
+            self.metrics.tokens(out["tokens_est"], out.get("full_tokens"))
             return out
         res = mem.search(query, user_id=user, as_of=as_of)
         visible_facts = [
@@ -423,6 +568,28 @@ class MemoryService:
             "as_of": as_of,
             "redacted_sensitive": redact_sensitive,
         }
+
+    @timed("recall_multi")
+    def recall_multi(self, spaces: list[str], query: str, n_chunks: int = 6,
+                     session_id: Optional[str] = None, as_of: Optional[float] = None,
+                     redact_sensitive: bool = False) -> dict:
+        """Read across several spaces and fuse the result (CLAUDE.md §6 — agent + team-shared + user memory
+        composed at READ time). Each space contributes its own lean context, tagged with its source so
+        provenance is preserved. Cross-space GRAPH walks are NOT done (entities live in per-space stores);
+        this is fact+chunk composition, which is where the multi-scope value is — the multi-hop planner
+        still operates within a single space."""
+        blocks: list[str] = []
+        for s in spaces:
+            mem = self.get(s)
+            ctx = mem.lean_context(query, user_id=s, n_chunks=n_chunks, session_id=session_id,
+                                   as_of=as_of, redact_sensitive=redact_sensitive)
+            if ctx.strip():
+                blocks.append(f"## Space: {s}\n{ctx}")
+        context = "\n\n".join(blocks)
+        out = {"context": context, "tokens_est": _est_tokens(context), "spaces": list(spaces),
+               "as_of": as_of, "redacted_sensitive": redact_sensitive}
+        self.metrics.tokens(out["tokens_est"])
+        return out
 
     def structured_profile(self, user: str) -> dict:
         """L2 structured profile (basic info / preferences / habits, confirmed vs tentative). Display-only."""

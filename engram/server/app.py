@@ -35,6 +35,7 @@ except Exception as exc:  # noqa: BLE001
 
 from .. import __version__
 from ..service import MemoryService
+from ..spaces import Principal, principal_for_token
 
 
 DEFAULT_MAX_REQUEST_BYTES = 2 * 1024 * 1024
@@ -107,6 +108,11 @@ def svc() -> MemoryService:
 async def _lifespan(_app: FastAPI):
     svc()  # load the embedder (and LLM) once at boot, so the first request doesn't race on it
     yield
+    # Drain any queued async System-2 consolidation, then stop the worker, so a graceful shutdown doesn't
+    # drop pending consolidation. No-op in the default synchronous mode.
+    if _svc is not None:
+        _svc.flush()
+        _svc.close()
 
 
 app = FastAPI(
@@ -210,10 +216,32 @@ def auth(authorization: str = Header(default="")) -> str:
     raise HTTPException(401, "set ENGRAM_API_KEYS (user:key,...) or ENGRAM_OPEN=1")
 
 
+def auth_principal(authorization: str = Header(default="")) -> Principal:
+    """Resolve the caller to a Principal — its home space plus the spaces it may read/write.
+
+    ENGRAM_SPACES keys (multi-space, constant-time matched) take precedence; every other token goes
+    through the existing single-space `auth`, so ENGRAM_API_KEYS / open-mode behavior — including all of
+    its hardening — is exactly unchanged and multi-space stays purely additive. Only the space-aware
+    routes (remember/recall) depend on this; everything else keeps the plain `auth` home-string."""
+    principal = principal_for_token(_bearer_token(authorization))
+    if principal is not None:
+        return principal
+    return Principal.single(auth(authorization))
+
+
+@app.get("/metrics")
+def metrics():
+    """Live service metrics (CLAUDE.md Bet D online): p50/p95 latency per operation, request counters,
+    and the served-context vs full-history token-savings ratio. Aggregate numbers only — no namespace
+    names and no user content, so this can stay as open as /health."""
+    return svc().metrics_snapshot()
+
+
 class RememberReq(BaseModel):
     content: str = Field(min_length=1, max_length=1_000_000)
     session_id: str = Field(default="default", min_length=1, max_length=512)
     scope: str = "auto"  # auto (route by ephemerality) | long (force long-term) | working (force ephemeral)
+    space: Optional[str] = Field(default=None, max_length=512)  # target namespace (default: caller's home)
 
 
 class RecallReq(BaseModel):
@@ -223,6 +251,7 @@ class RecallReq(BaseModel):
     session_id: Optional[str] = Field(default=None, max_length=512)
     as_of: Optional[float] = None  # epoch seconds: point-in-time memory view
     redact_sensitive: bool = False  # hide facts tagged sensitive from the returned context/fact list
+    spaces: Optional[list[str]] = Field(default=None, max_length=16)  # namespaces to read+fuse (default: [home])
 
 
 class CloseSessionReq(BaseModel):
@@ -377,17 +406,29 @@ async function delFact(id){ if(!confirm('永久删除这条记忆?'))return; awa
 
 
 @app.post("/v1/remember")
-def remember(req: RememberReq, user: str = Depends(auth)):
+def remember(req: RememberReq, principal: Principal = Depends(auth_principal)):
+    # Write to the chosen space (default: the caller's home); the ACL gates which spaces a key may write.
+    target = req.space or principal.home
+    if not principal.can_write(target):
+        raise HTTPException(403, f"not allowed to write to space '{target}'")
     # Route by ephemerality inside the service: either way the dated episode is stored (history stays
     # answerable); transient state also goes to working memory and is NOT promoted into a durable fact.
-    return svc().remember(user, req.content, session_id=req.session_id, scope=req.scope)
+    return svc().remember(target, req.content, session_id=req.session_id, scope=req.scope)
 
 
 @app.post("/v1/recall")
-def recall(req: RecallReq, user: str = Depends(auth)):
+def recall(req: RecallReq, principal: Principal = Depends(auth_principal)):
+    spaces = req.spaces or [principal.home]
+    for s in spaces:
+        if not principal.can_read(s):
+            raise HTTPException(403, f"not allowed to read space '{s}'")
+    if len(spaces) > 1:
+        # Cross-space read: fuse each space's lean context (agent + team + user memory), source-tagged.
+        return svc().recall_multi(spaces, req.query, n_chunks=req.n_chunks, session_id=req.session_id,
+                                  as_of=req.as_of, redact_sensitive=req.redact_sensitive)
     # answer=True: also generate a real answer over the lean context + report the full-context baseline
     # token count, so the console's 问答 view can show the answer AND the token saving.
-    return svc().recall(user, req.query, lean=req.lean, n_chunks=req.n_chunks,
+    return svc().recall(spaces[0], req.query, lean=req.lean, n_chunks=req.n_chunks,
                         session_id=req.session_id, as_of=req.as_of,
                         redact_sensitive=req.redact_sensitive, answer=True)
 
@@ -516,6 +557,7 @@ class ImportReq(BaseModel):
     format: str = "auto"
     consolidate: bool = True
     summarize: bool = True
+    dedupe: bool = True  # idempotent re-import: skip episodes already ingested (content fingerprint)
 
 
 @app.post("/v1/import")
@@ -525,7 +567,34 @@ def import_history(req: ImportReq, user: str = Depends(auth)):
     if req.sessions is None and req.data is None:
         raise HTTPException(400, "provide either 'sessions' (pre-parsed) or 'data' (+ 'format') to import")
     return svc().import_(user, sessions=req.sessions, data=req.data, format=req.format,
-                         consolidate=req.consolidate, summarize=req.summarize)
+                         consolidate=req.consolidate, summarize=req.summarize, dedupe=req.dedupe)
+
+
+class DocumentReq(BaseModel):
+    """Upload one document/image as memory. Send raw bytes base64 in `data_base64` (PDF/DOCX/image), or
+    pre-extracted `text`. Images are captioned by the vision model (ENGRAM_VISION_LLM) into searchable text."""
+    filename: Optional[str] = Field(default=None, max_length=512)
+    content_type: Optional[str] = Field(default=None, max_length=256)
+    data_base64: Optional[str] = None  # raw file bytes, base64-encoded (bounded by the request-size cap)
+    text: Optional[str] = Field(default=None, max_length=1_000_000)  # or already-extracted plain text
+    session_id: str = Field(default="document", min_length=1, max_length=512)
+
+
+@app.post("/v1/documents")
+def import_document(req: DocumentReq, user: str = Depends(auth)):
+    """Ingest a PDF/DOCX/text document or an image as long-term memory (multimodal, CLAUDE.md §6)."""
+    if req.text is not None:
+        data: object = req.text
+    elif req.data_base64:
+        import base64
+        try:
+            data = base64.b64decode(req.data_base64)
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(400, f"data_base64 is not valid base64: {exc}")
+    else:
+        raise HTTPException(400, "provide 'data_base64' (raw file bytes) or 'text'")
+    return svc().import_document(user, data, filename=req.filename, content_type=req.content_type,
+                                 session_id=req.session_id)
 
 
 # --- OpenAI-compatible chat with transparent memory (drop-in: point your OpenAI client's base_url here) --
@@ -566,7 +635,9 @@ def chat_completions(req: ChatCompletionReq, background: BackgroundTasks, user: 
     except oc.NoLLMConfigured as exc:
         raise HTTPException(503, str(exc))
 
-    user_text = oc.latest_user_text(body.get("messages", []))
+    # remember the turn's text + a caption for any image parts (multimodal); identical to the plain text
+    # when there's no image/captioner, so the text-only drop-in path is unchanged.
+    user_text = oc.remembered_text(svc().captioner, body.get("messages", []))
     if opts.get("remember", True) and user_text:
         background.add_task(
             svc().remember,

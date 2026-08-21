@@ -33,6 +33,15 @@ class Config:
     recency_tau_days: float = 45.0
     top_k: int = 5
     candidate_k: int = 24  # per-retriever candidate pool before fusion
+
+    # Candidate generation (scale path; CLAUDE.md Bet E). OFF by default: the retriever scans ALL of a
+    # user's live facts (exact, fine to ~thousands). When ON, it pulls a bounded ANN candidate pool from the
+    # vector store (∪ the query's graph-neighbor facts) instead — the sub-linear read path for large stores.
+    # EVAL-GATED before becoming default: ANN candidates can drop a lexical-strong / vector-weak fact, so
+    # validate ranking on the harness first (CLAUDE.md §4). When the pool covers all facts (small stores) the
+    # candidate set == the full scan, so results are unchanged.
+    ann_candidates: bool = False
+    ann_pool: int = 200  # nearest candidates to pull from the ANN index when ann_candidates is on
     rrf_k: int = 60  # Reciprocal Rank Fusion constant
     max_hops: int = 2  # multi-hop planner depth
     max_hot_facts: int = 10_000  # heat-tier cap; cold facts remain durable and can page back on hot miss

@@ -138,6 +138,9 @@ def _memory_state(mem: Any) -> dict[str, Any]:
         "aliases": {k: sorted(v) for k, v in getattr(mem, "_aliases", {}).items()},
         "cold_pages_out": dict(getattr(mem, "cold_pages_out", {})),
         "cold_pages_in": dict(getattr(mem, "cold_pages_in", {})),
+        # idempotent-import fingerprints (content hashes only — no memory content), so re-imports stay
+        # deduplicated across restarts
+        "import_seen": sorted(getattr(mem, "_import_seen", ())),
     }
 
 
@@ -207,10 +210,12 @@ def save_memory(mem: Any, path: str, backend: str = "durable") -> None:
         os.replace(tmp, manifest_path)
 
 
-def load_memory(mem: Any, path: str) -> bool:
+def load_memory(mem: Any, path: str, allow_mismatch: bool = False) -> bool:
     """Load JSONL store contents into an existing Memory instance.
 
-    Returns False when no manifest exists, which means "start empty".
+    Returns False when no manifest exists, which means "start empty". `allow_mismatch=True` skips the
+    embedder identity/dimension guards — ONLY for the explicit re-embedding migration
+    (`Memory.reembed()`), which replaces every stored vector right after loading.
     """
     if os.path.exists(path) and not os.path.isdir(path):
         raise StoreFormatError(
@@ -228,15 +233,20 @@ def load_memory(mem: Any, path: str) -> bool:
         )
     stored_dim = manifest.get("embedding_dim")
     current_dim = _embedder_dim(mem.embedder)
-    if stored_dim is not None and current_dim is not None and int(stored_dim) != int(current_dim):
+    if not allow_mismatch and stored_dim is not None and current_dim is not None \
+            and int(stored_dim) != int(current_dim):
         raise DimensionMismatchError(
-            f"store embedding_dim={stored_dim} does not match current embedder dim={current_dim}"
+            f"store embedding_dim={stored_dim} does not match current embedder dim={current_dim}; "
+            "re-attach the original embedder, or migrate with Memory.open(path, allow_mismatch=True, ...)"
+            ".reembed() (service: ENGRAM_REEMBED_ON_MISMATCH=1)"
         )
     stored_embedder = manifest.get("embedder_id")
     current_embedder = _embedder_id(mem.embedder)
-    if stored_embedder is not None and str(stored_embedder) != current_embedder:
+    if not allow_mismatch and stored_embedder is not None and str(stored_embedder) != current_embedder:
         raise EmbedderMismatchError(
-            f"store embedder_id={stored_embedder!r} does not match current embedder_id={current_embedder!r}"
+            f"store embedder_id={stored_embedder!r} does not match current embedder_id={current_embedder!r}; "
+            "re-attach the original embedder, or migrate with Memory.open(path, allow_mismatch=True, ...)"
+            ".reembed() (service: ENGRAM_REEMBED_ON_MISMATCH=1)"
         )
 
     counts = manifest.get("counts") or {}
@@ -311,4 +321,5 @@ def load_memory(mem: Any, path: str) -> bool:
     mem._aliases = {k: set(v) for k, v in (state.get("aliases") or {}).items()}
     mem.cold_pages_out = {k: int(v) for k, v in (state.get("cold_pages_out") or {}).items()}
     mem.cold_pages_in = {k: int(v) for k, v in (state.get("cold_pages_in") or {}).items()}
+    mem._import_seen = set(state.get("import_seen") or ())
     return True

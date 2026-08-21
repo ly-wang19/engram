@@ -186,6 +186,9 @@ class Memory:
         # first-person normalization and the profile know who the user is after a reload.
         self._identity: dict[str, str] = {}
         self._aliases: dict[str, set] = {}  # user_id -> {all declared names/nicknames} (coreference)
+        # Content fingerprints of already-imported episodes (idempotent re-import: the same export twice
+        # must not double every memory). Persisted with the snapshot (manifest state).
+        self._import_seen: set[str] = set()
         # Suspected conflicts surfaced for the user to confirm (System-2 LLM detection; never auto-applied).
         self.conflicts: dict[str, Conflict] = {}
         self.cold_pages_out: dict[str, int] = {}
@@ -226,6 +229,7 @@ class Memory:
             self.fact_store,
             self.config,
             extra_fact_stores=[self.cold_store],
+            llm=self.llm,
         )
         # restore the persisted self-name into the (freshly built) extractor so identity survives reload
         ex = getattr(self.engine, "extractor", None)
@@ -250,8 +254,11 @@ class Memory:
         self._persist_path = path
 
     @classmethod
-    def open(cls, path: str, **kwargs) -> "Memory":
-        """Open a persistent Memory from a JSONL+manifest store, or start empty if it does not exist."""
+    def open(cls, path: str, allow_mismatch: bool = False, **kwargs) -> "Memory":
+        """Open a persistent Memory from a JSONL+manifest store, or start empty if it does not exist.
+
+        `allow_mismatch=True` bypasses the embedding-space guards ONLY so `.reembed()` can migrate the
+        store to the attached embedder — opening mismatched for any other purpose corrupts retrieval."""
         cfg = kwargs.get("config")
         if (
             cfg is not None
@@ -261,11 +268,63 @@ class Memory:
         ):
             kwargs["config"] = replace(cfg, data_path=f"{path}/lancedb")
         mem = cls(**kwargs)
-        if load_memory(mem, path):
+        if load_memory(mem, path, allow_mismatch=allow_mismatch):
             mem._rewire()
             mem._classify()  # backfill category/sensitivity on facts saved before feature ⑤
         mem._persist_path = path
         return mem
+
+    def reembed(self, embedder: Optional[Embedder] = None) -> dict[str, int]:
+        """Migrate every stored vector into `embedder`'s space (default: the currently attached one) —
+        the supported path for switching embedding models over an existing store (the manifest guards
+        refuse a mismatched open; this is the escape hatch they point to). Re-embeds facts (hot + cold),
+        episode contents, session summaries, and working memory from their source TEXT. Entity nodes are
+        skipped: retrieval matches entities by name, not embedding. Call `.save()` afterwards — the
+        manifest then records the new embedder identity, so the next open is clean."""
+        if embedder is not None:
+            self.embedder = embedder
+
+        def _clear(store) -> None:
+            for payload in list(store.values()):
+                key = getattr(payload, "id", None)
+                if key is not None:
+                    store.delete(key)
+
+        counts: dict[str, int] = {}
+        for name, store in (("facts", self.fact_store), ("cold", self.cold_store)):
+            facts = store.values()
+            _clear(store)
+            vecs = self.embedder.embed_batch([f.text for f in facts]) if facts else []
+            for f, v in zip(facts, vecs):
+                f.embedding = v
+                store.upsert(f.id, v, f)
+            counts[name] = len(facts)
+
+        episodes = list(self.episodes_doc.values())  # the doc log is the source of truth for episode text
+        _clear(self.episodes_vec)
+        vecs = self.embedder.embed_batch([ep.content for ep in episodes]) if episodes else []
+        for ep, v in zip(episodes, vecs):
+            ep.embedding = v
+            self.episodes_vec.upsert(ep.id, v, ep)
+        counts["episodes"] = len(episodes)
+
+        summarized = [ep for ep in episodes if ep.summary]
+        _clear(self.summary_vec)
+        # same embedding source as summarize_episodes: the summary, falling back to a content excerpt
+        vecs = (self.embedder.embed_batch([ep.summary or ep.content[:200] for ep in summarized])
+                if summarized else [])
+        for ep, v in zip(summarized, vecs):
+            ep.summary_embedding = v
+            self.summary_vec.upsert(ep.id, v, ep)
+        counts["summaries"] = len(summarized)
+
+        for wm in self.working_mem.values():
+            wm.embedding = self.embedder.embed(wm.content)
+        counts["working"] = len(self.working_mem)
+
+        self._persona_cache.clear()
+        self._rewire()  # the retriever/engine hold embedder refs (and the semantic gate) — rebind
+        return counts
 
     # --- write path ---
     def add(
@@ -352,6 +411,7 @@ class Memory:
         roles: bool = True,
         batch_size: int = 256,
         base_time: Optional[float] = None,
+        dedupe: bool = True,
     ) -> dict[str, int]:
         """Bulk-ingest pre-parsed sessions (from `engram.connectors.parse`) as ONE episode per session,
         batch-embedding the bodies in a few encode calls and then running ONE System-2 pass over just
@@ -362,7 +422,14 @@ class Memory:
         `sessions` is an iterable of `ImportSession` (or dicts shaped `{session_id, messages, ...}`).
         `base_time` supplies a synthetic clock (base + i·day) for sessions the source didn't timestamp,
         so chronological order is preserved even without dates. Returns ingest + consolidation stats.
+
+        `dedupe` (default on) makes re-imports idempotent: an episode whose content fingerprint was
+        already ingested is skipped (counted in `skipped`) — re-posting the same export no longer doubles
+        every memory. Fingerprints are content+identity (never time: re-imports get fresh synthetic
+        clocks). `dedupe=False` restores raw append behavior.
         """
+        import hashlib
+
         from .connectors.base import ImportMessage, ImportSession, to_epoch
 
         def _time_of(d: dict) -> Optional[float]:
@@ -392,6 +459,10 @@ class Memory:
         texts: list[str] = []
         metas: list[tuple] = []
         session_count = 0
+        skipped = 0
+
+        def _fp(sid: str, row_key: str) -> str:
+            return hashlib.sha1(f"{user_id}|{sid}|{row_key}".encode()).hexdigest()
         for i, s in enumerate(items):
             source = str(s.metadata.get("source", ""))
             dated_times = {m.event_time for m in s.messages if m.event_time is not None}
@@ -404,10 +475,17 @@ class Memory:
                     if not text:
                         continue
                     body = f"{m.speaker}: {text}" if roles else text
+                    sid = s.session_id or f"imported_{i}"
+                    # per-row fingerprint keeps the row index, so a legitimately repeated message within
+                    # one session is NOT treated as a duplicate — only re-imports collide.
+                    fp = _fp(sid, f"{j}|{body}")
+                    if dedupe and fp in self._import_seen:
+                        skipped += 1
+                        continue
                     et = m.event_time if m.event_time is not None else fallback
                     et = et if et is not None else base + i * DAY + j
                     texts.append(body)
-                    metas.append((s.session_id or f"imported_{i}", et, s.title))
+                    metas.append((sid, et, s.title, fp))
                     added += 1
                 if added:
                     session_count += 1
@@ -416,28 +494,35 @@ class Memory:
             body = s.to_text(roles=roles)
             if not body.strip():
                 continue
+            sid = s.session_id or f"imported_{i}"
+            fp = _fp(sid, body)
+            if dedupe and fp in self._import_seen:
+                skipped += 1
+                continue
             et = s.start_time()
             et = et if et is not None else base + i * DAY  # synthetic but ordered
             texts.append(body)
-            metas.append((s.session_id or f"imported_{i}", et, s.title))
+            metas.append((sid, et, s.title, fp))
             session_count += 1
         if not texts:
-            return {"sessions": 0, "episodes": 0, "facts_added": 0, "summaries": 0}
+            return {"sessions": 0, "episodes": 0, "facts_added": 0, "summaries": 0, "skipped": skipped}
 
         vecs: list = []
         for j in range(0, len(texts), batch_size):
             vecs.extend(self.embedder.embed_batch(texts[j:j + batch_size]))
 
         new_eps: list[Episode] = []
-        for (sid, et, title), text, vec in zip(metas, texts, vecs):
+        for (sid, et, title, fp), text, vec in zip(metas, texts, vecs):
             ep = self.add(text, user_id=user_id, session_id=sid, speaker="session",
                           event_time=et, embedding=vec)
             ep.metadata["date"] = fmt_date(et)
             if title:
                 ep.metadata["title"] = title
             new_eps.append(ep)
+            self._import_seen.add(fp)  # only after the episode actually landed
 
-        stats = {"sessions": session_count, "episodes": len(new_eps), "facts_added": 0, "summaries": 0}
+        stats = {"sessions": session_count, "episodes": len(new_eps), "facts_added": 0, "summaries": 0,
+                 "skipped": skipped}
         if consolidate:
             stats["facts_added"] = self.consolidate(new_eps).get("facts_added", 0)
         if summarize:
