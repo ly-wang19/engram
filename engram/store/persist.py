@@ -138,6 +138,9 @@ def _memory_state(mem: Any) -> dict[str, Any]:
         "aliases": {k: sorted(v) for k, v in getattr(mem, "_aliases", {}).items()},
         "cold_pages_out": dict(getattr(mem, "cold_pages_out", {})),
         "cold_pages_in": dict(getattr(mem, "cold_pages_in", {})),
+        # idempotent-import fingerprints (content hashes only — no memory content), so re-imports stay
+        # deduplicated across restarts
+        "import_seen": sorted(getattr(mem, "_import_seen", ())),
     }
 
 
@@ -311,4 +314,5 @@ def load_memory(mem: Any, path: str) -> bool:
     mem._aliases = {k: set(v) for k, v in (state.get("aliases") or {}).items()}
     mem.cold_pages_out = {k: int(v) for k, v in (state.get("cold_pages_out") or {}).items()}
     mem.cold_pages_in = {k: int(v) for k, v in (state.get("cold_pages_in") or {}).items()}
+    mem._import_seen = set(state.get("import_seen") or ())
     return True

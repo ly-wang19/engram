@@ -399,16 +399,17 @@ class MemoryService:
     @timed("import")
     def import_(self, user: str, sessions: Optional[list] = None, format: str = "auto",
                 data: Any = None, consolidate: bool = True, summarize: bool = True,
-                session_id: str = "imported") -> dict:
+                session_id: str = "imported", dedupe: bool = True) -> dict:
         """Bulk import: either pre-parsed `sessions` (list of ImportSession/dicts) OR raw `data` to parse
-        with `format` (chatgpt/messages/records/jsonl/transcript/auto). One batched ingest + consolidation."""
+        with `format` (chatgpt/messages/records/jsonl/transcript/auto). One batched ingest + consolidation.
+        Idempotent by default: re-posting the same export skips already-ingested episodes (`skipped`)."""
         with self.write_lock(user):
             mem = self.get(user)
             if sessions is None:
                 from .connectors import parse
                 sessions = parse(data, format=format, session_id=session_id)
             stats = mem.import_messages(sessions, user_id=user, consolidate=consolidate,
-                                        summarize=summarize)
+                                        summarize=summarize, dedupe=dedupe)
             self._save(user, mem)
             return {"ok": True, **stats}
 

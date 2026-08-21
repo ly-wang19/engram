@@ -186,6 +186,9 @@ class Memory:
         # first-person normalization and the profile know who the user is after a reload.
         self._identity: dict[str, str] = {}
         self._aliases: dict[str, set] = {}  # user_id -> {all declared names/nicknames} (coreference)
+        # Content fingerprints of already-imported episodes (idempotent re-import: the same export twice
+        # must not double every memory). Persisted with the snapshot (manifest state).
+        self._import_seen: set[str] = set()
         # Suspected conflicts surfaced for the user to confirm (System-2 LLM detection; never auto-applied).
         self.conflicts: dict[str, Conflict] = {}
         self.cold_pages_out: dict[str, int] = {}
@@ -352,6 +355,7 @@ class Memory:
         roles: bool = True,
         batch_size: int = 256,
         base_time: Optional[float] = None,
+        dedupe: bool = True,
     ) -> dict[str, int]:
         """Bulk-ingest pre-parsed sessions (from `engram.connectors.parse`) as ONE episode per session,
         batch-embedding the bodies in a few encode calls and then running ONE System-2 pass over just
@@ -362,7 +366,14 @@ class Memory:
         `sessions` is an iterable of `ImportSession` (or dicts shaped `{session_id, messages, ...}`).
         `base_time` supplies a synthetic clock (base + i·day) for sessions the source didn't timestamp,
         so chronological order is preserved even without dates. Returns ingest + consolidation stats.
+
+        `dedupe` (default on) makes re-imports idempotent: an episode whose content fingerprint was
+        already ingested is skipped (counted in `skipped`) — re-posting the same export no longer doubles
+        every memory. Fingerprints are content+identity (never time: re-imports get fresh synthetic
+        clocks). `dedupe=False` restores raw append behavior.
         """
+        import hashlib
+
         from .connectors.base import ImportMessage, ImportSession, to_epoch
 
         def _time_of(d: dict) -> Optional[float]:
@@ -392,6 +403,10 @@ class Memory:
         texts: list[str] = []
         metas: list[tuple] = []
         session_count = 0
+        skipped = 0
+
+        def _fp(sid: str, row_key: str) -> str:
+            return hashlib.sha1(f"{user_id}|{sid}|{row_key}".encode()).hexdigest()
         for i, s in enumerate(items):
             source = str(s.metadata.get("source", ""))
             dated_times = {m.event_time for m in s.messages if m.event_time is not None}
@@ -404,10 +419,17 @@ class Memory:
                     if not text:
                         continue
                     body = f"{m.speaker}: {text}" if roles else text
+                    sid = s.session_id or f"imported_{i}"
+                    # per-row fingerprint keeps the row index, so a legitimately repeated message within
+                    # one session is NOT treated as a duplicate — only re-imports collide.
+                    fp = _fp(sid, f"{j}|{body}")
+                    if dedupe and fp in self._import_seen:
+                        skipped += 1
+                        continue
                     et = m.event_time if m.event_time is not None else fallback
                     et = et if et is not None else base + i * DAY + j
                     texts.append(body)
-                    metas.append((s.session_id or f"imported_{i}", et, s.title))
+                    metas.append((sid, et, s.title, fp))
                     added += 1
                 if added:
                     session_count += 1
@@ -416,28 +438,35 @@ class Memory:
             body = s.to_text(roles=roles)
             if not body.strip():
                 continue
+            sid = s.session_id or f"imported_{i}"
+            fp = _fp(sid, body)
+            if dedupe and fp in self._import_seen:
+                skipped += 1
+                continue
             et = s.start_time()
             et = et if et is not None else base + i * DAY  # synthetic but ordered
             texts.append(body)
-            metas.append((s.session_id or f"imported_{i}", et, s.title))
+            metas.append((sid, et, s.title, fp))
             session_count += 1
         if not texts:
-            return {"sessions": 0, "episodes": 0, "facts_added": 0, "summaries": 0}
+            return {"sessions": 0, "episodes": 0, "facts_added": 0, "summaries": 0, "skipped": skipped}
 
         vecs: list = []
         for j in range(0, len(texts), batch_size):
             vecs.extend(self.embedder.embed_batch(texts[j:j + batch_size]))
 
         new_eps: list[Episode] = []
-        for (sid, et, title), text, vec in zip(metas, texts, vecs):
+        for (sid, et, title, fp), text, vec in zip(metas, texts, vecs):
             ep = self.add(text, user_id=user_id, session_id=sid, speaker="session",
                           event_time=et, embedding=vec)
             ep.metadata["date"] = fmt_date(et)
             if title:
                 ep.metadata["title"] = title
             new_eps.append(ep)
+            self._import_seen.add(fp)  # only after the episode actually landed
 
-        stats = {"sessions": session_count, "episodes": len(new_eps), "facts_added": 0, "summaries": 0}
+        stats = {"sessions": session_count, "episodes": len(new_eps), "facts_added": 0, "summaries": 0,
+                 "skipped": skipped}
         if consolidate:
             stats["facts_added"] = self.consolidate(new_eps).get("facts_added", 0)
         if summarize:

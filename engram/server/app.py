@@ -557,6 +557,7 @@ class ImportReq(BaseModel):
     format: str = "auto"
     consolidate: bool = True
     summarize: bool = True
+    dedupe: bool = True  # idempotent re-import: skip episodes already ingested (content fingerprint)
 
 
 @app.post("/v1/import")
@@ -566,7 +567,7 @@ def import_history(req: ImportReq, user: str = Depends(auth)):
     if req.sessions is None and req.data is None:
         raise HTTPException(400, "provide either 'sessions' (pre-parsed) or 'data' (+ 'format') to import")
     return svc().import_(user, sessions=req.sessions, data=req.data, format=req.format,
-                         consolidate=req.consolidate, summarize=req.summarize)
+                         consolidate=req.consolidate, summarize=req.summarize, dedupe=req.dedupe)
 
 
 class DocumentReq(BaseModel):
