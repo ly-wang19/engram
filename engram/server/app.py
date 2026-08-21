@@ -108,6 +108,11 @@ def svc() -> MemoryService:
 async def _lifespan(_app: FastAPI):
     svc()  # load the embedder (and LLM) once at boot, so the first request doesn't race on it
     yield
+    # Drain any queued async System-2 consolidation, then stop the worker, so a graceful shutdown doesn't
+    # drop pending consolidation. No-op in the default synchronous mode.
+    if _svc is not None:
+        _svc.flush()
+        _svc.close()
 
 
 app = FastAPI(

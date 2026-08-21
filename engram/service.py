@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import queue
 import re
 import shutil
 import threading
@@ -134,6 +135,18 @@ class MemoryService:
         self._hot_versions: dict[str, tuple[int, int] | None] = {}
         self._locks: dict[str, threading.Lock] = {}
         self._g = threading.Lock()
+        # System-1 / System-2 split (CLAUDE.md Bet F). When enabled, remember() does only the fast System-1
+        # write (append + light embed + a durable save) and hands consolidation to a background worker, so
+        # the write path stays low-latency. OFF by default — the synchronous path keeps the
+        # remember-then-immediately-queryable semantics the console, tests, and current callers rely on.
+        self._async = os.environ.get("ENGRAM_ASYNC_CONSOLIDATION") == "1"
+        self._queue: "Optional[queue.Queue]" = None
+        self._pending: set[str] = set()  # users with consolidation queued (coalesce repeat enqueues)
+        self._worker: Optional[threading.Thread] = None
+        if self._async:
+            self._queue = queue.Queue()
+            self._worker = threading.Thread(target=self._consume, name="engram-system2", daemon=True)
+            self._worker.start()
 
     # --- namespace lifecycle ------------------------------------------------
     def _safe_user(self, user: str) -> str:
@@ -283,6 +296,56 @@ class MemoryService:
     def hot_count(self) -> int:
         return len(self._hot)
 
+    # --- async System-2 consolidation (CLAUDE.md Bet F; opt-in via ENGRAM_ASYNC_CONSOLIDATION=1) --------
+    def _enqueue(self, user: str) -> None:
+        """Schedule a user's pending episodes for background consolidation, coalescing repeat requests."""
+        with self._g:
+            if user in self._pending:
+                return
+            self._pending.add(user)
+        self._queue.put(user)  # type: ignore[union-attr]
+
+    def _consume(self) -> None:
+        """Background worker: drain the queue and run System-2 (consolidate + summarize) off the write path."""
+        while True:
+            user = self._queue.get()  # type: ignore[union-attr]
+            if user is None:  # shutdown sentinel
+                self._queue.task_done()  # type: ignore[union-attr]
+                break
+            # Clear pending BEFORE consolidating, so an episode that arrives mid-pass re-enqueues a follow-up
+            # pass instead of being silently skipped (consolidate() only drains not-yet-consolidated episodes,
+            # so a redundant pass is cheap and idempotent).
+            with self._g:
+                self._pending.discard(user)
+            try:
+                self._consolidate_now(user)
+            except Exception:  # noqa: BLE001 — a bad job must never kill the worker
+                pass
+            finally:
+                self._queue.task_done()  # type: ignore[union-attr]
+
+    def _consolidate_now(self, user: str) -> None:
+        with self.write_lock(user):
+            mem = self.get(user)
+            try:
+                mem.consolidate()
+                mem.summarize_episodes(list(mem.episodes_doc.values()))
+            finally:
+                self._save(user, mem)
+
+    def flush(self) -> None:
+        """Block until all queued System-2 consolidation has completed (for tests / graceful shutdown).
+        No-op in synchronous mode."""
+        if self._queue is not None:
+            self._queue.join()
+
+    def close(self) -> None:
+        """Stop the background worker (best-effort). Safe to call when async is off."""
+        if self._worker is not None and self._queue is not None:
+            self._queue.put(None)  # sentinel
+            self._worker.join(timeout=5)
+            self._worker = None
+
     # --- write path ---------------------------------------------------------
     def remember(self, user: str, content: str, session_id: str = "default",
                  scope: str = "auto") -> dict:
@@ -298,6 +361,13 @@ class MemoryService:
                 return {"ok": True, "scope": "working", "kind": routed["kind"],
                         "id": routed["working_id"], "episode_id": routed["episode_id"],
                         "note": "kept in dated history (askable later); not added to the durable profile"}
+            if self._async:
+                # System-1 only: the episode is embedded + durably saved here; System-2 (consolidate +
+                # summarize) runs in the background worker so the write returns immediately (Bet F).
+                self._save(user, mem)
+                self._enqueue(user)
+                return {"ok": True, "scope": "long", "queued": True, "episode_id": routed.get("episode_id"),
+                        "note": "consolidation scheduled off the write path (async System-2)"}
             try:
                 added = mem.consolidate().get("facts_added", 0)
                 mem.summarize_episodes(list(mem.episodes_doc.values()))
