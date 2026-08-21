@@ -15,7 +15,6 @@ import type {
   ChatCompletionCreateParams,
   CloseSessionResult,
   AgentStatus,
-  Fact,
   FactInput,
   FactPatch,
   ForgetOptions,
@@ -46,10 +45,33 @@ export class EngramError extends Error {
     public readonly status: number,
     message: string,
     public readonly detail?: unknown,
+    /**
+     * Seconds to wait before retrying, from a 429's `Retry-After`. Undefined when the response did
+     * not carry the header — which is every status except a rate-limit rejection.
+     */
+    public readonly retryAfter?: number,
   ) {
     super(message)
     this.name = 'EngramError'
   }
+}
+
+/**
+ * Seconds to wait, read off the response headers.
+ *
+ * It has to come from the headers because that is the only place the server puts it — the 429 body
+ * says "rate limit exceeded" and nothing more. A transport that hands back only status + body makes
+ * this permanently undefined, which is an error object nobody can act on; the optional calls below
+ * are for that shape of injected fetch, not for a real `Response`.
+ *
+ * Only delta-seconds are parsed: the server always sends an integer (`str(int(retry_after) + 1)`),
+ * so an HTTP-date branch here would be a claim about the wire that nothing can reach.
+ */
+function retryAfterOf(res: Response): number | undefined {
+  const raw = res.headers?.get?.('Retry-After')
+  if (raw == null) return undefined
+  const seconds = Number.parseInt(raw.trim(), 10)
+  return Number.isFinite(seconds) ? seconds : undefined
 }
 
 export interface EngramClientOptions {
@@ -115,7 +137,7 @@ export class EngramClient {
     } catch {
       /* non-JSON error body */
     }
-    throw new EngramError(res.status, message, detail)
+    throw new EngramError(res.status, message, detail, retryAfterOf(res))
   }
 
   private async request<T>(path: string, init: RequestInit = {}): Promise<T> {

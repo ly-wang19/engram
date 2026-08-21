@@ -3,10 +3,10 @@ Good to ~10k items, which is plenty for the demo, tests, and small eval slices."
 from __future__ import annotations
 
 from collections import defaultdict
-from typing import Any, Optional
+from typing import Any, Iterable, Optional
 
 from ..types import Entity, Relation
-from ..util import cosine
+from ..util import cosine, stem, tokenize
 from .base import DocStore, GraphStore, Predicate, VectorStore
 
 
@@ -18,12 +18,20 @@ class InMemoryVectorStore(VectorStore):
         self._d[key] = (vector, payload)
 
     def search(
-        self, vector: list[float], top_k: int, where: Optional[Predicate] = None
+        self,
+        vector: list[float],
+        top_k: int,
+        where: Optional[Predicate] = None,
+        *,
+        user_id: Optional[str] = None,
     ) -> list[tuple[float, Any]]:
+        # No index to push a tenant filter into, so it is just another equality check here. The reference
+        # store is brute-force by design (see the module docstring); scale comes from a real backend.
         scored = [
             (cosine(vector, vec), payload)
             for vec, payload in self._d.values()
-            if where is None or where(payload)
+            if (user_id is None or getattr(payload, "user_id", None) == user_id)
+            and (where is None or where(payload))
         ]
         scored.sort(key=lambda x: x[0], reverse=True)
         return scored[:top_k]
@@ -56,10 +64,25 @@ class InMemoryDocStore(DocStore):
         self._d.pop(key, None)
 
 
+def _name_terms(entity: Entity) -> set[str]:
+    """Stemmed tokens of an entity's name and aliases — the keys it can be looked up by."""
+    terms: set[str] = set()
+    for text in (entity.name, *entity.aliases):
+        for token in tokenize(text):
+            terms.add(stem(token))
+    return terms
+
+
 class InMemoryGraphStore(GraphStore):
     def __init__(self) -> None:
         self.entities: dict[str, Entity] = {}
         self._by_name: dict[tuple[str, str], str] = {}
+        # (user_id, stemmed term) -> entity ids. Anchoring a query to its entities otherwise means
+        # walking every entity in the store on every retrieval; this turns it into a lookup of the
+        # query's own terms. Built at upsert: an entity's name and aliases are fixed once inserted
+        # (upsert_entity returns the existing node rather than updating it), so there is nothing to
+        # invalidate. A backend that lets names change would need to re-index on that change.
+        self._by_term: dict[tuple[str, str], set[str]] = {}
         self.rels: dict[str, Relation] = {}
         self._out: dict[str, list[str]] = defaultdict(list)
         self._in: dict[str, list[str]] = defaultdict(list)
@@ -71,7 +94,23 @@ class InMemoryGraphStore(GraphStore):
             return self.entities[existing_id]
         self.entities[entity.id] = entity
         self._by_name[key] = entity.id
+        for term in _name_terms(entity):
+            self._by_term.setdefault((entity.user_id, term), set()).add(entity.id)
         return entity
+
+    def entities_by_terms(self, user_id: str, terms: Iterable[str]) -> dict[str, list[Entity]]:
+        """For each requested term, this user's entities whose name or aliases contain it.
+
+        Serves both halves of query anchoring: the union across terms is the candidate set to test
+        properly, and a single term's list size is the uniqueness signal an alias anchor needs. Only the
+        query's terms are looked up, so the cost follows the query rather than the store.
+        """
+        found: dict[str, list[Entity]] = {}
+        for term in terms:
+            ids = self._by_term.get((user_id, term))
+            if ids:
+                found[term] = [self.entities[eid] for eid in ids if eid in self.entities]
+        return found
 
     def get_entity(self, user_id: str, name: str) -> Entity | None:
         eid = self._by_name.get((user_id, name.lower()))
@@ -119,6 +158,13 @@ class InMemoryGraphStore(GraphStore):
                 continue
             self.entities.pop(eid, None)
             self._by_name.pop((ent.user_id, ent.name.lower()), None)
+            for term in _name_terms(ent):
+                key = (ent.user_id, term)
+                ids = self._by_term.get(key)
+                if ids is not None:
+                    ids.discard(eid)
+                    if not ids:
+                        del self._by_term[key]
             self._out.pop(eid, None)
             self._in.pop(eid, None)
             removed += 1

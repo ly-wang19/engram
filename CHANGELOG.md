@@ -3,6 +3,30 @@
 All notable changes to Engram are documented here. The project uses semantic versioning for distributed
 artifacts; storage schema compatibility is documented separately when it changes.
 
+## [Unreleased]
+
+### Added
+
+- Native export→import roundtrip (`format="engram"`, auto-sniffed): a `/v1/export` payload now restores
+  directly into another instance via `POST /v1/import`, `Memory.import_export()`, the `engram_import`
+  MCP tool, or `python -m engram.connectors` — preserving fact ids, bi-temporal stamps, supersession
+  chains, and provenance. Idempotent by id; the target re-embeds with its own embedder, which is also
+  the supported embedder-migration path.
+- `ENGRAM_STORAGE` environment variable selects the vector backend (`memory` default, `lancedb`
+  opt-in) for the server/MCP surfaces; unknown values fail closed at startup.
+- Optional Bearer authentication for the MCP streamable-HTTP transport (`--http-token` /
+  `ENGRAM_MCP_HTTP_TOKEN`). Non-loopback `--http` binds without a token are refused at startup unless
+  `ENGRAM_MCP_HTTP_OPEN=1` explicitly delegates access control to an external layer.
+
+### Fixed
+
+- `POST /v1/import` returns 400 with the parser's reason on malformed payloads instead of an
+  unhandled 500.
+- The import CLI's local mode writes through `MemoryService`, so it uses the same digest-backed
+  namespace directories and locks as the HTTP/MCP surfaces (previously a namespace like `a/b` landed
+  in a different directory than the one the server reads).
+- `/v1/stats` now filters by the canonical linked identity, matching every other read path.
+
 ## [0.1.0] - 2026-07-14
 
 ### Added

@@ -9,27 +9,17 @@ from ..config import Config
 from ..consolidate.conflict import is_single_valued
 from ..embed import Embedder
 from ..store import GraphStore, VectorStore
-from ..types import Fact
-from ..util import cosine, fmt_date, now, recency, tokenize
+from ..types import Entity, Fact
+from ..util import cosine, indexed_text, now, recency, tokenize
+from ..util import date_terms as date_terms  # noqa: F401  re-export: callers import it from here
 from .fusion import order_by_score, weighted_rrf
 from .lexical import bm25_scores, stem, stems
 
-_MONTHS = ("january", "february", "march", "april", "may", "june", "july", "august",
-           "september", "october", "november", "december")
+# `date_terms` now lives in engram.util so the lexical index can tokenize facts identically — the index's
+# corpus statistics must describe the same documents the scorer scores. Imported (not redefined) here
+# because callers already do `from .hybrid import date_terms`.
+
 _GRAPH_HOP_DECAY = 0.65
-
-
-def date_terms(epoch: float) -> str:
-    """Render a fact's date as searchable tokens (year, numeric month, month name) so a query that names
-    a time ('May 2023', 'in 2024') matches the right-dated facts via BM25 — dates otherwise live only in
-    valid_at and are invisible to retrieval. This is query-time temporal matching done as a lexical signal
-    (MemoryScope time_ratio in spirit), with no score multiplier that could override relevance."""
-    try:
-        d = fmt_date(epoch)  # YYYY-MM-DD
-        y, m, _ = d.split("-")
-        return f"{d} {y} {m} {_MONTHS[int(m) - 1]}"
-    except Exception:  # noqa: BLE001
-        return ""
 
 # Predicates that mark a durable identity or preference fact (vs. an incidental event mention). Used for
 # type-weighted fusion — these get a retrieval boost (CLAUDE.md §3.3; MemoryScope/OMEGA convergent finding).
@@ -73,10 +63,38 @@ _ENTITY_ANCHOR_STOP = frozenset({
     "the", "and", "for", "with", "from", "inc", "ltd", "llc", "corp", "co", "company", "project",
     "user", "assistant", "team", "group", "system", "ai",
 })
+# (cue, how many words may sit between the cue and the entity name). Both exclusion regexes are built
+# from this one list so the cheap pre-test below can never drift out of sync with the real matcher.
+_EXCLUSION_CUES: tuple[tuple[str, int], ...] = (
+    (r"\bnot\b", 5),
+    (r"\bexcept\b", 4),
+    (r"\bexcluding\b", 4),
+    (r"\bexclude\b", 4),
+    (r"\bother\s+than\b", 4),
+    (r"\brather\s+than\b", 4),
+    (r"\bbesides\b", 4),
+    ("不是", 0),
+    ("不在", 0),
+    ("排除", 0),
+    ("除了", 0),
+)
 _EXCLUSION_BEFORE_RE = re.compile(
-    r"(?:\bnot\b(?:\s+\w+){0,5}|\bexcept\b(?:\s+\w+){0,4}|\bexcluding\b(?:\s+\w+){0,4}|"
-    r"\bexclude\b(?:\s+\w+){0,4}|\bother\s+than\b(?:\s+\w+){0,4}|"
-    r"\brather\s+than\b(?:\s+\w+){0,4}|\bbesides\b(?:\s+\w+){0,4}|不是|不在|排除|除了)\s*$",
+    "(?:"
+    + "|".join(cue + (rf"(?:\s+\w+){{0,{gap}}}" if gap else "") for cue, gap in _EXCLUSION_CUES)
+    + r")\s*$",
+    re.IGNORECASE,
+)
+# A necessary condition for _EXCLUSION_BEFORE_RE to match any substring of the query: the query must
+# contain at least one cue somewhere. _EXCLUSION_BEFORE_RE is anchored to the end of the text preceding
+# an entity mention, so it cannot be run against the whole query directly — but if no cue appears at all,
+# no slice of the query can contain one either, and the entity scan can be skipped outright.
+#
+# The trailing \b is dropped deliberately, making this test weaker than the real matcher. It has to be:
+# the slice ends where an entity name begins, and a non-ASCII name carries no boundary guard, so in
+# "not上海" the slice "not" ends on a word boundary that does not exist in the full string. Over-matching
+# only costs a scan that finds nothing; under-matching would silently drop an exclusion.
+_EXCLUSION_CUE_RE = re.compile(
+    "|".join(cue[:-2] if cue.endswith(r"\b") else cue for cue, _ in _EXCLUSION_CUES),
     re.IGNORECASE,
 )
 _EXCLUSION_VALUE_PREDS = frozenset({
@@ -131,12 +149,21 @@ def graph_relation_relevance(query: str, fact: Fact) -> float:
     return 0.0
 
 
+def _is_anchor_term(term: str) -> bool:
+    """Whether a stemmed term is distinctive enough to anchor a query to a single entity.
+
+    A property of the term alone, never of the entity holding it — which is what lets the same decision be
+    made from an index keyed on terms as from a walk over every entity.
+    """
+    return len(term) >= 3 and not term.isdigit() and term not in _ENTITY_ANCHOR_STOP
+
+
 def _entity_anchor_terms(name: str, aliases: list[str]) -> set[str]:
     terms: set[str] = set()
     for text in (name, *aliases):
         for tok in tokenize(text):
             term = stem(tok)
-            if len(term) >= 3 and not term.isdigit() and term not in _ENTITY_ANCHOR_STOP:
+            if _is_anchor_term(term):
                 terms.add(term)
     return terms
 
@@ -171,20 +198,47 @@ class HybridRetriever:
         from ..embed import HashingEmbedder
         self._semantic = not isinstance(embedder, HashingEmbedder)
 
+    def _anchor_scope(self, q: set[str], user_id: str) -> tuple[list[Entity], Optional[dict[str, set[str]]]]:
+        """Entities worth testing against the query, and per-term owner sets when the backend indexes them.
+
+        An entity can only anchor a query it shares a term with, so walking the whole store to find that
+        out is wasted work. When the graph can look terms up, both the candidate list and the alias-anchor
+        uniqueness counts come straight from the query's own terms. Backends without the lookup fall back
+        to the full scan, which is what the GraphStore interface actually guarantees.
+        """
+        lookup = getattr(self.graph, "entities_by_terms", None)
+        if lookup is None:
+            return [ent for ent in self.graph.entities.values() if ent.user_id == user_id], None
+        hits = lookup(user_id, q)
+        by_term = {term: {ent.id for ent in ents} for term, ents in hits.items()}
+        seen: dict[str, Entity] = {}
+        for ents in hits.values():
+            for ent in ents:
+                seen[ent.id] = ent
+        return list(seen.values()), by_term
+
     def query_entity_ids(self, query: str, user_id: str) -> set[str]:
         """Entity nodes whose full name appears in the query (the query's anchor entities)."""
         q = set(stems(query)) | set(tokenize(query))
         ids: set[str] = set()
-        entities = [ent for ent in self.graph.entities.values() if ent.user_id == user_id]
+        entities, indexed_terms = self._anchor_scope(q, user_id)
         for ent in entities:
             names = (ent.name, *ent.aliases)
             if any((toks := [stem(t) for t in tokenize(name)]) and all(t in q for t in toks) for name in names):
                 ids.add(ent.id)
         if self.config.graph_entity_alias_anchor:
-            term_to_ids: dict[str, set[str]] = {}
-            for ent in entities:
-                for term in _entity_anchor_terms(ent.name, ent.aliases):
-                    term_to_ids.setdefault(term, set()).add(ent.id)
+            if indexed_terms is None:
+                term_to_ids: dict[str, set[str]] = {}
+                for ent in entities:
+                    for term in _entity_anchor_terms(ent.name, ent.aliases):
+                        term_to_ids.setdefault(term, set()).add(ent.id)
+            else:
+                # The index keys on every name/alias term; the anchor filter tests the term, not the
+                # entity (see _is_anchor_term), so applying it to the query's terms selects exactly the
+                # owner sets the full build would have produced.
+                term_to_ids = {
+                    term: owners for term, owners in indexed_terms.items() if _is_anchor_term(term)
+                }
             for term in q:
                 hits = term_to_ids.get(term)
                 if hits is not None and len(hits) == 1:
@@ -207,6 +261,11 @@ class HybridRetriever:
         if not (self.config.graph_proximity and self.config.graph_negative_constraints):
             return set()
         query_l = query.lower()
+        # Most queries carry no negation at all. Checking the query once is exactly equivalent to
+        # checking every entity name against it (see _EXCLUSION_CUE_RE) and skips a scan of the whole
+        # entity set — which every retrieval paid, since query_entity_ids() ends by calling this.
+        if not _EXCLUSION_CUE_RE.search(query_l):
+            return set()
         direct: set[str] = set()
         entities = [ent for ent in self.graph.entities.values() if ent.user_id == user_id]
         for ent in entities:
@@ -339,11 +398,76 @@ class HybridRetriever:
             if not is_single_valued(fact.predicate) or heads.get(fact.slot) is fact
         ]
 
+    def _bounded_candidates(
+        self, query: str, user_id: str, as_of: Optional[float], qvec: list[float]
+    ) -> Optional[list[Fact]]:
+        """A bounded candidate set for fusion, or None when the store has no index to select from.
+
+        Three channels are unioned, because dropping any one loses recall the hybrid thesis depends on
+        (CLAUDE.md M1 — facts-only lost recall; so does vectors-only):
+
+          * **lexical** — exact names, numbers, dates. Vector-weak, retrieval-decisive.
+          * **semantic** — paraphrases no shared token would catch.
+          * **graph** — facts hanging off the entities the query names, which is how cross-session links
+            surface at all. Read from the relations incident to those entities, so it stays bounded.
+
+        Then each candidate's conflict slot is completed. Without that, `_current_slot_heads` could see a
+        superseded fact whose head happened to fall outside the pool and let the stale value through —
+        a correctness bug, not a ranking one.
+        """
+        index = getattr(self.fact_store, "index", None)
+        if index is None:
+            return None
+        pool = max(1, self.config.candidate_pool)
+
+        ids = index.lexical_candidates(query, pool, user_id=user_id)
+
+        if self.config.candidate_vector_channel:
+            # Declarative tenant filter, not a Python predicate: a backend can push the former into its
+            # own index, while the latter forces it to scan every row before ranking.
+            for _score, payload in self.fact_store.search(qvec, pool, user_id=user_id):
+                fid = getattr(payload, "id", None)
+                if isinstance(fid, str):
+                    ids.add(fid)
+
+        for eid in self.query_entity_ids(query, user_id):
+            for direction in ("out", "in"):
+                for rel in self.graph.neighbors(eid, as_of, direction):
+                    fid = getattr(rel, "fact_id", None)
+                    if fid:
+                        ids.add(fid)
+
+        matched = [f for f in index.resolve(ids) if f.user_id == user_id]
+        slots = {f.slot for f in matched if is_single_valued(f.predicate)}
+        if not slots:
+            return matched
+        # Resolve once over the completed id set rather than appending: `resolve` returns store order,
+        # and appending slot-mates at the end would put the candidates in a different order than the
+        # full scan sees, which rank-based fusion would turn into a different result.
+        return [f for f in index.resolve(ids | index.slot_members(slots)) if f.user_id == user_id]
+
     def retrieve(
         self, query: str, user_id: str, as_of: Optional[float] = None, top_k: Optional[int] = None
     ) -> tuple[list[tuple[Fact, float]], dict]:
         top_k = top_k or self.config.top_k
-        live = [f for f in self.fact_store.values() if f.user_id == user_id and f.is_live(as_of)]
+        qvec = self.embedder.embed(query)
+
+        # Bounded retrieval scores a candidate pool instead of the whole store (Bet E). It is off by
+        # default: with `candidate_pool` >= the live fact count the two paths return the same ranking,
+        # but below that they can differ, and the published numbers came from the full scan.
+        corpus = None
+        candidates = (
+            self._bounded_candidates(query, user_id, as_of, qvec)
+            if self.config.bounded_candidates
+            else None
+        )
+        if candidates is None:
+            live = [f for f in self.fact_store.values() if f.user_id == user_id and f.is_live(as_of)]
+        else:
+            live = [f for f in candidates if f.is_live(as_of)]
+            # Corpus statistics must describe the tenant's collection, not the pool — see corpus_for().
+            corpus = self.fact_store.index.corpus_for(user_id, stems(query))
+
         live = self._current_slot_heads(live)
         excluded = self.graph_exclusion_zone(query, user_id, as_of)
         if excluded:
@@ -351,7 +475,6 @@ class HybridRetriever:
         if not live:
             return [], {"sem": {}, "lex": {}, "qids": set()}
 
-        qvec = self.embedder.embed(query)
         sem = {f.id: cosine(qvec, f.embedding or []) for f in live}
         # Type-weighted retrieval: scale the SEMANTIC score by fact type. Because an off-topic fact has
         # sem≈0, the multiplier only reorders among genuinely-relevant candidates (a preference fact beats
@@ -363,7 +486,9 @@ class HybridRetriever:
                 if tw != 1.0:
                     sem[f.id] *= tw
         # include each fact's date as searchable tokens so time-named queries ('May 2023') match by date
-        lex = bm25_scores(query, [(f.id, f"{f.text} {date_terms(f.valid_at)}") for f in live])
+        lex = bm25_scores(
+            query, [(f.id, indexed_text(f.text, f.valid_at)) for f in live], corpus=corpus
+        )
         gph, qids = self._graph_scores(query, user_id, live, as_of)
         t = now() if as_of is None else as_of
         rec = {f.id: recency(max(0.0, t - f.valid_at), self.config.recency_tau_days) for f in live}

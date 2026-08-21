@@ -35,6 +35,8 @@ except Exception as exc:  # noqa: BLE001
 
 from .. import __version__
 from ..service import MemoryService
+from .keys import KeyStore, KeyStoreError
+from .limits import IdempotencyCache, RateLimiter, idempotency_ttl, rate_limit_per_min
 
 
 DEFAULT_MAX_REQUEST_BYTES = 2 * 1024 * 1024
@@ -180,15 +182,152 @@ async def request_limits_and_security_headers(request: Request, call_next):
     return _apply_security_headers(await call_next(request), path)
 
 
+_keystore: Optional[KeyStore] = None
+_keystore_path: Optional[str] = None
+_limiter: Optional[RateLimiter] = None
+_limiter_per_min = -1
+_idempotency: Optional[IdempotencyCache] = None
+
+# Beyond this many tracked tenants, sweep the ones whose windows have emptied. Opportunistic rather than
+# on a timer so the server needs no background thread.
+_PRUNE_ABOVE = 1_000
+
+
+def _rate_limiter() -> RateLimiter:
+    """The shared limiter, rebuilt when the configured limit changes so a reconfigure takes effect."""
+    global _limiter, _limiter_per_min
+    per_min = rate_limit_per_min()
+    if _limiter is None or per_min != _limiter_per_min:
+        _limiter = RateLimiter(per_min)
+        _limiter_per_min = per_min
+    return _limiter
+
+
+def _idempotency_cache() -> IdempotencyCache:
+    global _idempotency
+    if _idempotency is None:
+        _idempotency = IdempotencyCache(ttl_seconds=idempotency_ttl())
+    return _idempotency
+
+
+def _count(name: str) -> None:
+    """Bump an aggregate counter, never at the cost of the request.
+
+    Instrumentation must not change behaviour. Building the service can itself fail (a misconfigured
+    backend), and that failure surfacing from inside an exception handler would replace a precise 401
+    with a generic 500 — losing the very diagnosis the counter exists to support.
+    """
+    try:
+        svc().metrics.count(name)
+    except Exception:  # noqa: BLE001 - a missing metric is never worth failing a request over
+        pass
+
+
+def _enforce_rate_limit(user: str) -> None:
+    limiter = _rate_limiter()
+    if not limiter.enabled:
+        return
+    if limiter.tracked_tenants > _PRUNE_ABOVE:
+        limiter.prune()
+    allowed, retry_after = limiter.check(user)
+    if not allowed:
+        # Counted, not logged per tenant: /metrics is unauthenticated, so a per-tenant breakdown would
+        # tell any caller which tenants exist. An operator needs to know throttling is happening at all.
+        _count("rate_limited")
+        # Retry-After is what makes a 429 actionable rather than a client guessing and hammering.
+        raise HTTPException(
+            429, "rate limit exceeded", headers={"Retry-After": str(int(retry_after) + 1)}
+        )
+
+
+def idempotent(user: str, request: Request, compute):
+    """Return the cached response for this Idempotency-Key, or compute it and cache it.
+
+    Applied to the endpoints that both mutate state and do expensive work, because that is where a
+    client's timeout-and-retry is most costly: the first request succeeded, only its response was lost.
+    Only successful results are cached -- replaying an exception would turn a transient failure into a
+    permanent one for the lifetime of the entry.
+    """
+    key = (request.headers.get("Idempotency-Key") or "").strip()[:256]
+    if not key:
+        return compute()
+    cache = _idempotency_cache()
+    cached = cache.get(user, key)
+    if cached is not None:
+        # A replay is work the server did not have to redo. Counting it is how an operator learns the
+        # header is actually being used, rather than assuming clients set it.
+        _count("idempotent_replays")
+        return cached
+    result = compute()
+    cache.put(user, key, result)
+    return result
+
+
 def auth(authorization: str = Header(default="")) -> str:
-    """Resolve the caller's user_id from the Bearer key. Dev open mode uses the key text itself as the
-    namespace, so anyone can try it without pre-provisioned keys while still avoiding shared anonymous
-    memory unless it is explicitly enabled."""
+    """Resolve the caller's user_id from the Bearer key, then apply their rate limit.
+
+    The limit lives here because this is the one place every protected route already passes through to
+    learn who is calling — a new endpoint cannot forget to be limited. Dev open mode uses the key text
+    itself as the namespace, so anyone can try it without pre-provisioned keys while still avoiding
+    shared anonymous memory unless it is explicitly enabled.
+    """
+    try:
+        user = _resolve_user(authorization)
+    except HTTPException as exc:
+        # A rising rejection count is how a misconfigured deployment or a credential-stuffing attempt
+        # becomes visible. Bucketed by status only -- the presented token is never recorded anywhere.
+        if exc.status_code in {401, 403}:
+            _count("auth_rejected")
+        elif exc.status_code == 503:
+            _count("auth_misconfigured")
+        raise
+    _enforce_rate_limit(user)
+    return user
+
+
+def keystore() -> KeyStore:
+    """Runtime-issued keys, persisted beside the data dir. Built lazily so importing the app touches
+    no disk, and rebuilt when the service is (tests point it at a temp dir)."""
+    global _keystore, _keystore_path
+    path = os.path.join(svc().data_dir, "api_keys.json")
+    if _keystore is None or _keystore_path != path:
+        _keystore = KeyStore(path)
+        _keystore_path = path
+    return _keystore
+
+
+def admin_auth(authorization: str = Header(default="")) -> bool:
+    """Gate the key-management surface behind its own token.
+
+    Fails closed: with ENGRAM_ADMIN_TOKEN unset there is no admin surface at all, so an open-mode
+    deployment cannot have keys minted against it by anyone who finds the endpoint.
+    """
+    expected = os.environ.get("ENGRAM_ADMIN_TOKEN", "").strip()
+    if not expected:
+        raise HTTPException(403, "admin surface disabled — set ENGRAM_ADMIN_TOKEN to manage API keys")
+    token = _bearer_token(authorization)
+    if not token or not hmac.compare_digest(token, expected):
+        raise HTTPException(401, "invalid admin token")
+    return True
+
+
+def _resolve_user(authorization: str) -> str:
     try:
         keys = _load_keys()
     except AuthConfigError as exc:
         raise HTTPException(503, "invalid API key configuration") from exc
     token = _bearer_token(authorization)
+
+    # Runtime-issued keys are consulted first so a revoked key cannot be resurrected by a stale env
+    # entry, and so a hosted deployment can mint tenants without a restart. An unreadable key store is
+    # a 503, never an open door.
+    try:
+        issued_user = keystore().resolve(token)
+    except KeyStoreError as exc:
+        raise HTTPException(503, "invalid API key store") from exc
+    if issued_user:
+        return issued_user
+
     if keys:
         matched_user = None
         for key, user in keys.items():
@@ -207,7 +346,48 @@ def auth(authorization: str = Header(default="")) -> str:
             "missing bearer namespace: in ENGRAM_OPEN mode send Authorization: Bearer <namespace>, "
             "or set ENGRAM_ALLOW_ANONYMOUS=1 to allow shared anonymous memory",
         )
-    raise HTTPException(401, "set ENGRAM_API_KEYS (user:key,...) or ENGRAM_OPEN=1")
+    raise HTTPException(
+        401,
+        "no API key recognized — issue one via POST /v1/admin/keys (needs ENGRAM_ADMIN_TOKEN), "
+        "or set ENGRAM_API_KEYS (user:key,...) or ENGRAM_OPEN=1",
+    )
+
+
+class IssueKeyReq(BaseModel):
+    user: str = Field(min_length=1, max_length=512)
+    label: str = Field(default="", max_length=256)
+
+
+@app.post("/v1/admin/keys")
+def issue_key(req: IssueKeyReq, _: bool = Depends(admin_auth)):
+    """Mint a key for a tenant. The plaintext is in this response and nowhere else — it is hashed at
+    rest, so a lost key is reissued, never recovered."""
+    try:
+        return keystore().issue(req.user, label=req.label)
+    except KeyStoreError as exc:
+        raise HTTPException(503, "invalid API key store") from exc
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.get("/v1/admin/keys")
+def list_keys(user: Optional[str] = None, _: bool = Depends(admin_auth)):
+    """Key records, newest first. Never includes a secret or its digest."""
+    try:
+        return {"keys": keystore().list(user)}
+    except KeyStoreError as exc:
+        raise HTTPException(503, "invalid API key store") from exc
+
+
+@app.delete("/v1/admin/keys/{key_id}")
+def revoke_key(key_id: str, _: bool = Depends(admin_auth)):
+    try:
+        revoked = keystore().revoke(key_id)
+    except KeyStoreError as exc:
+        raise HTTPException(503, "invalid API key store") from exc
+    if not revoked:
+        raise HTTPException(404, "no such live key")
+    return {"ok": True, "id": key_id, "revoked": True}
 
 
 class RememberReq(BaseModel):
@@ -269,6 +449,17 @@ def health():
 def ready():
     payload = health()
     return JSONResponse(payload, status_code=200 if payload["ready"] else 503)
+
+
+@app.get("/metrics")
+def metrics():
+    """Live latency, volume and token aggregates for the running service.
+
+    Unauthenticated, like /health, and safe to be: the payload is aggregate-only by construction — it
+    carries no namespace names, queries or content, so it cannot reveal that a given tenant exists, let
+    alone what they stored. Operators who still want it private should not expose it at the proxy.
+    """
+    return svc().metrics.snapshot()
 
 
 # The production console (the React app in frontend/) is served at /ui once built; "/" redirects
@@ -377,10 +568,16 @@ async function delFact(id){ if(!confirm('永久删除这条记忆?'))return; awa
 
 
 @app.post("/v1/remember")
-def remember(req: RememberReq, user: str = Depends(auth)):
+def remember(req: RememberReq, request: Request, user: str = Depends(auth)):
     # Route by ephemerality inside the service: either way the dated episode is stored (history stays
     # answerable); transient state also goes to working memory and is NOT promoted into a durable fact.
-    return svc().remember(user, req.content, session_id=req.session_id, scope=req.scope)
+    # Idempotency-Key guards the retry-after-timeout case, which would otherwise store the episode twice
+    # and pay to consolidate it twice.
+    return idempotent(
+        user,
+        request,
+        lambda: svc().remember(user, req.content, session_id=req.session_id, scope=req.scope),
+    )
 
 
 @app.post("/v1/recall")
@@ -519,13 +716,24 @@ class ImportReq(BaseModel):
 
 
 @app.post("/v1/import")
-def import_history(req: ImportReq, user: str = Depends(auth)):
+def import_history(req: ImportReq, request: Request, user: str = Depends(auth)):
     """Bulk-ingest an external history in one batched pass. See `python -m engram.connectors` for a CLI
-    that parses common exports and posts here."""
+    that parses common exports and posts here. A native `/v1/export` payload (format='engram' or
+    auto-sniffed) restores directly — the cross-instance migration path."""
     if req.sessions is None and req.data is None:
         raise HTTPException(400, "provide either 'sessions' (pre-parsed) or 'data' (+ 'format') to import")
-    return svc().import_(user, sessions=req.sessions, data=req.data, format=req.format,
-                         consolidate=req.consolidate, summarize=req.summarize)
+    try:
+        # The most expensive mutating endpoint there is, so a lost response is the most expensive thing
+        # to replay: an Idempotency-Key makes the retry free.
+        return idempotent(
+            user,
+            request,
+            lambda: svc().import_(user, sessions=req.sessions, data=req.data, format=req.format,
+                                  consolidate=req.consolidate, summarize=req.summarize),
+        )
+    except ValueError as exc:
+        # a malformed payload is the CLIENT's error — 400 with the parser's reason, never a raw 500
+        raise HTTPException(400, f"import failed: {exc}") from exc
 
 
 # --- OpenAI-compatible chat with transparent memory (drop-in: point your OpenAI client's base_url here) --
@@ -562,6 +770,9 @@ def chat_completions(req: ChatCompletionReq, background: BackgroundTasks, user: 
             as_of=opts.get("as_of"),
             redact_sensitive=bool(opts.get("redact_sensitive", False)),
             session_id=session_id,
+            # Opt-in: it pays off across a multi-turn session and costs a little on a one-shot call
+            # (results/layered_context_tokens.md), so the caller who knows which they are decides.
+            layered=bool(opts.get("layered", False)),
         )
     except oc.NoLLMConfigured as exc:
         raise HTTPException(503, str(exc))

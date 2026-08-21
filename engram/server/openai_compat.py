@@ -47,14 +47,25 @@ def latest_user_text(messages: list) -> str:
     return ""
 
 
-def build_prompt(messages: list, memory_context: str) -> tuple[Optional[str], str]:
+def build_prompt(
+    messages: list, memory_context: str, stable_context: str = ""
+) -> tuple[Optional[str], str]:
     """Render the request's messages into a (system, prompt) pair for the LLM.complete interface:
       * system = the injected memory block + any of the request's own system messages
       * prompt = the single user turn, or the full transcript for a multi-turn conversation
     Backend-agnostic on purpose: it works with any LLM (incl. the offline FakeLLM in tests), not only
-    a litellm chat model."""
+    a litellm chat model.
+
+    `stable_context` is the query-independent half of memory (profile and usage guide). It goes at the
+    very front of the system prompt and the per-query evidence moves into the user turn, so the system
+    block is byte-identical across a session's turns. Provider prompt-caching matches on a prefix, and
+    with the whole retrieved slice in the system block — which is what happens when `stable_context` is
+    empty — that prefix changes every turn and nothing can ever be reused.
+    """
     system_parts: list[str] = []
-    if memory_context.strip():
+    if stable_context.strip():
+        system_parts.append(_MEMORY_PREAMBLE + stable_context.strip())
+    elif memory_context.strip():
         system_parts.append(_MEMORY_PREAMBLE + memory_context.strip())
     system_parts += [c for c in (_content(m) for m in messages
                                  if isinstance(m, dict) and m.get("role") == "system") if c.strip()]
@@ -68,6 +79,12 @@ def build_prompt(messages: list, memory_context: str) -> tuple[Optional[str], st
     else:
         rendered = "\n".join(f"{m['role'].capitalize()}: {_content(m)}" for m in convo)
         prompt = rendered + "\nAssistant:"
+
+    # Only when the split is active: this turn's evidence rides with the turn, leaving the system block
+    # unchanged. Without a stable half there is nothing to protect, and moving the memory here would
+    # only make the prompt longer for no gain.
+    if stable_context.strip() and memory_context.strip():
+        prompt = f"{memory_context.strip()}\n\n{prompt}" if prompt else memory_context.strip()
     return system, prompt
 
 
@@ -84,6 +101,7 @@ def chat_completion(
     as_of: Optional[float] = None,
     redact_sensitive: bool = False,
     session_id: Optional[str] = None,
+    layered: bool = False,
 ) -> dict:
     """Recall → inject → generate → return an OpenAI ChatCompletion object (with an `engram` extension
     describing what memory was used). Does NOT write memory — the route schedules that off the critical
@@ -93,25 +111,43 @@ def chat_completion(
     query = latest_user_text(messages) or (_content(messages[-1]) if messages else "")
 
     memory_context = ""
+    stable_context = ""
     if do_recall and query:
-        memory_context = (
-            svc.recall(
-                user,
+        if layered:
+            # Split so the system prompt stops changing every turn. Same retrieval either way, so the
+            # evidence the model sees is unchanged -- only where each half is placed.
+            parts = svc.get(user).layered_context(
                 query,
-                lean=True,
+                user_id=user,
                 n_chunks=n_chunks,
                 session_id=session_id,
                 as_of=as_of,
                 redact_sensitive=redact_sensitive,
-            ).get("context") or ""
-        )
+                # This surface already frames the memory with _MEMORY_PREAMBLE, so the library's own
+                # usage guide would be a second copy of the same instruction. Measured at +14% prompt
+                # tokens for no behaviour change (results/layered_context_tokens.md).
+                guide=False,
+            )
+            stable_context, memory_context = parts.stable, parts.dynamic
+        else:
+            memory_context = (
+                svc.recall(
+                    user,
+                    query,
+                    lean=True,
+                    n_chunks=n_chunks,
+                    session_id=session_id,
+                    as_of=as_of,
+                    redact_sensitive=redact_sensitive,
+                ).get("context") or ""
+            )
 
     if svc.llm is None:
         raise NoLLMConfigured(
             "no LLM configured for generation — set ENGRAM_LLM (e.g. 'deepseek'), or use /v1/recall "
             "for retrieval-only.")
 
-    system, prompt = build_prompt(messages, memory_context)
+    system, prompt = build_prompt(messages, memory_context, stable_context)
     content = svc.llm.complete(prompt, system=system)
 
     p_tokens = _est_tokens((system or "") + " " + prompt)
@@ -130,8 +166,11 @@ def chat_completion(
                   "total_tokens": p_tokens + c_tokens},
         # Engram extension — transparency about the memory layer (ignored by standard OpenAI clients).
         "engram": {
-            "recalled": bool(memory_context.strip()),
-            "memory_tokens_est": _est_tokens(memory_context),
+            "recalled": bool((memory_context + stable_context).strip()),
+            "memory_tokens_est": _est_tokens(memory_context) + _est_tokens(stable_context),
+            # When layered, this is the byte-identical prefix a provider's prompt cache can reuse across
+            # the session; 0 means the whole slice still rides in the system block and nothing is stable.
+            "cacheable_tokens_est": _est_tokens(stable_context),
             "session_id": session_id,
             "as_of": as_of,
             "redacted_sensitive": redact_sensitive,

@@ -2,10 +2,24 @@
 from __future__ import annotations
 
 import math
+from typing import Optional, Protocol
 
 from ..util import stem, stems
 
-__all__ = ["stem", "stems", "token_overlap", "bm25_scores"]
+__all__ = ["stem", "stems", "token_overlap", "bm25_scores", "CorpusStats"]
+
+
+class CorpusStats(Protocol):
+    """Collection-wide BM25 statistics, so a candidate subset can be scored as if the whole store were."""
+
+    @property
+    def n_docs(self) -> int: ...
+
+    @property
+    def avgdl(self) -> float: ...
+
+    @property
+    def df(self) -> dict[str, int]: ...
 
 
 def overlap_terms(query: str, text: str) -> set[str]:
@@ -16,17 +30,36 @@ def token_overlap(query: str, text: str) -> int:
     return len(overlap_terms(query, text))
 
 
-def bm25_scores(query: str, docs: list[tuple[str, str]], k1: float = 1.5, b: float = 0.75) -> dict[str, float]:
-    """docs: list of (id, text). Returns {id: bm25_score}."""
+def bm25_scores(
+    query: str,
+    docs: list[tuple[str, str]],
+    k1: float = 1.5,
+    b: float = 0.75,
+    *,
+    corpus: Optional["CorpusStats"] = None,
+) -> dict[str, float]:
+    """docs: list of (id, text). Returns {id: bm25_score}.
+
+    `corpus` supplies collection-wide statistics (N, avgdl, document frequency). Pass it when `docs` is a
+    *candidate subset* of a larger store: BM25's IDF and length normalisation are properties of the whole
+    collection, so deriving them from a subset would give the same fact a different score depending on
+    which other facts happened to be retrieved alongside it. With `corpus`, scoring a subset yields
+    exactly the scores a full scan would have produced — which is what makes bounded candidate retrieval
+    a pure speed optimisation rather than a silent ranking change."""
     if not docs:
         return {}
     doc_tokens = {doc_id: stems(text) for doc_id, text in docs}
-    n = len(docs)
-    avgdl = max(1.0, sum(len(t) for t in doc_tokens.values()) / n)
-    df: dict[str, int] = {}
-    for toks in doc_tokens.values():
-        for w in set(toks):
-            df[w] = df.get(w, 0) + 1
+    if corpus is not None:
+        n = corpus.n_docs
+        avgdl = corpus.avgdl
+        df = corpus.df
+    else:
+        n = len(docs)
+        avgdl = max(1.0, sum(len(t) for t in doc_tokens.values()) / n)
+        df = {}
+        for toks in doc_tokens.values():
+            for w in set(toks):
+                df[w] = df.get(w, 0) + 1
     q_terms = set(stems(query))
     scores: dict[str, float] = {}
     for doc_id, toks in doc_tokens.items():
@@ -41,7 +74,11 @@ def bm25_scores(query: str, docs: list[tuple[str, str]], k1: float = 1.5, b: flo
         for w in q_terms:
             if w not in tf:
                 continue
-            idf = math.log(1 + (n - df[w] + 0.5) / (df[w] + 0.5))
-            s += idf * (tf[w] * (k1 + 1)) / (tf[w] + k1 * (1 - b + b * dl / avgdl))
+            # df.get(): with a supplied corpus a term can be absent if the index has not caught up; an
+            # unseen term is maximally rare, which is what df=0 yields here. In the self-derived path
+            # every term of every doc is present by construction, so this changes nothing.
+            dfw = df.get(w, 0)
+            idf = math.log(1 + (n - dfw + 0.5) / (dfw + 0.5))
+            s += idf * (tf[w] * (k1 + 1)) / (tf[w] + k1 * (1 - b + b * dl / max(1.0, avgdl)))
         scores[doc_id] = s
     return scores

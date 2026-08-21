@@ -33,6 +33,25 @@ class Config:
     recency_tau_days: float = 45.0
     top_k: int = 5
     candidate_k: int = 24  # per-retriever candidate pool before fusion
+    # Bounded candidate retrieval (Bet E). OFF by default: it changes which facts get *scored*, and the
+    # published numbers were produced by the full scan, so turning it on silently would break the
+    # "every number traces to a committed log" rule. With `candidate_pool` >= the live fact count the two
+    # paths are provably identical (tests/test_bounded_candidates.py) — the flag buys speed at scale, and
+    # its ranking behaviour at scale still needs a keyed harness run before it becomes the default.
+    bounded_candidates: bool = False
+    candidate_pool: int = 400  # per-channel candidate budget before fusion when bounded_candidates is on
+    # Whether bounded retrieval asks the vector store for semantic candidates. Measured cost/benefit:
+    # neither shipped backend has a real ANN index (the in-memory store brute-forces cosine and sorts;
+    # LanceDB materialises the whole table whenever a Python predicate is supplied), so this channel
+    # re-introduces the very O(n) pass the candidate pool exists to avoid. Leaving it ON is the
+    # recall-safe default; turning it OFF is what makes the read path genuinely bounded, at the cost of
+    # missing facts that are semantically relevant but share no query term. Flip it off only with a real
+    # ANN backend, or after a keyed harness run shows the recall loss is acceptable.
+    candidate_vector_channel: bool = True
+    # Segment size for reranking long documents. Cross-encoders read a bounded window (512 tokens for the
+    # BGE rerankers) and truncate silently past it, so raw sessions are scored segment-by-segment and take
+    # their best segment's score. ~300 words sits inside that window once the query is added.
+    rerank_segment_words: int = 300
     rrf_k: int = 60  # Reciprocal Rank Fusion constant
     max_hops: int = 2  # multi-hop planner depth
     max_hot_facts: int = 10_000  # heat-tier cap; cold facts remain durable and can page back on hot miss
@@ -45,6 +64,27 @@ class Config:
     preference_reversal_extraction: bool = True  # extract high-confidence "no longer like X" preference updates
     numeric_aggregation_candidates: bool = True  # extract money/hour/page rows for count/sum questions
     aggregation_recall_expansion: bool = True  # expand count/sum queries into high-recall evidence lookups
+    # How many sessions a counting question may render in FULL. 0 keeps today's behaviour.
+    #
+    # A count is answered by every relevant session at once, not by the best-ranked one, so a detail
+    # window narrower than the evidence set yields a confident wrong number. Measured on the committed
+    # headline log, the counting failures needed a median of 3 answer sessions while the planner asked
+    # for 1 chunk; coverage inside the detail window was 48% and the numeric errors ran in both
+    # directions — undercounting what was summarised away, overcounting what a summary said twice
+    # (results/retrieval_diagnosis.md).
+    #
+    # MEASURED AND INSUFFICIENT — off by default, and the measurement says leave it there.
+    # On the 28 multi-session counting failures (results/aggregation_coverage.md): coverage of the answer
+    # sessions rose 38% -> 56% at cap=5 and only 59% at cap=12, while rendered sessions went 2.0 -> 4.4.
+    # Raising the budget 2.4x bought three points of coverage, because the subqueries run out of distinct
+    # sessions at about four. The remaining 41% is never selected even though 89% of it sits in the main
+    # query's top-15 — so the binding constraint is which sessions the round-robin picks, not how many it
+    # is allowed to render. Best case +1.2 points, under a conversion of 1 that the same log refutes;
+    # below the 2.94-point resolution floor either way.
+    #
+    # Kept rather than deleted because the knob is inert at 0 and a coverage-driven selector would want
+    # the budget it provides. It is not a fix on its own, and turning it on buys tokens, not accuracy.
+    aggregation_chunk_cap: int = 0
     aggregation_constraint_filter: bool = True  # mark numeric candidates that violate query constraints as EXCLUDE
     procedural_extraction: bool = True  # extract durable runbooks/how-to steps into typed procedure facts
     summary_fallback: bool = True  # answer from derived session summaries when facts cannot answer

@@ -22,7 +22,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from engram import Memory  # noqa: E402
 from engram.config import Config  # noqa: E402
 from engram.llm.providers import load_dotenv, make_embedder, make_llm  # noqa: E402
-from eval.longmemeval import ingest, load_data, sessions_of  # noqa: E402
+from eval.longmemeval import ingest, load_data  # noqa: E402
 
 
 def build_dev(items, embedder, extractor, extract_k=20):

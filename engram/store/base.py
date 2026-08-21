@@ -18,8 +18,24 @@ class VectorStore(ABC):
 
     @abstractmethod
     def search(
-        self, vector: list[float], top_k: int, where: Optional[Predicate] = None
-    ) -> list[tuple[float, Any]]: ...
+        self,
+        vector: list[float],
+        top_k: int,
+        where: Optional[Predicate] = None,
+        *,
+        user_id: Optional[str] = None,
+    ) -> list[tuple[float, Any]]:
+        """Nearest neighbours, optionally restricted.
+
+        Two filters, because they cost different things. `where` is an arbitrary Python predicate: a
+        backend cannot see inside it, so it must consider every row before ranking — correct, but a full
+        scan. `user_id` is the one filter this system applies on literally every retrieval (multi-tenant
+        isolation), and stating it declaratively lets a backend push it into its own index instead.
+
+        That distinction is load-bearing: with only the predicate form, the tenant filter silently turned
+        every "ANN" search into a table scan, so no vector backend could ever deliver sub-linear reads.
+        Backends without native filtering may implement `user_id` as an equality check.
+        """
 
     @abstractmethod
     def get(self, key: str) -> Any | None: ...

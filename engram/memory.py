@@ -32,8 +32,10 @@ from .retrieve import (
     render_aggregation_candidates,
 )
 from .retrieve.lexical import bm25_scores, overlap_terms, stems
+from .retrieve.rerank import rerank_long
 from .store import (
     GraphStore,
+    IndexedVectorStore,
     InMemoryDocStore,
     InMemoryGraphStore,
     InMemoryVectorStore,
@@ -157,7 +159,13 @@ class Memory:
 
         self.episodes_doc = InMemoryDocStore()
         self.episodes_vec = make_vector_store("episodes_vec")
-        self.fact_store = make_vector_store("fact_store")  # HOT tier: the fast, frequently-retrieved working set
+        # HOT tier: the fast, frequently-retrieved working set. Decorated with a lexical/slot index when
+        # bounded candidate retrieval is on, so the retriever can pick candidates without scanning every
+        # fact. A decorator (not a new store) keeps every existing .upsert()/.delete() call site — here,
+        # in the consolidation engine, and in the persistence loader — indexing for free.
+        self.fact_store = make_vector_store("fact_store")
+        if self.config.bounded_candidates:
+            self.fact_store = IndexedVectorStore(self.fact_store)
         self.cold_store = make_vector_store("cold_store")  # COLD tier: aged-out facts, preserved (never deleted)
         self.summary_vec = make_vector_store("summary_vec")  # L2 session summaries, retrievable for a lean read slice
         self.graph = graph_store_factory()
@@ -447,10 +455,141 @@ class Memory:
     def import_data(self, data, format: str = "auto", user_id: str = "default",
                     session_id: str = "imported", **kwargs) -> dict[str, int]:
         """Convenience: parse a raw export (ChatGPT/OpenAI/JSONL/transcript — auto-sniffed) and import it
-        in one call. See `engram.connectors.parse` for formats."""
-        from .connectors import parse
+        in one call. A native Engram export (engram_export_version) routes to `import_export()` instead —
+        it restores facts/episodes directly rather than re-extracting them from parsed sessions."""
+        from .connectors import parse, sniff
+        from .connectors.base import load_json
+        fmt = (format or "auto").lower().strip()
+        if fmt == "engram" or (fmt == "auto" and sniff(data) == "engram"):
+            return self.import_export(load_json(data), user_id=user_id)
         return self.import_messages(parse(data, format=format, session_id=session_id),
                                     user_id=user_id, **kwargs)
+
+    def import_export(self, payload: dict, user_id: str = "default") -> dict:
+        """Restore a native `export()` payload — the migration path between Engram instances.
+
+        This is what makes memory belong to the user rather than to one deployment: facts arrive with
+        their original ids, bi-temporal stamps, supersession chains, and provenance intact (no
+        re-extraction), and the graph is rebuilt from them through the canonical GraphBuilder path.
+        Three invariants:
+          * Idempotent by id — an item whose id already exists locally is SKIPPED, never overwritten
+            (existing memory wins; re-importing the same export cannot duplicate or corrupt anything).
+          * Re-embedded locally — embeddings are never part of an export, so the target's embedder
+            regenerates them. This is also the supported way to migrate a store between embedders.
+          * No System-2 replay — imported episodes are marked consolidated because their extracted
+            facts are already in the payload; re-running extraction would mint duplicate facts.
+        Works on both export flavors: share-safe (facts + graph only) and include_sensitive=true
+        (full fidelity). Raises ValueError on a payload this build cannot read.
+        """
+        if not isinstance(payload, dict) or "engram_export_version" not in payload:
+            raise ValueError("not an Engram export: missing 'engram_export_version'")
+        version = payload.get("engram_export_version")
+        if version != 1:
+            raise ValueError(f"unsupported engram_export_version {version!r}; this build reads version 1")
+        user = self.resolver.resolve(user_id)
+
+        new_eps: list[Episode] = []
+        episodes_skipped = 0
+        for e in payload.get("episodes") or []:
+            if not isinstance(e, dict) or not str(e.get("content") or ""):
+                continue
+            eid = str(e.get("id") or "")
+            if eid and self.episodes_doc.get(eid) is not None:
+                episodes_skipped += 1
+                continue
+            ep = Episode(
+                content=str(e.get("content", "")),
+                user_id=user,
+                session_id=str(e.get("session_id") or "imported"),
+                speaker=str(e.get("speaker") or "session"),
+                event_time=float(e.get("event_time") or now()),
+                consolidated=True,
+                summary=str(e.get("summary") or ""),
+            )
+            if eid:
+                ep.id = eid
+            ep.metadata["date"] = str(e.get("date") or fmt_date(ep.event_time))
+            ep.metadata["source"] = "engram-export"
+            new_eps.append(ep)
+        if new_eps:
+            vecs = self.embedder.embed_batch([ep.content for ep in new_eps])
+            for ep, vec in zip(new_eps, vecs):
+                ep.embedding = vec
+                self.episodes_doc.put(ep.id, ep)
+                self.episodes_vec.upsert(ep.id, vec, ep)
+            with_summary = [ep for ep in new_eps if ep.summary]
+            if with_summary:
+                svecs = self.embedder.embed_batch([ep.summary for ep in with_summary])
+                for ep, vec in zip(with_summary, svecs):
+                    ep.summary_embedding = vec
+                    self.summary_vec.upsert(ep.id, vec, ep)
+
+        new_facts: list[Fact] = []
+        facts_skipped = 0
+        for fd in payload.get("facts") or []:
+            if not isinstance(fd, dict):
+                continue
+            fid = str(fd.get("id") or "")
+            if fid and (self.fact_store.get(fid) is not None or self.cold_store.get(fid) is not None):
+                facts_skipped += 1
+                continue
+            f = Fact(
+                subject=str(fd.get("subject") or ""),
+                predicate=str(fd.get("predicate") or ""),
+                object=str(fd.get("object") or ""),
+                text=str(fd.get("text") or ""),
+                display=str(fd.get("display") or ""),
+                user_id=user,
+                salience=float(fd.get("salience") or 1.0),
+                confidence=float(fd.get("confidence") or 1.0),
+                source=str(fd.get("source") or "extracted"),
+                category=str(fd.get("category") or ""),
+                sensitive=bool(fd.get("sensitive", False)),
+                valid_at=float(fd.get("valid_at") or now()),
+                invalid_at=float(fd["invalid_at"]) if fd.get("invalid_at") is not None else None,
+                created_at=float(fd.get("created_at") or now()),
+                expired_at=float(fd["expired_at"]) if fd.get("expired_at") is not None else None,
+                supersedes=str(fd["supersedes"]) if fd.get("supersedes") else None,
+                provenance=[str(p) for p in (fd.get("provenance") or [])],
+            )
+            if fid:
+                f.id = fid
+            new_facts.append(f)
+        if new_facts:
+            vecs = self.embedder.embed_batch([f.text for f in new_facts])
+            for f, vec in zip(new_facts, vecs):
+                f.embedding = vec
+                self.fact_store.upsert(f.id, vec, f)
+                # GraphBuilder copies valid_at/invalid_at onto the relation, so a superseded fact's
+                # edge arrives already invalidated — history moves as history, never resurrected.
+                self.engine.graph_builder.add_fact(f)
+
+        focus = payload.get("focus") or {}
+        focus_terms_added = 0
+        for key in ("track", "mute"):
+            incoming = [str(t).strip() for t in (focus.get(key) or []) if str(t).strip()]
+            if not incoming:
+                continue
+            merged = list(dict.fromkeys([*self.focus.get(key, []), *incoming]))
+            focus_terms_added += len(merged) - len(self.focus.get(key, []))
+            self.focus[key] = merged
+        if focus_terms_added:
+            self.apply_focus()
+
+        self._enforce_hot_limit()
+        self._persona_cache.clear()
+        return {
+            "format": "engram",
+            "engram_export_version": 1,
+            "sessions": len({ep.session_id for ep in new_eps}),
+            "episodes": len(new_eps),
+            "episodes_skipped": episodes_skipped,
+            "facts": len(new_facts),
+            "facts_skipped": facts_skipped,
+            "facts_added": len(new_facts),
+            "summaries": sum(1 for ep in new_eps if ep.summary),
+            "focus_terms_added": focus_terms_added,
+        }
 
     def link_identity(self, a: str, b: str) -> str:
         return self.resolver.link(a, b)
@@ -1882,6 +2021,7 @@ class Memory:
             plan_evidence(
                 query,
                 aggregation_recall_expansion=self.config.aggregation_recall_expansion,
+                aggregation_chunk_cap=self.config.aggregation_chunk_cap,
             )
             if self.config.evidence_planner
             else None
@@ -2167,6 +2307,15 @@ class Memory:
             return self._fit_blocks_by_evidence_budget(blocks, char_budget, need)
         return assembled[:char_budget]
 
+    def layered_context(self, query: str, user_id: str = "default", **kwargs):
+        """`lean_context` split into a cacheable half and a per-query half (see retrieve/layered.py).
+
+        Same evidence, same retrieval — it only changes where a caller can put each part, so a multi-turn
+        session stops re-sending the profile and the memory map on every turn."""
+        from .retrieve.layered import layered_context
+
+        return layered_context(self, query, user_id=user_id, **kwargs)
+
     # --- read path ---
     def search(
         self,
@@ -2298,7 +2447,16 @@ class Memory:
                 eps = [eps[i] for i in fused_order]
 
         if self.reranker is not None and len(eps) > k:
-            ranked = self.reranker.rerank(query, [(i, ep.content) for i, ep in enumerate(eps)], k)
+            # Segment-level, because a session is ~2000 tokens and the cross-encoder reads ~512: scoring
+            # whole sessions silently ranks each one on its opening quarter (the known _S regression
+            # noted in lean_context). Each session scores as its best segment.
+            ranked = rerank_long(
+                self.reranker,
+                query,
+                [(i, ep.content) for i, ep in enumerate(eps)],
+                k,
+                max_words=self.config.rerank_segment_words,
+            )
             return [eps[i] for i, _ in ranked]
         return eps[:k]
 

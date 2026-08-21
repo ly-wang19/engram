@@ -7,7 +7,9 @@ export interface Health {
   ok: boolean
   ready: boolean
   service: string
-  auth_mode: 'api_keys' | 'open' | 'disabled'
+  version: string
+  /** 'invalid' when the server's own auth/limit configuration failed to load — not a client error. */
+  auth_mode: 'api_keys' | 'open' | 'disabled' | 'invalid'
   anonymous_allowed: boolean
   embedder: string
   llm_configured: boolean
@@ -16,6 +18,34 @@ export interface Health {
   users_hot: number
   max_hot_users: number
   max_hot_facts: number
+}
+
+/** Latency percentiles for one instrumented service operation (remember, recall, ...). */
+export interface MetricOp {
+  n: number
+  p50_ms: number
+  p95_ms: number
+  avg_ms: number
+  max_ms: number
+  /** Size of the rolling sample the percentiles were computed over. */
+  window: number
+}
+
+/** GET /metrics — aggregate-only by construction: no namespaces, queries or content. */
+export interface Metrics {
+  uptime_s: number
+  /** Timed operations, keyed by operation name. */
+  ops: Record<string, MetricOp>
+  /** Plain counters (auth_rejected, rate_limited, idempotent_replays, ...). */
+  counts: Record<string, number>
+  tokens: {
+    context_total: number
+    baseline_context_total: number
+    baseline_full_total: number
+    calls_with_baseline: number
+    /** full-history tokens / served-context tokens. null until one call measured both. */
+    savings_ratio: number | null
+  }
 }
 
 export interface RememberResult {
@@ -276,6 +306,141 @@ export interface ProfileResult {
   facts: string[]
 }
 
+/**
+ * How well-evidenced a structured-profile entry is. Deliberately a kind + a count rather than a
+ * fabricated 0..1 score, so a UI can say *why* it believes something.
+ */
+export interface ProfileEvidence {
+  kind: 'user' | 'reinforced' | 'mentions'
+  count: number
+}
+
+export interface StructuredProfileBasic {
+  field: string
+  label: string
+  value: string
+  evidence: ProfileEvidence
+  source: FactSource
+  /** '' when the value came from identity resolution rather than a stored fact. */
+  fact_id: string
+}
+
+export interface StructuredProfilePreference {
+  item: string
+  polarity: 'like' | 'dislike' | 'diet'
+  category: string
+  evidence: ProfileEvidence
+  source: FactSource
+  fact_id: string
+  subject: string
+  predicate: string
+  object: string
+}
+
+export interface StructuredProfileHabit {
+  text: string
+  evidence: ProfileEvidence
+  fact_id: string
+}
+
+/**
+ * GET /v1/profile/structured — live facts grouped for display (basic info / preferences / habits),
+ * split into confirmed vs `tentative`. A derived read-only view: it never filters retrieval.
+ */
+export interface StructuredProfile {
+  basic: StructuredProfileBasic[]
+  /** Confirmed preferences, keyed by coarse category. */
+  preferences: Record<string, StructuredProfilePreference[]>
+  habits: StructuredProfileHabit[]
+  /** Preferences shown as 待确认 — weak signals, displayed apart from the confirmed set. */
+  tentative: StructuredProfilePreference[]
+  counts: {
+    basic: number
+    preferences: number
+    tentative: number
+    habits: number
+  }
+}
+
+// --- working memory (ephemeral, session/TTL-scoped) -------------------------
+
+export interface WorkingItem {
+  id: string
+  content: string
+  kind: string
+  session_id: string
+  /** YYYY-MM-DD */
+  created: string
+  /** YYYY-MM-DD, or null when the item lives until the session is cleared. */
+  expires_at: string | null
+}
+
+/** GET /v1/working — live items only; expired and consumed ones are already excluded. */
+export interface WorkingMemory {
+  items: WorkingItem[]
+}
+
+export interface AddWorkingResult {
+  ok: boolean
+  id: string
+  kind: string
+  /** Epoch seconds, or null when there is no hard expiry. */
+  expires_at: number | null
+}
+
+export interface ClearWorkingResult {
+  ok: boolean
+  cleared: number
+}
+
+// --- suspected conflicts (detected in System-2, resolved by the user) -------
+
+export interface Conflict {
+  id: string
+  /** Fact id of the older claim. */
+  older: string
+  /** Fact id of the newer claim. */
+  newer: string
+  older_text: string
+  newer_text: string
+  reason: string
+}
+
+export interface ConflictList {
+  conflicts: Conflict[]
+}
+
+/** 'both' dismisses the conflict — the two claims are allowed to coexist. */
+export type ConflictResolution = 'newer' | 'older' | 'both'
+
+// --- admin: tenant API keys (ENGRAM_ADMIN_TOKEN, not a tenant key) ----------
+
+/** A key record as the server publishes it — never the secret, never its digest. */
+export interface ApiKeyRecord {
+  id: string
+  user: string
+  label: string
+  /** Epoch seconds. */
+  created_at: number
+  revoked: boolean
+  last_used_at: number | null
+}
+
+/** POST /v1/admin/keys — `key` is the plaintext, returned once here and recoverable nowhere else. */
+export interface IssuedApiKey extends ApiKeyRecord {
+  key: string
+}
+
+export interface ApiKeyList {
+  keys: ApiKeyRecord[]
+}
+
+export interface RevokeKeyResult {
+  ok: boolean
+  id: string
+  revoked: boolean
+}
+
 export interface Focus {
   track: string[]
   mute: string[]
@@ -364,6 +529,15 @@ export interface ImportResult {
   episodes: number
   facts_added: number
   summaries: number
+}
+
+/** Shared by the mutating calls the server can replay instead of re-running (remember, import). */
+export interface IdempotentOptions {
+  /**
+   * Sent as the `Idempotency-Key` header. The server replays the first successful response for a
+   * repeated (tenant, key) pair, so retrying after a timeout does not store the same history twice.
+   */
+  idempotencyKey?: string
 }
 
 export interface MemoryExportFact {

@@ -656,20 +656,28 @@ async def engram_delete_fact(
 async def engram_import(
     content: Annotated[str | list | dict,
                        Field(description="The raw export to import: a ChatGPT conversations.json, an "
-                             "OpenAI messages array, JSON-Lines, or a plain 'Speaker: text' transcript. "
+                             "OpenAI messages array, JSON-Lines, a plain 'Speaker: text' transcript, or "
+                             "a native Engram export from engram_export (restores facts/episodes with "
+                             "their ids and history intact — the migration path between instances). "
                              "Paste the file contents (JSON text, an array, or transcript text).")],
-    format: Annotated[str, Field(description="chatgpt | messages | records | jsonl | transcript | auto "
-                                 "(default, sniffs the shape).")] = "auto",
+    format: Annotated[str, Field(description="chatgpt | messages | records | jsonl | transcript | "
+                                 "engram | auto (default, sniffs the shape).")] = "auto",
 ) -> str:
     """Bulk-import an exported chat history into memory in one batched pass (extract facts + summaries).
 
     Use this to seed memory from an existing history (e.g. the user's ChatGPT export) rather than
-    replaying it message by message. `format='auto'` detects the shape.
+    replaying it message by message. A native Engram export restores directly instead of re-extracting.
+    `format='auto'` detects the shape.
     """
     try:
         data = await backend().import_(content, format=format)
     except Exception as e:  # noqa: BLE001
         return _err(e)
+    if data.get("format") == "engram":
+        return (f"Restored Engram export: {data.get('facts', 0)} fact(s) "
+                f"({data.get('facts_skipped', 0)} already present), {data.get('episodes', 0)} episode(s) "
+                f"({data.get('episodes_skipped', 0)} already present), "
+                f"{data.get('summaries', 0)} summary(ies).")
     return (f"Imported {data.get('sessions', 0)} session(s) / {data.get('episodes', 0)} episode(s); "
             f"extracted {data.get('facts_added', 0)} fact(s), {data.get('summaries', 0)} summary(ies).")
 

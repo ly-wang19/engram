@@ -236,7 +236,32 @@ For a user-facing "my memory" page, the SDK also exposes paged inspection:
 The standalone graph endpoint is share-safe by default; pass `/v1/graph?include_sensitive=true` only for
 an explicit private graph inspection.
 
-**3. Batch import** — bring your whole history (ChatGPT export, OpenAI messages, JSONL, transcript;
+**3. Python SDK** — the same API from Python, with no runtime dependencies (it speaks over stdlib
+`urllib`, so installing Engram still pulls in nothing):
+
+```python
+from engram.client import EngramClient
+
+engram = EngramClient(base_url="http://localhost:8000", api_key="sk-engram-...")
+engram.remember("I live in Shenzhen and work on retrieval.")
+print(engram.recall("where do I live?")["context"])
+
+# retry-safe writes: the same key replays the first response instead of storing twice
+engram.remember("...", idempotency_key="2026-08-16-abc")
+```
+
+`EngramError` carries `status` so callers can branch without parsing prose — `401` wrong key, `429` back
+off (`err.retry_after` is the server's `Retry-After`), `503` server misconfigured rather than a bad
+request. The `transport` hook swaps the HTTP layer for `httpx`/`requests` or an in-process test client.
+
+**4. Runtime keys, rate limits and metrics** — for self-hosting: mint and revoke tenant keys without a
+restart (`POST /v1/admin/keys`, gated by its own `ENGRAM_ADMIN_TOKEN` and absent unless you set it),
+per-tenant rate limiting (`ENGRAM_RATE_LIMIT_PER_MIN`), retry-safe writes (`Idempotency-Key`), and
+`GET /metrics` for live latency percentiles, token totals and defence counters. `/metrics` is
+aggregate-only by construction — no namespace names, no queries, no content — so it can stay as open as
+`/health`. See [`API.md`](API.md).
+
+**5. Batch import** — bring your whole history (ChatGPT export, OpenAI messages, JSONL, transcript;
 auto-detected):
 
 ```bash
