@@ -139,22 +139,37 @@ export class EngramClient {
   }
 
   // --- write / read memory --------------------------------------------------
-  /** Store a message and consolidate it into bi-temporal facts. */
+  /**
+   * Store a message and consolidate it into bi-temporal facts.
+   * `space` writes to a shared/agent namespace instead of the caller's home (requires write access
+   * via ENGRAM_SPACES on the server).
+   */
   remember(
     content: string,
-    options: { sessionId?: string; scope?: string } = {},
+    options: { sessionId?: string; scope?: string; space?: string } = {},
   ): Promise<RememberResult> {
     return this.post<RememberResult>('/v1/remember', {
       content,
       session_id: options.sessionId ?? 'default',
       scope: options.scope ?? 'auto',
+      space: options.space,
     })
   }
 
-  /** Retrieve a small, relevant, dated context to answer from (the lean read path). */
+  /**
+   * Retrieve a small, relevant, dated context to answer from (the lean read path).
+   * `spaces` reads + fuses several namespaces (e.g. the agent's own + a shared team space); each must
+   * be readable by this key's ENGRAM_SPACES principal.
+   */
   recall(
     query: string,
-    options: { nChunks?: number; sessionId?: string; asOf?: number; redactSensitive?: boolean } = {},
+    options: {
+      nChunks?: number
+      sessionId?: string
+      asOf?: number
+      redactSensitive?: boolean
+      spaces?: string[]
+    } = {},
   ): Promise<RecallResult> {
     return this.post<RecallResult>('/v1/recall', {
       query,
@@ -163,6 +178,7 @@ export class EngramClient {
       session_id: options.sessionId ?? null,
       as_of: options.asOf ?? null,
       redact_sensitive: options.redactSensitive ?? false,
+      spaces: options.spaces,
     })
   }
 

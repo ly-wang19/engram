@@ -424,6 +424,25 @@ class MemoryService:
             "redacted_sensitive": redact_sensitive,
         }
 
+    def recall_multi(self, spaces: list[str], query: str, n_chunks: int = 6,
+                     session_id: Optional[str] = None, as_of: Optional[float] = None,
+                     redact_sensitive: bool = False) -> dict:
+        """Read across several spaces and fuse the result (CLAUDE.md §6 — agent + team-shared + user memory
+        composed at READ time). Each space contributes its own lean context, tagged with its source so
+        provenance is preserved. Cross-space GRAPH walks are NOT done (entities live in per-space stores);
+        this is fact+chunk composition, which is where the multi-scope value is — the multi-hop planner
+        still operates within a single space."""
+        blocks: list[str] = []
+        for s in spaces:
+            mem = self.get(s)
+            ctx = mem.lean_context(query, user_id=s, n_chunks=n_chunks, session_id=session_id,
+                                   as_of=as_of, redact_sensitive=redact_sensitive)
+            if ctx.strip():
+                blocks.append(f"## Space: {s}\n{ctx}")
+        context = "\n\n".join(blocks)
+        return {"context": context, "tokens_est": _est_tokens(context), "spaces": list(spaces),
+                "as_of": as_of, "redacted_sensitive": redact_sensitive}
+
     def structured_profile(self, user: str) -> dict:
         """L2 structured profile (basic info / preferences / habits, confirmed vs tentative). Display-only."""
         return self.get(user).structured_profile(user)
