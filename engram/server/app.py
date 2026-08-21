@@ -229,6 +229,14 @@ def auth_principal(authorization: str = Header(default="")) -> Principal:
     return Principal.single(auth(authorization))
 
 
+@app.get("/metrics")
+def metrics():
+    """Live service metrics (CLAUDE.md Bet D online): p50/p95 latency per operation, request counters,
+    and the served-context vs full-history token-savings ratio. Aggregate numbers only — no namespace
+    names and no user content, so this can stay as open as /health."""
+    return svc().metrics_snapshot()
+
+
 class RememberReq(BaseModel):
     content: str = Field(min_length=1, max_length=1_000_000)
     session_id: str = Field(default="default", min_length=1, max_length=512)

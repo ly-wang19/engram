@@ -21,6 +21,7 @@ from contextlib import contextmanager
 from typing import Any, Optional
 
 from .memory import Memory
+from .metrics import Metrics, timed
 from .util import fmt_date, fmt_datetime
 
 DEFAULT_DATA_DIR = os.path.expanduser("~/.engram/data")
@@ -135,6 +136,9 @@ class MemoryService:
         self._hot_versions: dict[str, tuple[int, int] | None] = {}
         self._locks: dict[str, threading.Lock] = {}
         self._g = threading.Lock()
+        # Live service metrics (Bet D online): latency percentiles on the SLO-bearing paths + the token-
+        # savings ratio, exposed aggregate-only at GET /metrics. See engram/metrics.py.
+        self.metrics = Metrics()
         # System-1 / System-2 split (CLAUDE.md Bet F). When enabled, remember() does only the fast System-1
         # write (append + light embed + a durable save) and hands consolidation to a background worker, so
         # the write path stays low-latency. OFF by default — the synchronous path keeps the
@@ -296,6 +300,18 @@ class MemoryService:
     def hot_count(self) -> int:
         return len(self._hot)
 
+    def metrics_snapshot(self) -> dict:
+        """The /metrics payload: latency percentiles + counters + token savings (from Metrics), plus the
+        service-level gauges (hot namespaces in RAM, async System-2 backlog). Aggregate numbers only."""
+        snap = self.metrics.snapshot()
+        snap["users_hot"] = self.hot_count
+        snap["async"] = {
+            "enabled": self._async,
+            "queue_depth": self._queue.qsize() if self._queue is not None else 0,
+            "pending_users": len(self._pending),
+        }
+        return snap
+
     # --- async System-2 consolidation (CLAUDE.md Bet F; opt-in via ENGRAM_ASYNC_CONSOLIDATION=1) --------
     def _enqueue(self, user: str) -> None:
         """Schedule a user's pending episodes for background consolidation, coalescing repeat requests."""
@@ -347,6 +363,7 @@ class MemoryService:
             self._worker = None
 
     # --- write path ---------------------------------------------------------
+    @timed("remember")
     def remember(self, user: str, content: str, session_id: str = "default",
                  scope: str = "auto") -> dict:
         """Store a message + run System-2 consolidation/summarization (best-effort: a transient model
@@ -373,11 +390,13 @@ class MemoryService:
                 mem.summarize_episodes(list(mem.episodes_doc.values()))
             except Exception as exc:  # noqa: BLE001 — keep the raw episode no matter what
                 self._save(user, mem)
+                self.metrics.count("remember_degraded")
                 return {"ok": True, "extracted": 0, "degraded": type(exc).__name__, "stored_raw": True}
             self._save(user, mem)
             return {"ok": True, "scope": "long", "extracted": added,
                     "total_facts": len([f for f in _all_facts(mem) if f.is_live()])}
 
+    @timed("import")
     def import_(self, user: str, sessions: Optional[list] = None, format: str = "auto",
                 data: Any = None, consolidate: bool = True, summarize: bool = True,
                 session_id: str = "imported") -> dict:
@@ -393,6 +412,7 @@ class MemoryService:
             self._save(user, mem)
             return {"ok": True, **stats}
 
+    @timed("import_document")
     def import_document(self, user: str, data, filename: Optional[str] = None,
                         content_type: Optional[str] = None, session_id: str = "document",
                         consolidate: bool = True, summarize: bool = True) -> dict:
@@ -482,6 +502,7 @@ class MemoryService:
             return {"ok": True, **result}
 
     # --- read path ----------------------------------------------------------
+    @timed("recall")
     def recall(self, user: str, query: str, lean: bool = True, n_chunks: int = 6,
                session_id: Optional[str] = None, as_of: Optional[float] = None,
                redact_sensitive: bool = False,
@@ -512,6 +533,9 @@ class MemoryService:
                 )
                 out["full_tokens"] = _est_tokens(full)
                 out["answer"] = _answer_from_memory(self.answerer, query, ctx)
+            # live token-saving accounting (Bet D online): context size always; the full-history baseline
+            # only when this call computed it anyway — measuring must not add cost to the hot path.
+            self.metrics.tokens(out["tokens_est"], out.get("full_tokens"))
             return out
         res = mem.search(query, user_id=user, as_of=as_of)
         visible_facts = [
@@ -530,6 +554,7 @@ class MemoryService:
             "redacted_sensitive": redact_sensitive,
         }
 
+    @timed("recall_multi")
     def recall_multi(self, spaces: list[str], query: str, n_chunks: int = 6,
                      session_id: Optional[str] = None, as_of: Optional[float] = None,
                      redact_sensitive: bool = False) -> dict:
@@ -546,8 +571,10 @@ class MemoryService:
             if ctx.strip():
                 blocks.append(f"## Space: {s}\n{ctx}")
         context = "\n\n".join(blocks)
-        return {"context": context, "tokens_est": _est_tokens(context), "spaces": list(spaces),
-                "as_of": as_of, "redacted_sensitive": redact_sensitive}
+        out = {"context": context, "tokens_est": _est_tokens(context), "spaces": list(spaces),
+               "as_of": as_of, "redacted_sensitive": redact_sensitive}
+        self.metrics.tokens(out["tokens_est"])
+        return out
 
     def structured_profile(self, user: str) -> dict:
         """L2 structured profile (basic info / preferences / habits, confirmed vs tentative). Display-only."""
