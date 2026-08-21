@@ -229,6 +229,7 @@ class Memory:
             self.fact_store,
             self.config,
             extra_fact_stores=[self.cold_store],
+            llm=self.llm,
         )
         # restore the persisted self-name into the (freshly built) extractor so identity survives reload
         ex = getattr(self.engine, "extractor", None)
