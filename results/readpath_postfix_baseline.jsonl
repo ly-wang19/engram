@@ -1,0 +1,4 @@
+{"kind": "readpath_ablation_meta", "items": 60, "baseline_rate": 0.8999999999999999, "noise_band_pp": 3.3333333333333326, "extractor": "volcano:doubao-seed-1-6-flash-250615", "embedder": "bge-small", "topk": 15, "chunks": 2, "extract_k": 8}
+{"label": "baseline#1", "ablated": [], "answer_in_context": 55, "n": 60, "rate": 0.9166666666666666, "avg_tokens": 7124, "errors": 0, "elapsed_s": 284.8}
+{"label": "baseline#2", "ablated": [], "answer_in_context": 53, "n": 60, "rate": 0.8833333333333333, "avg_tokens": 7350, "errors": 0, "elapsed_s": 288.4}
+{"label": "-NONE_JUST_BASELINE", "ablated": ["NONE_JUST_BASELINE"], "answer_in_context": 52, "n": 60, "rate": 0.8666666666666667, "avg_tokens": 7347, "errors": 0, "elapsed_s": 351.6, "delta_pp": 3.3}
