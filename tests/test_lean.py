@@ -2460,3 +2460,32 @@ def test_conflict_resolve_and_dismiss_are_user_driven():
     m.conflicts[cf2.id] = cf2
     assert m.dismiss_conflict(cf2.id) and g1.is_live() and g2.is_live()
     assert m.pending_conflicts("u") == []
+
+
+def test_promotion_never_evicts_every_semantic_chunk():
+    """The 2026-08-27 regression: promoted provenance chunks filled the whole k_chunks budget, so
+    when fact retrieval missed, the semantically-retrieved episode carrying the answer was evicted
+    and single-session recall collapsed to abstention. Promotion may take at most half the budget
+    (k>=2); the semantic floor must survive even with many promoted candidates."""
+    from engram.config import Config
+    from engram.types import Fact
+
+    mem = Memory(config=Config(evidence_planner=False, provenance_evidence=False,
+                               provenance_chunk_promotion=True))
+    # the answer lives in a session that only SEMANTIC retrieval will rank highly
+    mem.add("The screening room access code is painted behind the velvet poster.",
+            user_id="u1", session_id="answer-session", event_time=BASE)
+    # off-topic sessions that promoted facts will point at
+    sources = []
+    for i in range(3):
+        sources.append(mem.add(f"Budget sync {i}: the quarterly numbers were reviewed in depth.",
+                               user_id="u1", session_id=f"budget-{i}", event_time=BASE + (i + 1) * DAY))
+    mem.consolidate()
+    # ranked facts all point off-topic -> their provenance chunks would previously fill the budget
+    for i, src in enumerate(sources):
+        f = Fact(subject="u1", predicate=f"reviewed_{i}", object=f"quarterly numbers {i}",
+                 user_id="u1", provenance=[src.id])
+        f.embedding = mem.embedder.embed(f.text)
+        mem.fact_store.upsert(f.id, f.embedding, f)
+    ctx = mem.lean_context("what is the screening room access code?", user_id="u1", n_chunks=2)
+    assert "velvet poster" in ctx  # the semantic slot survived promotion pressure

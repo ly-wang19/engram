@@ -1640,6 +1640,42 @@ class Memory:
                     return "PROVENANCE RAW EVIDENCE (source episodes for retrieved facts):\n" + "\n".join(rows)
         return "PROVENANCE RAW EVIDENCE (source episodes for retrieved facts):\n" + "\n".join(rows) if rows else ""
 
+
+    @staticmethod
+    def _merge_promoted_chunks(promoted: list, retrieved: list, k: int) -> list:
+        """Merge provenance-promoted source episodes with semantically-retrieved ones under a
+        semantic floor: promotion may take at most half the chunk budget.
+
+        Promoted chunks are keyed off the ranked FACTS, so when fact retrieval misses, the
+        semantic episodes are the only path that still carries the answer. Letting promotion
+        fill the whole budget evicted exactly those episodes and produced correct->abstain
+        regressions on single-session recall (50-item A/B vs the headline log, 2026-08-27);
+        capping it keeps the previous-value/temporal gains without paying for them there.
+        Unused promotion budget flows back to retrieved chunks, and vice versa. With k=1 the
+        single slot stays promotion-first (the pre-fix behavior, which the regression data —
+        gathered at k=2 — says nothing about, and which existing tests pin).
+        """
+        cap = max(1, k // 2)
+        merged: list = []
+        seen: set[str] = set()
+        for ep in promoted[:cap]:
+            if ep.id not in seen:
+                seen.add(ep.id)
+                merged.append(ep)
+        for ep in retrieved:
+            if len(merged) >= k:
+                break
+            if ep.id not in seen:
+                seen.add(ep.id)
+                merged.append(ep)
+        for ep in promoted[cap:]:  # backfill only if retrieval could not fill the budget
+            if len(merged) >= k:
+                break
+            if ep.id not in seen:
+                seen.add(ep.id)
+                merged.append(ep)
+        return merged
+
     def _provenance_detail_chunks(
         self,
         facts: list[Fact],
@@ -2262,16 +2298,7 @@ class Memory:
                 redact_sensitive=redact_sensitive,
             )
             if promoted:
-                merged: list[Episode] = []
-                seen_promoted: set[str] = set()
-                for ep in promoted + detail_eps:
-                    if ep.id in seen_promoted:
-                        continue
-                    seen_promoted.add(ep.id)
-                    merged.append(ep)
-                    if len(merged) >= n_chunks:
-                        break
-                detail_eps = merged
+                detail_eps = self._merge_promoted_chunks(promoted, detail_eps, n_chunks)
                 detail_ids = {e.id for e in detail_eps}
         summaries = [e for e in summ_ranked if e.id not in detail_ids]
 
@@ -2539,16 +2566,7 @@ class Memory:
             if self.config.provenance_chunk_promotion:
                 promoted = self._provenance_detail_chunks(ranked_facts, search_query, user, as_of, k_chunks)
                 if promoted:
-                    merged: list[Episode] = []
-                    seen_promoted: set[str] = set()
-                    for ep in promoted + episodes:
-                        if ep.id in seen_promoted:
-                            continue
-                        seen_promoted.add(ep.id)
-                        merged.append(ep)
-                        if len(merged) >= k_chunks:
-                            break
-                    episodes = merged
+                    episodes = self._merge_promoted_chunks(promoted, episodes, k_chunks)
             parts = []
             for ep in episodes:
                 date = ep.metadata.get("date") or fmt_date(ep.event_time)
