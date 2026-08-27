@@ -25,6 +25,7 @@ EXTRACT_SYSTEM = (
     "Resolve first-person ('I','my','me') to the user's name when it is known in the conversation, "
     "otherwise to \"user\". Capture a stated name as "
     "{\"subject\":\"user\",\"predicate\":\"name\",\"object\":\"<Name>\"}. "
+    "ENTITY NAMES: when subject/object names a THING (person, org, project, product, place, tool), use its SHORT canonical name (a noun phrase, never a sentence or claim), and REUSE the exact same name for that thing across all facts; put descriptions, goals and status claims in free-text objects under textual predicates (goal, description, status), never in entity names. "
     "LANGUAGE: keep subject and object VALUES (names, places, brands, products, free text) in the SAME "
     "language the user used — do NOT translate them (keep e.g. \"字节跳动\", not \"ByteDance\"). Only the "
     "predicate stays English snake_case as specified above. "

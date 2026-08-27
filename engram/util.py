@@ -4,6 +4,7 @@ from __future__ import annotations
 import math
 import re
 import time
+import unicodedata
 import uuid
 from datetime import datetime, timedelta, timezone
 
@@ -96,3 +97,47 @@ def minmax_normalize(scores: dict[str, float]) -> dict[str, float]:
     if hi - lo < 1e-12:
         return {k: 1.0 for k in scores}
     return {k: (v - lo) / (hi - lo) for k, v in scores.items()}
+
+
+# --- graph entity normalization (Bet B: multi-hop walks need clean, convergent nodes) ---
+
+# Names may open with a quote/bracket ("《AI项目经理资料库》"); anything else non-word leading
+# (✓, •, markdown bullets) marks UI noise, not an entity.
+_ENTITY_OPENERS = "\"'“”‘’《〈【[(「『"
+_CLAUSE_PUNCT = re.compile(r"[，。；！？!?;:：]")
+
+
+def canon_entity_name(name: str) -> str:
+    """Canonical graph-node key for an entity surface form.
+
+    Surface variants of one name ("Engram-Memory", "engram memory", "engram_memory", full-width
+    forms) must resolve to ONE node, or the edges that should converge on it scatter across
+    duplicates and graph proximity / n-hop expansion loses signal. Deliberately conservative:
+    only case / unicode-width / separator variants are unified — semantic aliasing ("Engram" vs
+    "开源记忆引擎") is NOT attempted here, because a false merge corrupts the graph while a missed
+    merge only weakens it.
+    """
+    s = unicodedata.normalize("NFKC", name or "").strip().lower()
+    s = re.sub(r"[\s_\-·./]+", " ", s).strip()
+    return s
+
+
+def entity_worthy(name: str) -> bool:
+    """Gate for what may become a graph NODE. Facts that fail this still exist and retrieve fine
+    (vector + BM25) — they just don't mint an entity, because sentence-length claims can never be
+    referenced twice under the same surface form: they become permanent orphan nodes that n-hop
+    walks can neither reach nor leave.
+    """
+    s = (name or "").strip()
+    if not s:
+        return False
+    first = s[0]
+    if not (first.isalnum() or first in _ENTITY_OPENERS or "一" <= first <= "鿿"):
+        return False  # leading symbol (✓, •, →) => rendering noise, not a name
+    if _CLAUSE_PUNCT.search(s):
+        return False  # clause punctuation => a claim/sentence, not a name
+    if len(s) > 40:
+        return False  # sentence-length (esp. CJK, where 40 chars is a full clause)
+    if len(s.split()) > 8:
+        return False  # long multi-word phrase => descriptive claim
+    return True

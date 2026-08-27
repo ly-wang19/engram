@@ -294,9 +294,17 @@ def load_memory(mem: Any, path: str, allow_mismatch: bool = False) -> bool:
         target = mem.cold_store if tier == "cold" else mem.fact_store
         target.upsert(fact.id, fact.embedding or [], fact)
 
+    # Canonical-name merging may fold two stored entities (separator/width variants from before
+    # normalization) into one node; remap relation endpoints so no edge dangles on a folded id.
+    entity_remap: dict[str, str] = {}
     for entity in entities:
-        mem.graph.upsert_entity(entity)
+        resolved = mem.graph.upsert_entity(entity)
+        if resolved.id != entity.id:
+            entity_remap[entity.id] = resolved.id
     for relation in relations:
+        if entity_remap:
+            relation.subject_id = entity_remap.get(relation.subject_id, relation.subject_id)
+            relation.object_id = entity_remap.get(relation.object_id, relation.object_id)
         mem.graph.add_relation(relation)
 
     mem.working_mem = {}

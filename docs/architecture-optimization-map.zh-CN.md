@@ -112,6 +112,7 @@ flowchart TD
 | 本次 `chain_provenance_promotion` | `supersedes` 链接入 provenance chunk promotion | 影响 previous/current-vs-past 问题的 raw source evidence | 复用 `chain_evidence` 开关 + 24/24 离线 ablation + LongMemEval sample context 0 errors |
 | 本次 `commercial_release_0_1_0` | 服务安全、租户落盘、部署和发布门禁收束 | 不改变 extraction/retrieval/fusion；影响所有 HTTP 自托管入口和新命名空间目录 | 危险路径/跨租户/鉴权/请求测试 + 全量 pytest + zero-setup + SDK/frontend/package/container 验收 |
 | 本次 `snapshot_restore_roundtrip` | `/v1/export` 快照可直接回灌 `/v1/import`：新增 `Memory.import_snapshot()`（facts 保留双时间轴与 supersedes 链、episodes 标记已消化不重复抽取），`sniff` 识别 `engram_export_version`，import 解析失败由 500 收敛为 400 | 影响数据可携权回路（HTTP `/v1/import` 与 MCP `engram_import` 共用 service 路径）；不改变 extraction/retrieval/fusion | `tests/test_import_snapshot.py` 8 项（含链重映射、幂等、安全导出无 episodes、HTTP 400/回环）+ 全量 pytest 绿 + 线上真实快照本地回灌验证 |
+| 本次 `entity_normalization` | 图谱实体规范化：`entity_worthy` 入图守门（句子/符号噪声不建节点，事实本身保留）+ `canon_entity_name` 表面变体折叠为单节点（变体记入 aliases，加载时重映射防悬空边）+ LLM 抽取 prompt 实体命名约束 | 影响 graph proximity / n-hop 行走质量（Bet B）；不改事实层与向量/BM25 检索 | `tests/test_entity_normalization.py` 7 项 + 全量 pytest 绿 + 真实大脑空间前后对比（实体 47→32、句子实体 3→0、噪声 1→0、问答回归全对） |
 
 ## 当前重点区域
 

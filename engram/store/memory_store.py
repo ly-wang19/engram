@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections import defaultdict
 from typing import Any, Optional
 
+from ..util import canon_entity_name
 from ..types import Entity, Relation
 from ..util import cosine
 from .base import DocStore, GraphStore, Predicate, VectorStore
@@ -65,16 +66,21 @@ class InMemoryGraphStore(GraphStore):
         self._in: dict[str, list[str]] = defaultdict(list)
 
     def upsert_entity(self, entity: Entity) -> Entity:
-        key = (entity.user_id, entity.name.lower())
+        # Canonical key so surface variants ("Engram-Memory" / "engram memory") converge on ONE
+        # node — scattered duplicates starve graph proximity and n-hop walks (CLAUDE.md Bet B).
+        key = (entity.user_id, canon_entity_name(entity.name))
         existing_id = self._by_name.get(key)
         if existing_id is not None:
-            return self.entities[existing_id]
+            existing = self.entities[existing_id]
+            if entity.name != existing.name and entity.name not in existing.aliases:
+                existing.aliases.append(entity.name)  # keep the variant spelling for display/audit
+            return existing
         self.entities[entity.id] = entity
         self._by_name[key] = entity.id
         return entity
 
     def get_entity(self, user_id: str, name: str) -> Entity | None:
-        eid = self._by_name.get((user_id, name.lower()))
+        eid = self._by_name.get((user_id, canon_entity_name(name)))
         return self.entities.get(eid) if eid else None
 
     def add_relation(self, relation: Relation) -> None:
@@ -118,7 +124,7 @@ class InMemoryGraphStore(GraphStore):
             if eid in referenced:
                 continue
             self.entities.pop(eid, None)
-            self._by_name.pop((ent.user_id, ent.name.lower()), None)
+            self._by_name.pop((ent.user_id, canon_entity_name(ent.name)), None)
             self._out.pop(eid, None)
             self._in.pop(eid, None)
             removed += 1

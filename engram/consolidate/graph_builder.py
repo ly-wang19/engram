@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from ..embed import Embedder
+from ..util import entity_worthy
 from ..store import GraphStore
 from ..types import Entity, Fact, Relation
 
@@ -15,6 +16,11 @@ class GraphBuilder:
 
     def add_fact(self, fact: Fact) -> None:
         if fact.predicate.lower() in _TEXTUAL_OBJECT_PREDICATES:
+            return
+        # Sentence-length or symbol-noise strings can't be graph nodes: nothing else will ever
+        # reference the same surface form, so they'd sit as permanent orphans that n-hop walks
+        # can't traverse. The fact itself still lands in the vector/BM25 stores untouched.
+        if not (entity_worthy(fact.subject) and entity_worthy(fact.object)):
             return
         subj = self.graph.upsert_entity(Entity(name=fact.subject, user_id=fact.user_id))
         obj = self.graph.upsert_entity(Entity(name=fact.object, user_id=fact.user_id))
