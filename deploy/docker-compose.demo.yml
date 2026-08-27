@@ -1,0 +1,48 @@
+# 公开演示实例（open 模式）—— 与生产模板 docker-compose.yml 的区别，仅在演示语义所必需的两点：
+#   1. ENGRAM_OPEN=1：任意 bearer 即命名空间（key `1` 是公开演示空间），不配置 ENGRAM_API_KEYS。
+#   2. 端口绑定 0.0.0.0：演示实例直接对公网提供 UI/API。
+# 其余与生产模板保持一致：持久卷（重启不丢数据）、非 root、只读根文件系统、丢弃 capabilities、
+# /ready 门禁。生产部署请用 docker-compose.yml，不要用本文件。
+#
+#   docker compose -f deploy/docker-compose.demo.yml up -d --build
+services:
+  engram:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: engram-memory:demo
+    init: true
+    restart: unless-stopped
+    ports:
+      - "${ENGRAM_PORT:-8456}:8000"
+    environment:
+      ENGRAM_OPEN: "1"
+      ENGRAM_DATA_DIR: /data
+      ENGRAM_EMBEDDER: "${ENGRAM_EMBEDDER:-hashing}"
+      ENGRAM_LLM: "${ENGRAM_LLM:-}"
+      ENGRAM_ANSWERER: "${ENGRAM_ANSWERER:-}"
+      ENGRAM_MAX_REQUEST_BYTES: "${ENGRAM_MAX_REQUEST_BYTES:-2097152}"
+      ENGRAM_MAX_HOT_USERS: "${ENGRAM_MAX_HOT_USERS:-64}"
+      ENGRAM_MAX_HOT_FACTS: "${ENGRAM_MAX_HOT_FACTS:-10000}"
+    volumes:
+      - engram_demo_data:/data
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import json,urllib.request; r=urllib.request.urlopen('http://127.0.0.1:8000/ready', timeout=3); assert r.status == 200 and json.load(r)['ready']"
+      interval: 15s
+      timeout: 5s
+      start_period: 20s
+      retries: 4
+
+volumes:
+  engram_demo_data:
