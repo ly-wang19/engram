@@ -1,0 +1,28 @@
+{"kind": "readpath_ablation_meta", "items": 60, "baseline_rate": 0.7416666666666667, "noise_band_pp": 8.333333333333337, "extractor": "volcano:doubao-seed-1-6-flash-250615", "embedder": "bge-small", "topk": 15, "chunks": 2, "extract_k": 8}
+{"label": "baseline#1", "ablated": [], "answer_in_context": 42, "n": 60, "rate": 0.7, "avg_tokens": 6983, "errors": 0, "elapsed_s": 540.8}
+{"label": "baseline#2", "ablated": [], "answer_in_context": 47, "n": 60, "rate": 0.7833333333333333, "avg_tokens": 7282, "errors": 0, "elapsed_s": 626.2}
+{"label": "-graph_proximity", "ablated": ["graph_proximity"], "answer_in_context": 45, "n": 60, "rate": 0.75, "avg_tokens": 7129, "errors": 0, "elapsed_s": 629.7, "delta_pp": -0.8}
+{"label": "-graph_relation_awareness", "ablated": ["graph_relation_awareness"], "answer_in_context": 44, "n": 60, "rate": 0.7333333333333333, "avg_tokens": 7041, "errors": 0, "elapsed_s": 597.1, "delta_pp": 0.8}
+{"label": "-graph_path_reinforcement", "ablated": ["graph_path_reinforcement"], "answer_in_context": 50, "n": 60, "rate": 0.8333333333333334, "avg_tokens": 7010, "errors": 0, "elapsed_s": 668.6, "delta_pp": -9.2}
+{"label": "-graph_self_anchor", "ablated": ["graph_self_anchor"], "answer_in_context": 42, "n": 60, "rate": 0.7, "avg_tokens": 7307, "errors": 0, "elapsed_s": 599.6, "delta_pp": 4.2}
+{"label": "-graph_entity_alias_anchor", "ablated": ["graph_entity_alias_anchor"], "answer_in_context": 45, "n": 60, "rate": 0.75, "avg_tokens": 7183, "errors": 0, "elapsed_s": 616.3, "delta_pp": -0.8}
+{"label": "-graph_negative_constraints", "ablated": ["graph_negative_constraints"], "answer_in_context": 44, "n": 60, "rate": 0.7333333333333333, "avg_tokens": 7084, "errors": 0, "elapsed_s": 396.4, "delta_pp": 0.8}
+{"label": "-planner_location_chains", "ablated": ["planner_location_chains"], "answer_in_context": 45, "n": 60, "rate": 0.75, "avg_tokens": 6947, "errors": 0, "elapsed_s": 320.7, "delta_pp": -0.8}
+{"label": "-planner_project_chains", "ablated": ["planner_project_chains"], "answer_in_context": 45, "n": 60, "rate": 0.75, "avg_tokens": 7142, "errors": 0, "elapsed_s": 322.2, "delta_pp": -0.8}
+{"label": "-planner_llm_decomposition", "ablated": ["planner_llm_decomposition"], "answer_in_context": 45, "n": 60, "rate": 0.75, "avg_tokens": 7019, "errors": 0, "elapsed_s": 419.8, "delta_pp": -0.8}
+{"label": "-evidence_planner", "ablated": ["evidence_planner"], "answer_in_context": 46, "n": 60, "rate": 0.7666666666666667, "avg_tokens": 7068, "errors": 0, "elapsed_s": 285.5, "delta_pp": -2.5}
+{"label": "-evidence_budgeting", "ablated": ["evidence_budgeting"], "answer_in_context": 49, "n": 60, "rate": 0.8166666666666667, "avg_tokens": 7180, "errors": 0, "elapsed_s": 303.8, "delta_pp": -7.5}
+{"label": "-chain_evidence", "ablated": ["chain_evidence"], "answer_in_context": 43, "n": 60, "rate": 0.7166666666666667, "avg_tokens": 6906, "errors": 0, "elapsed_s": 298.4, "delta_pp": 2.5}
+{"label": "-temporal_history_queries", "ablated": ["temporal_history_queries"], "answer_in_context": 42, "n": 60, "rate": 0.7, "avg_tokens": 7100, "errors": 0, "elapsed_s": 266.0, "delta_pp": 4.2}
+{"label": "-provenance_chunk_promotion", "ablated": ["provenance_chunk_promotion"], "answer_in_context": 54, "n": 60, "rate": 0.9, "avg_tokens": 7432, "errors": 0, "elapsed_s": 257.9, "delta_pp": -15.8}
+{"label": "-provenance_evidence", "ablated": ["provenance_evidence"], "answer_in_context": 44, "n": 60, "rate": 0.7333333333333333, "avg_tokens": 7007, "errors": 0, "elapsed_s": 277.2, "delta_pp": 0.8}
+{"label": "-explicit_preference_extraction", "ablated": ["explicit_preference_extraction"], "answer_in_context": 45, "n": 60, "rate": 0.75, "avg_tokens": 7148, "errors": 0, "elapsed_s": 252.6, "delta_pp": -0.8}
+{"label": "-preference_object_filter", "ablated": ["preference_object_filter"], "answer_in_context": 42, "n": 60, "rate": 0.7, "avg_tokens": 6940, "errors": 0, "elapsed_s": 250.6, "delta_pp": 4.2}
+{"label": "-preference_object_normalization", "ablated": ["preference_object_normalization"], "answer_in_context": 40, "n": 60, "rate": 0.6666666666666666, "avg_tokens": 6903, "errors": 0, "elapsed_s": 352.3, "delta_pp": 7.5}
+{"label": "-preference_reversal_extraction", "ablated": ["preference_reversal_extraction"], "answer_in_context": 45, "n": 60, "rate": 0.75, "avg_tokens": 7069, "errors": 0, "elapsed_s": 267.4, "delta_pp": -0.8}
+{"label": "-numeric_aggregation_candidates", "ablated": ["numeric_aggregation_candidates"], "answer_in_context": 44, "n": 60, "rate": 0.7333333333333333, "avg_tokens": 6979, "errors": 0, "elapsed_s": 259.2, "delta_pp": 0.8}
+{"label": "-aggregation_recall_expansion", "ablated": ["aggregation_recall_expansion"], "answer_in_context": 43, "n": 60, "rate": 0.7166666666666667, "avg_tokens": 7233, "errors": 0, "elapsed_s": 253.9, "delta_pp": 2.5}
+{"label": "-aggregation_constraint_filter", "ablated": ["aggregation_constraint_filter"], "answer_in_context": 44, "n": 60, "rate": 0.7333333333333333, "avg_tokens": 7220, "errors": 0, "elapsed_s": 275.3, "delta_pp": 0.8}
+{"label": "-summary_fallback", "ablated": ["summary_fallback"], "answer_in_context": 46, "n": 60, "rate": 0.7666666666666667, "avg_tokens": 7194, "errors": 0, "elapsed_s": 310.1, "delta_pp": -2.5}
+{"label": "-procedural_memory", "ablated": ["procedural_memory"], "answer_in_context": 44, "n": 60, "rate": 0.7333333333333333, "avg_tokens": 7321, "errors": 0, "elapsed_s": 356.4, "delta_pp": 0.8}
+{"label": "-procedural_extraction", "ablated": ["procedural_extraction"], "answer_in_context": 47, "n": 60, "rate": 0.7833333333333333, "avg_tokens": 7131, "errors": 0, "elapsed_s": 281.3, "delta_pp": -4.2}
