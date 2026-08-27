@@ -537,6 +537,104 @@ class Memory:
         return self.import_messages(parse(data, format=format, session_id=session_id),
                                     user_id=user_id, **kwargs)
 
+    def import_snapshot(self, snapshot: dict, user_id: str = "default", dedupe: bool = True) -> dict:
+        """Restore an Engram export snapshot (`/v1/export` / `MemoryService.export`) — the portability
+        round-trip. A snapshot is ALREADY-CONSOLIDATED memory, so this is a restore, not an ingest:
+        facts land directly with their bi-temporal stamps and supersession chains intact (re-running
+        extraction would duplicate them and flatten history), and episodes re-enter the dated raw log
+        marked consolidated so System-2 never re-digests them. The share-safe export has no episodes —
+        restoring facts alone is the expected outcome there. Idempotent under `dedupe` (default)."""
+        from .connectors.base import to_epoch
+
+        user = self.resolver.resolve(user_id)
+
+        # --- episodes: restore the lossless dated log (present only in include_sensitive exports) ---
+        ep_seen = {(ep.session_id, ep.content) for ep in self.episodes_doc.values()
+                   if ep.user_id == user}
+        eps_restored = eps_skipped = 0
+        for row in snapshot.get("episodes") or []:
+            if not isinstance(row, dict):
+                continue
+            content = str(row.get("content") or "")
+            if not content:
+                continue
+            session_id = str(row.get("session_id") or "imported")
+            if dedupe and (session_id, content) in ep_seen:
+                eps_skipped += 1
+                continue
+            ep = Episode(content=content, user_id=user, session_id=session_id,
+                         speaker=str(row.get("speaker") or "user"),
+                         event_time=to_epoch(row.get("event_time")) or now(),
+                         consolidated=True,  # its facts arrive below; never re-extract
+                         summary=str(row.get("summary") or ""))
+            ep.embedding = self.embedder.embed(content)
+            if ep.summary:
+                ep.summary_embedding = self.embedder.embed(ep.summary)
+            self.episodes_doc.put(ep.id, ep)
+            self.episodes_vec.upsert(ep.id, ep.embedding, ep)
+            ep_seen.add((session_id, content))
+            eps_restored += 1
+
+        # --- facts: restore both live and superseded rows, preserving valid/transaction time ---
+        fact_seen = {(f.subject, f.predicate, f.object, round(f.valid_at, 1))
+                     for f in self._all_facts() if f.user_id == user}
+        id_map: dict[str, str] = {}  # old snapshot id -> new id, to re-link supersession chains
+        staged: list[tuple[Fact, str]] = []
+        facts_skipped = malformed = 0
+        for row in snapshot.get("facts") or []:
+            if not isinstance(row, dict):
+                malformed += 1
+                continue
+            s = str(row.get("subject") or "").strip()
+            p = str(row.get("predicate") or "").strip()
+            o = str(row.get("object") or "").strip()
+            if not (s and p and o):
+                malformed += 1
+                continue
+            valid_at = to_epoch(row.get("valid_at")) or now()
+            key = (s, p, o, round(valid_at, 1))
+            if dedupe and key in fact_seen:
+                facts_skipped += 1
+                continue
+            try:
+                salience = float(row.get("salience", 1.0))
+                confidence = float(row.get("confidence", 1.0))
+            except (TypeError, ValueError):
+                salience, confidence = 1.0, 1.0
+            f = Fact(subject=s, predicate=p, object=o, user_id=user,
+                     text=str(row.get("text") or ""),
+                     source=str(row.get("source") or "extracted"),
+                     category=str(row.get("category") or ""),
+                     sensitive=bool(row.get("sensitive", False)),
+                     salience=salience, confidence=confidence,
+                     valid_at=valid_at,
+                     invalid_at=to_epoch(row.get("invalid_at")),
+                     created_at=to_epoch(row.get("created_at")) or now(),
+                     expired_at=to_epoch(row.get("expired_at")),
+                     # source-instance episode ids: kept as-is for audit honesty — the referenced
+                     # episodes got fresh ids here, so these name where the fact CAME from.
+                     provenance=[str(x) for x in (row.get("provenance") or [])])
+            f.embedding = self.embedder.embed(f.text)
+            old_id = str(row.get("id") or "")
+            if old_id:
+                id_map[old_id] = f.id
+            staged.append((f, str(row.get("supersedes") or "")))
+            fact_seen.add(key)
+        # Second pass so chains resolve regardless of row order; a supersedes target outside the
+        # snapshot (or skipped as a duplicate) becomes None rather than a dangling foreign id.
+        for f, old_sup in staged:
+            f.supersedes = id_map.get(old_sup) if old_sup else None
+            self.fact_store.upsert(f.id, f.embedding, f)
+            # add_fact carries fact.invalid_at onto the relation, so superseded history lands as
+            # already-invalidated edges — the graph's timeline survives the round-trip.
+            self.engine.graph_builder.add_fact(f)
+
+        self._enforce_hot_limit()
+        self._persona_cache.clear()
+        return {"format": "engram", "facts_restored": len(staged), "facts_skipped": facts_skipped,
+                "episodes_restored": eps_restored, "episodes_skipped": eps_skipped,
+                "malformed": malformed}
+
     def link_identity(self, a: str, b: str) -> str:
         return self.resolver.link(a, b)
 

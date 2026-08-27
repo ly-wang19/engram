@@ -54,6 +54,8 @@ def sniff(data: Any) -> str:
 
 def _sniff_obj(obj: Any) -> str:
     if isinstance(obj, dict):
+        if "engram_export_version" in obj:
+            return "engram"  # our own /v1/export snapshot -- restored, not parsed as messages
         if "mapping" in obj or "conversations" in obj:
             return "chatgpt"
         if "messages" in obj:
@@ -97,6 +99,10 @@ def parse(data: Any, format: str = "auto", session_id: str = "imported") -> list
         return parse_jsonl(text, session_id=session_id)
 
     obj = load_json(data)
+    if fmt == "engram":
+        raise ValueError(
+            "this is an Engram export snapshot, not a message history -- restore it with "
+            "Memory.import_snapshot() (or POST it to /v1/import, which routes it automatically).")
     if fmt == "chatgpt":
         return parse_chatgpt(obj)
     if fmt in ("messages", "openai"):
