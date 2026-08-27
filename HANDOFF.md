@@ -52,3 +52,10 @@
   4. 500 题完整 bench（judge=deepseek 官方，偏离已声明）：engram_lean 领先 full_context ≥+8 分、0 系统性错误、日志提交
   5. RESULTS.md/README/架构地图同步
 - **本任务特有熔断**: 调参→重测最多 2 轮；500 题最多跑 2 次（1 正式 + 1 故障重跑）。
+
+---
+
+- **Agent**: Claude Code · **日期**: 2026-08-27（第七段 · 读路径优化任务终局）
+- **五条验收终态**: ①消融表✅（噪声带±8.3pp，promotion挤占=全场最大负资产） ②塌陷修复✅（第2轮后 single-session 9/12 达标，增益类回吐1题在噪声内；两轮调参额度用尽即停） ③护栏✅（answer-in-context 90.0% vs 门槛74.2%） ④500题基线⚠️（+5.8 未达预注册的+8门槛；跨judge对照证明压缩主因是标尺：engram 83.6→83.4 vs 基线73.2→77.6；判分审计对称1/500无偏；按熔断不重跑） ⑤文档✅（RESULTS.md 新测量段与 pinned headline 并列共存、未达门槛如实声明、台账两行修复记录）。
+- **两个同构缺陷的教训**: promotion 挤占语义chunks、子查询挤占主查询席位——同一形态"辅助信号驱逐主信号"，修复哲学统一为"辅助有界+主信号保底"。后续读路径特性设计时优先检查此形态。
+- **二期清单**: graph_path_reinforcement 边缘有害（-9.2pp,超带1.1pp,单测量,复测后决定）; planner_llm_decomposition 零证明收益+延迟成本（默认关闭候选,QA层复核后动）; 纯数字实体入图; judge/extractor 换稳定 provider（volcano 端点持续退役中）。
