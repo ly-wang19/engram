@@ -113,6 +113,14 @@ flowchart TD
 | 本次 `commercial_release_0_1_0` | 服务安全、租户落盘、部署和发布门禁收束 | 不改变 extraction/retrieval/fusion；影响所有 HTTP 自托管入口和新命名空间目录 | 危险路径/跨租户/鉴权/请求测试 + 全量 pytest + zero-setup + SDK/frontend/package/container 验收 |
 | 本次 `snapshot_restore_roundtrip` | `/v1/export` 快照可直接回灌 `/v1/import`：新增 `Memory.import_snapshot()`（facts 保留双时间轴与 supersedes 链、episodes 标记已消化不重复抽取），`sniff` 识别 `engram_export_version`，import 解析失败由 500 收敛为 400 | 影响数据可携权回路（HTTP `/v1/import` 与 MCP `engram_import` 共用 service 路径）；不改变 extraction/retrieval/fusion | `tests/test_import_snapshot.py` 8 项（含链重映射、幂等、安全导出无 episodes、HTTP 400/回环）+ 全量 pytest 绿 + 线上真实快照本地回灌验证 |
 
+## 未采用 / 回滚原因
+
+| 日期 | 方向 | 为什么回滚 | 证据 |
+| --- | --- | --- | --- |
+| 2026-08-27 | `entity_normalization`（图谱实体守门 + 规范名折叠），commit 185e0ac，已由 60682c5 回滚 | 守门阈值（40 字符 / 8 词 / 从句标点）是照**中文**个人记忆语料标定的，用到 LongMemEval 的**英文**实体上误杀率约 27%（"wireless blood pressure monitor from Omron" 这类正常名词短语被判为句子）；且实现是主语或宾语任一不合格就丢弃**整条边**，这些事实彻底失去 graph proximity 信号 | 同 4 题、同 rig 的 A/B：带改动 engram_lean **25%**，回滚后 **75%**（knowledge-update 与 multi-session 均 0%→100%）。日志：`results/entity_normalization_regression_ab.md` |
+
+**教训（写给后续 AI）**：只在方便取到的语料上验证算法改动、然后宣布成功，是本仓库明令禁止的做法（§4）。任何触及 read path / graph / 检索排序的改动，合并前必须跑 harness 切片对照，不能只靠单测和个人语料的"看起来更干净"。
+
 ## 当前重点区域
 
 | 优先级 | 模块 | 为什么重要 | 下一步形态 |
