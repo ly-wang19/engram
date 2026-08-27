@@ -2,6 +2,8 @@
 Qwen, OpenRouter, local servers, etc. Requires the matching provider key in the environment."""
 from __future__ import annotations
 
+import os
+
 from typing import Optional
 
 from .base import LLM
@@ -57,6 +59,10 @@ class LiteLLMClient(LLM):
             messages=messages,
             temperature=self.temperature,
             max_tokens=self.max_tokens,
+            # Hard per-call timeout: without one, a provider that accepts the TCP connection and then
+            # goes silent (observed twice on overnight runs) parks every worker forever -- the retry
+            # loop below never even gets to run. Generous enough for long reasoning answers.
+            timeout=float(os.environ.get("ENGRAM_LLM_TIMEOUT", "180")),
         )
         params.update(self.kwargs)
         params.update(kwargs)
