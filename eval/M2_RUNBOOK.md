@@ -1,5 +1,7 @@
 # M2 runbook — competitors, second benchmark, multi-backbone
 
+> **Judge 端点变更（2026-08-27）**：`volcano:deepseek-v3-2-251201` 已被 Volcano Ark 标记为 `status: Shutdown`（该平台整个 `deepseek-*` 族均已下线），本文档中的 judge 已换为仍在服务的 `deepseek`（DeepSeek 官方 API）。`doubao-seed-1-6-flash-250615` 当前为 `status: Retiring`，需留意后续替换。换 judge 会改变绝对分数，与已公布的 83.6 / 73.2 不可直接比较；同一次 run 内的系统间对照仍然有效。详见 `RESULTS.md`。
+
 The three experiments that take the paper from "workshop-grade" to "top-venue competitive"
 (see the paper's Limitations). **Every number here must come from a real run — never fabricate.**
 All three reduce to running `eval/bench.py`, which applies the *same* answerer + judge to every
@@ -46,7 +48,7 @@ HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 python eval/bench.py \
     --data s --limit 500 \
     --systems engram_lean,mem0,full_context \
     --answerer volcano:doubao-seed-2-0-pro-260215 \
-    --judge volcano:deepseek-v3-2-251201 \
+    --judge deepseek \
     --extractor volcano:doubao-seed-1-6-flash-250615 \
     --embedder bge-small --reasoning --persona \
     --chunks 2 --topk 15 --extract-k 8 --summ-k 28 --n-summaries 28 \
@@ -71,7 +73,7 @@ into `eval/locomo10.json`, then run exactly as for LongMemEval:
 
 ```bash
 python eval/bench.py --data locomo --limit 500 --systems engram_lean,mem0,full_context \
-    --answerer volcano:doubao-seed-2-0-pro-260215 --judge volcano:deepseek-v3-2-251201 \
+    --answerer volcano:doubao-seed-2-0-pro-260215 --judge deepseek \
     --extractor volcano:doubao-seed-1-6-flash-250615 --embedder bge-small --reasoning --persona \
     --chunks 2 --topk 15 --extract-k 8 --summ-k 28 --n-summaries 28 \
     --out results/locomo_engram_vs_mem0.jsonl
@@ -86,7 +88,7 @@ with a different `--answerer` (+ that provider's key). No code change needed.
 ```bash
 for A in "deepseek" "qwen-max" "openai:gpt-4o" "volcano:doubao-seed-2-0-pro-260215"; do
   python eval/bench.py --data s --limit 500 --systems engram_lean,full_context \
-      --answerer "$A" --judge volcano:deepseek-v3-2-251201 \
+      --answerer "$A" --judge deepseek \
       --extractor volcano:doubao-seed-1-6-flash-250615 \
       --embedder bge-small --reasoning --persona \
       --chunks 2 --topk 15 --extract-k 8 --summ-k 28 --n-summaries 28 \

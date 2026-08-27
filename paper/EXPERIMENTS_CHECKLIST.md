@@ -1,5 +1,7 @@
 # Supplementary experiments — main-track upgrade checklist
 
+> **Judge 端点变更（2026-08-27）**：`volcano:deepseek-v3-2-251201` 已被 Volcano Ark 标记为 `status: Shutdown`（该平台整个 `deepseek-*` 族均已下线），本文档中的 judge 已换为仍在服务的 `deepseek`（DeepSeek 官方 API）。`doubao-seed-1-6-flash-250615` 当前为 `status: Retiring`，需留意后续替换。换 judge 会改变绝对分数，与已公布的 83.6 / 73.2 不可直接比较；同一次 run 内的系统间对照仍然有效。详见 `RESULTS.md`。
+
 Goal: turn the paper from "workshop/Findings-ready" into "main-track competitive" by closing the four
 reviewer-killers (single benchmark, single backbone, no competitor numbers, single run / no error bars).
 Infrastructure for all of these is **already in the repo** (LOCOMO loader, competitor adapters, the unified
@@ -8,7 +10,7 @@ and rough cost. Ordered by reviewer-impact ÷ effort.
 
 Conventions used in every command (the locked headline config):
 ```
---extractor volcano:doubao-seed-1-6-flash-250615 --judge volcano:deepseek-v3-2-251201 \
+--extractor volcano:doubao-seed-1-6-flash-250615 --judge deepseek \
 --embedder bge-small --reasoning --persona \
 --chunks 2 --topk 15 --extract-k 8 --summ-k 28 --n-summaries 28 \
 --workers 4 --answerer-timeout 150 --resume

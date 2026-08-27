@@ -320,16 +320,20 @@ pytest
 # 2. retrieval recall on the real haystack (no LLM needed)
 python eval/longmemeval.py --mode recall --data s --limit 500
 
-# 3. full QA benchmark with the official judge — the headline engram_lean number + full-context baseline
+# 3. full QA benchmark with the official judge — engram_lean vs the full-context baseline
 #    (needs model access; any OpenAI-compatible provider works — see RESULTS.md for setup)
+#    NOTE: the judge used for the published headline (volcano:deepseek-v3-2-251201) has been retired
+#    by its provider, so this uses a served one. A different judge shifts absolute scores, but the
+#    engram_lean vs full_context contrast within your run stays apples-to-apples. See RESULTS.md.
 python eval/bench.py --data s --limit 500 --systems engram_lean,full_context \
-    --answerer volcano:doubao-seed-2-0-pro-260215 --judge volcano:deepseek-v3-2-251201 \
+    --answerer volcano:doubao-seed-2-0-pro-260215 --judge deepseek \
     --extractor volcano:doubao-seed-1-6-flash-250615 --reasoning --persona \
     --chunks 2 --topk 15 --extract-k 8 --summ-k 28 --n-summaries 28
 ```
 
-Raw per-question logs for the headline number live in [`RESULTS.md`](RESULTS.md). If you can't reproduce a
-number we published, that's a bug — open an issue.
+Raw per-question logs for the headline number live in [`RESULTS.md`](RESULTS.md), along with the exact
+(now-retired) judge those numbers were measured with. If you can't reproduce a number we published on the
+setup it was published under, that's a bug — open an issue.
 
 ## License
 

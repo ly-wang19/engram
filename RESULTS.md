@@ -68,8 +68,15 @@ as a separate retrieval latency claim.
 
 ### Reproduce
 
+> [!IMPORTANT]
+> **The judge endpoint used for the headline run has since been retired by its provider.** As of
+> 2026-08-27, Volcano Ark reports `deepseek-v3-2-251201` — and every other `deepseek-*` model on that
+> platform — as `status: Shutdown`, and `doubao-seed-1-6-flash-250615` as `status: Retiring`. The
+> command below is kept **verbatim as the provenance of the published numbers**; it is what produced
+> them, and it will 404 today. To re-run now, see *Running it today* below.
+
 ```bash
-# headline number (needs model access for answerer + judge; see "Provider setup" below)
+# the exact command that produced the headline numbers (judge endpoint since retired -- see above)
 HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 python eval/bench.py \
     --data s --limit 500 \
     --systems engram_lean,full_context \
@@ -79,12 +86,40 @@ HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 python eval/bench.py \
     --embedder bge-small --reasoning --persona \
     --chunks 2 --topk 15 --extract-k 8 --summ-k 28 --n-summaries 28 \
     --out data/run.jsonl
+```
 
+```bash
 python eval/report.py data/run.jsonl     # prints the per-category table above
 python eval/validate_results.py --expected-rows 500 --require-complete \
     --system engram_lean --system full_context data/run.jsonl  # 500 = full LongMemEval_S
 ```
 
+
+#### Running it today
+
+Substitute a judge that is still served (`deepseek` is the DeepSeek official API; `univibe:gpt-5.5`
+also works). Everything else is unchanged:
+
+```bash
+HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 python eval/bench.py \
+    --data s --limit 500 \
+    --systems engram_lean,full_context \
+    --answerer volcano:doubao-seed-2-0-pro-260215 \
+    --judge deepseek \
+    --extractor volcano:doubao-seed-1-6-flash-250615 \
+    --embedder bge-small --reasoning --persona \
+    --chunks 2 --topk 15 --extract-k 8 --summ-k 28 --n-summaries 28 \
+    --out data/run.jsonl
+```
+
+**Read that result honestly.** Swapping the judge swaps the measuring stick, so the absolute score from
+this command is **not** directly comparable to the 83.6 / 73.2 published above — those numbers belong to
+the judge they were measured with, and we do not restate them under a different one. What remains valid
+is the comparison *within* your run: the harness applies your judge identically to every `--systems`
+entry, so `engram_lean` vs `full_context` is still apples-to-apples. That internal contrast — a small
+retrieved slice beating the full history at a fraction of the tokens — is the actual claim, and it is
+the part you can reproduce today. When we re-publish absolute numbers it will be against a stable judge,
+as a new run with its own committed log, not a silent re-baseline of these.
 The harness applies the **same answerer and judge to every `--systems` entry**, so any comparison *within*
 a run (e.g. `engram_lean` vs `full_context`) is apples-to-apples by construction. Raw per-question logs
 (prediction + gold + correctness + tokens + latency for every question) are written to the `--out` JSONL.

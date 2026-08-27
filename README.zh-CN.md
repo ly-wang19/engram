@@ -266,15 +266,18 @@ pytest
 # 2. 在真实干扰集上测检索召回（不需要 LLM）
 python eval/longmemeval.py --mode recall --data s --limit 500
 
-# 3. 用官方判分跑完整 QA 基准（需要模型访问；provider 配置见 RESULTS.md）—— 头条 engram_lean + 全文基线
+# 3. 用官方判分跑完整 QA 基准（需要模型访问；provider 配置见 RESULTS.md）—— engram_lean vs 全文基线
+#    注意：产出公开头条数字所用的 judge（volcano:deepseek-v3-2-251201）已被 provider 下线，
+#    这里改用仍在服务的 judge。换 judge 会改变绝对分数，但同一次 run 内 engram_lean 与
+#    full_context 仍是同一裁判、可比。溯源与说明见 RESULTS.md。
 python eval/bench.py --data s --limit 500 --systems engram_lean,full_context \
-    --answerer volcano:doubao-seed-2-0-pro-260215 --judge volcano:deepseek-v3-2-251201 \
+    --answerer volcano:doubao-seed-2-0-pro-260215 --judge deepseek \
     --extractor volcano:doubao-seed-1-6-flash-250615 --reasoning --persona \
     --chunks 2 --topk 15 --extract-k 8 --summ-k 28 --n-summaries 28
 ```
 
-头条数字的**每题原始日志**见 [`RESULTS.md`](RESULTS.md)，含模型预测、标准答案、判分结果、token 数与延迟。
-**复现不出我们公布的数字，就是 bug —— 请提 issue。**
+头条数字的**每题原始日志**见 [`RESULTS.md`](RESULTS.md)，含模型预测、标准答案、判分结果、token 数与延迟，
+以及这些数字当时所用（现已下线）的 judge。**在公布时所用的同一套设置下复现不出我们的数字，就是 bug —— 请提 issue。**
 
 ## 许可证
 
