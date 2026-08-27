@@ -40,3 +40,15 @@
   - **RESULTS.md 里的复现命令已部分失效**：judge `volcano:deepseek-v3-2-251201` 端点 404 下线。可用替代：`deepseek`（官方 API，现为 v4 系列）或 `univibe:gpt-5.5`。answerer/extractor 的火山端点仍可用。换 judge 会改变绝对分数，不能与已提交的 83.6 直接比，但同一 run 内 engram_lean vs full_context 仍是同裁判、可比。
   - worktree 需要 `.env`（已软链到主检出）；`--workers 4` 在本机会被 OOM kill（exit 137），用 2–3。
 - **教训**: 只在方便取到的语料（用户中文个人记忆）上验证算法改动并宣布成功，违反 CLAUDE.md §4。触及 read path/graph/排序的改动，合并前必须过 harness 切片 A/B。
+
+---
+
+- **Agent**: Claude Code · **日期**: 2026-08-27（第六段 · 持续任务立项）
+- **任务目标（用户已批准）**: 把 main 的读路径带到"每个默认开关都有证据、无已知类别塌陷"的状态，并在新 judge 下定格完整 500 题新基线。
+- **验收标准（达标即停）**:
+  1. 读路径消融表落盘（25 特性 × 60 题，含噪声带，helps/noise/hurts 三档）→ `results/readpath_ablation.jsonl`
+  2. single-session（user+assistant）50 题同题恢复至 ≥9/12（现 4/12），temporal/preference 增益不倒退超噪声带
+  3. answer-in-context 率不低于消融基线均值
+  4. 500 题完整 bench（judge=deepseek 官方，偏离已声明）：engram_lean 领先 full_context ≥+8 分、0 系统性错误、日志提交
+  5. RESULTS.md/README/架构地图同步
+- **本任务特有熔断**: 调参→重测最多 2 轮；500 题最多跑 2 次（1 正式 + 1 故障重跑）。
