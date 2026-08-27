@@ -81,22 +81,40 @@ def retrieve_evidence_episodes(mem: Memory, query: str, user_id: str, limit: int
         else None
     )
     subqueries = sorted((need.subqueries if need is not None else ()), key=lambda q: (-len(stems(q)), q))
-    queries = subqueries + [query] if subqueries else [query]
-    per_query = [mem.retrieve_episodes(q, user_id, limit) for q in queries]
-    max_hits = max((len(eps) for eps in per_query), default=0)
-    out = []
+    # One guaranteed seat per subquery, and the MAIN query takes everything else. The old equal
+    # rank-interleave let a single weak subquery ("occupation") consume half the pool and displace
+    # the main query's mid-rank hits (a gold session at main-rank #6 fell out of an 8-slot pool) --
+    # the same evict-the-primary-signal shape as the provenance-promotion bug, one layer down.
+    # Multi-hop still works: each hop's subquery seats its best hit (the small-limit case where the
+    # subquery hits ARE the answer's halves). Planner subqueries are few (<=3), so the guaranteed
+    # seats cannot themselves crowd out the main query at realistic limits.
+    main_eps = mem.retrieve_episodes(query, user_id, limit)
+    if not subqueries:
+        return main_eps[:limit]
+    per_sub = [mem.retrieve_episodes(q, user_id, 2) for q in subqueries]
+    out: list = []
     seen: set[str] = set()
-    for rank in range(max_hits):
-        for eps in per_query:
-            if rank >= len(eps):
-                continue
-            ep = eps[rank]
-            if ep.id in seen:
-                continue
+    for eps in per_sub:  # guaranteed seat: each subquery's best unseen hit
+        for ep in eps:
+            if ep.id not in seen:
+                seen.add(ep.id)
+                out.append(ep)
+                break
+        if len(out) >= limit:
+            return out
+    for ep in main_eps:  # the main query fills every remaining slot
+        if len(out) >= limit:
+            return out
+        if ep.id not in seen:
             seen.add(ep.id)
             out.append(ep)
+    for eps in per_sub:  # spare subquery hits backfill only if the pool still is not full
+        for ep in eps:
             if len(out) >= limit:
                 return out
+            if ep.id not in seen:
+                seen.add(ep.id)
+                out.append(ep)
     return out
 
 
