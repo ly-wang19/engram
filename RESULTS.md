@@ -19,6 +19,16 @@ noisy full window, at a fraction of the tokens.
 | **Engram** (`engram_lean`) | **83.6%** | **9.6k** | 0 / 500 |
 | full-context baseline (same answerer + judge) | 73.2% | 79k | 0 / 500 |
 
+> [!NOTE]
+> **These numbers are pinned to the code that produced them** — commit `4a2aa0e` (2026-06-27), the
+> revision that committed `results/headline_500.jsonl`. The codebase has evolved substantially since
+> (graph retrieval, evidence planning, temporal chains, preference extraction, LLM query decomposition)
+> and has **not** been re-scored on the full 500; a 50-question spot-check on identical items scored the
+> same overall as this baseline but with a very different per-category profile (temporal-reasoning and
+> preference up, single-session recall down). Treat 83.6 / 73.2 as the measured result of *that*
+> revision, not a live property of `main`. A fresh full-500 run against a stable judge is planned once
+> the current read-path ablation settles which features stay on by default.
+
 **Engram `engram_lean` beats the full-context baseline by +10.4 points while using ~8× fewer tokens**
 (9.6k vs 79k) on this 500-question run. Both numbers are on the **official** LongMemEval judge prompts,
 with the **same answerer and judge applied to every system** in the harness; both `engram_lean` and
