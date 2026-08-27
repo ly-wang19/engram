@@ -566,8 +566,12 @@ def import_history(req: ImportReq, user: str = Depends(auth)):
     that parses common exports and posts here."""
     if req.sessions is None and req.data is None:
         raise HTTPException(400, "provide either 'sessions' (pre-parsed) or 'data' (+ 'format') to import")
-    return svc().import_(user, sessions=req.sessions, data=req.data, format=req.format,
-                         consolidate=req.consolidate, summarize=req.summarize, dedupe=req.dedupe)
+    try:
+        return svc().import_(user, sessions=req.sessions, data=req.data, format=req.format,
+                             consolidate=req.consolidate, summarize=req.summarize, dedupe=req.dedupe)
+    except ValueError as exc:
+        # unknown/mismatched format is the caller's payload, not a server fault -> 400, never a 500
+        raise HTTPException(400, f"could not parse import data: {exc}")
 
 
 class DocumentReq(BaseModel):

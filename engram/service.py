@@ -420,7 +420,21 @@ class MemoryService:
         with self.write_lock(user):
             mem = self.get(user)
             if sessions is None:
-                from .connectors import parse
+                from .connectors import load_json, parse
+                # An Engram export snapshot restores directly (facts keep their bi-temporal stamps;
+                # nothing is re-extracted) — route it before the message-history parsers, which would
+                # otherwise mis-sniff the dict as 'records' and reject it.
+                obj = data
+                if isinstance(obj, (str, bytes, bytearray)):
+                    try:
+                        obj = load_json(obj)
+                    except Exception:  # noqa: BLE001 — plain text (transcript etc.): old path below
+                        obj = data
+                if isinstance(obj, dict) and "engram_export_version" in obj \
+                        and format in ("auto", "engram"):
+                    stats = mem.import_snapshot(obj, user_id=user, dedupe=dedupe)
+                    self._save(user, mem)
+                    return {"ok": True, **stats}
                 sessions = parse(data, format=format, session_id=session_id)
             stats = mem.import_messages(sessions, user_id=user, consolidate=consolidate,
                                         summarize=summarize, dedupe=dedupe)

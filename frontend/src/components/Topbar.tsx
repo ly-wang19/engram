@@ -55,11 +55,11 @@ export function Topbar({ onMenu }: { onMenu: () => void }) {
           )}
         </span>
 
-        <div className="flex items-center gap-1.5 rounded-xl border border-line bg-white/5 px-2 py-1.5">
+        <div className="flex min-w-0 items-center gap-1.5 rounded-xl border border-line bg-white/5 px-2 py-1.5">
           <span className="grid h-6 w-6 place-items-center rounded-full bg-brand-gradient text-[11px] font-bold text-ink-900">
             {(apiKey ?? '?').slice(0, 1).toUpperCase()}
           </span>
-          <span className="max-w-[116px] truncate text-sm text-slate-200">{maskKey(apiKey, reveal)}</span>
+          <span className="min-w-0 max-w-[116px] truncate text-sm text-slate-200">{maskKey(apiKey, reveal)}</span>
           <button
             type="button"
             onClick={() => setReveal((v) => !v)}
