@@ -72,6 +72,7 @@ class Config:
     graph_negative_constraints: bool = True  # honor not/except/excluding entity constraints in graph retrieval
     planner_location_chains: bool = True  # let multi-hop planner answer based_in/located_in/headquarters chains
     planner_project_chains: bool = True  # let multi-hop planner walk works_on/project -> based_in chains
+    planner_llm_decomposition: bool = True  # let the LLM decompose multi-hop queries (adds a read-path LLM call); off => offline keyword map
 
     # --- consolidation ---
     salience_decay_per_day: float = 0.02

@@ -78,7 +78,9 @@ class MultiHopPlanner:
         self.fact_store = fact_store
         self.fact_stores = [fact_store] + list(extra_fact_stores or [])
         self.config = config
-        self.llm = llm  # when set, the LLM decomposes; otherwise the keyword map does (offline)
+        # Gated so the LLM decomposition is ablatable like every other read-path feature: it puts an
+        # LLM call on the read path, so its cost/latency/accuracy trade must be measurable, not implicit.
+        self.llm = llm if getattr(config, "planner_llm_decomposition", True) else None
 
     def _fact(self, fact_id: str) -> Optional[Fact]:
         for store in self.fact_stores:

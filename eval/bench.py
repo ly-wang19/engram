@@ -251,6 +251,11 @@ def engram_config(evidence_planner: bool = True, ablations: tuple[str, ...] = ()
             and "project_chain" not in disabled
             and "planner_project_chains" not in disabled
         ),
+        planner_llm_decomposition=(
+            "planner_llm_decomposition" not in disabled
+            and "planner_llm" not in disabled
+            and "llm_decomposition" not in disabled
+        ),
     )
 
 
