@@ -205,8 +205,10 @@ function CodexSetupCard() {
         </span>
       </CardTitle>
 
-      <div className="grid gap-4 lg:grid-cols-[1.05fr_0.95fr]">
-        <div className="space-y-4">
+      {/* minmax(0,…): arbitrary fr values default to minmax(auto,…), so the long install command's
+          min-content width would lock the column open and force page-level horizontal scroll. */}
+      <div className="grid gap-4 lg:grid-cols-[minmax(0,1.05fr)_minmax(0,0.95fr)]">
+        <div className="min-w-0 space-y-4">
           <p className="text-sm leading-relaxed text-ghost">
             {t.settings.connectDescPre}
             <span className="text-slate-200">{t.settings.connectDescEmph}</span>
@@ -265,7 +267,7 @@ function CodexSetupCard() {
           </div>
         </div>
 
-        <div className="space-y-4">
+        <div className="min-w-0 space-y-4">
           <div className="rounded-xl border border-line bg-white/[0.035] p-4">
             <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
               <div className="inline-flex items-center gap-2 text-sm font-semibold text-slate-100">
