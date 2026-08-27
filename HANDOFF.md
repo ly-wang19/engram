@@ -27,3 +27,16 @@
 - **做了什么**: 线上实例配置 LLM：`.env` 追加 DEEPSEEK_API_KEY / ENGRAM_LLM=deepseek / ENGRAM_ANSWERER=deepseek（原 .env 备份为 .env.bak-0827），重启生效。
 - **验收证据**: health `llm_configured:true` + `answerer_configured:true`；抽取质量对照——"My dog is named Rex. I work as a data engineer at Acme Corp." 规则引擎旧输出 `occupation: named Rex`（错），DeepSeek 输出 `owns Rex`/`works at Acme Corp`/`job title data engineer`（对）；`/v1/chat/completions` 从 503 变为带记忆的正常回答。
 - **备注**: DeepSeek 现为 v4 系列，`deepseek-chat` 别名由服务端映射到 `deepseek-v4-flash`（已实测）。key 在服务器 .env 与用户掌握中，勿写入仓库。
+
+---
+
+- **Agent**: Claude Code · **日期**: 2026-08-27（第五段）
+- **做了什么**: 用 LongMemEval_S harness 跑分时发现并回滚了自己前一段引入的严重回归。
+  - `185e0ac`（entity_normalization）在同 4 题同 rig 的 A/B 中把 engram_lean 从 **75% 打到 25%**（knowledge-update、multi-session 均 0%→100% 反向）。
+  - 根因：`entity_worthy()` 的阈值按中文语料标定，英文实体误杀 ~27%；且实现是主/宾任一不合格就丢弃**整条边**，相关事实完全失去 graph proximity。
+  - 已 `60682c5` 回滚、推 main、rsync + restart 同步线上；全量 pytest 绿；回滚原因与 A/B 证据记入 `docs/architecture-optimization-map.zh-CN.md` 的「未采用/回滚原因」与 `results/entity_normalization_regression_ab.md`。
+- **harness 现状（给后续 AI 的重要信息）**:
+  - 数据集在 `~/.cache/huggingface/hub/datasets--xiaowu0162--longmemeval/snapshots/*/longmemeval_s`（500 题），bge-small 已缓存，可 `HF_HUB_OFFLINE=1` 离线跑。
+  - **RESULTS.md 里的复现命令已部分失效**：judge `volcano:deepseek-v3-2-251201` 端点 404 下线。可用替代：`deepseek`（官方 API，现为 v4 系列）或 `univibe:gpt-5.5`。answerer/extractor 的火山端点仍可用。换 judge 会改变绝对分数，不能与已提交的 83.6 直接比，但同一 run 内 engram_lean vs full_context 仍是同裁判、可比。
+  - worktree 需要 `.env`（已软链到主检出）；`--workers 4` 在本机会被 OOM kill（exit 137），用 2–3。
+- **教训**: 只在方便取到的语料（用户中文个人记忆）上验证算法改动并宣布成功，违反 CLAUDE.md §4。触及 read path/graph/排序的改动，合并前必须过 harness 切片 A/B。
