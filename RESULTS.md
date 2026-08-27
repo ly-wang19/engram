@@ -41,6 +41,31 @@ with the **same answerer and judge applied to every system** in the harness; bot
 
 ---
 
+## Current-code measurement (2026-08-27, deepseek official judge)
+
+After the 2026-08 read-path work (semantic-floor fix for provenance promotion, per-feature ablation,
+subquery-merge fix), the current code was measured on the full 500 with the served judge — the retired
+headline judge cannot be re-run, so these numbers live on a DIFFERENT measuring stick and are reported
+alongside, not in place of, the pinned headline above.
+
+| System | Overall | Avg context tokens | Errors |
+|---|---:|---:|---:|
+| Engram (`engram_lean`) | **83.4%** | **8.0k** | 0 / 500 |
+| full-context baseline (same answerer + judge) | 77.6% | 79.2k | 0 / 500 |
+
+`engram_lean` leads by **+5.8 points at ~10x fewer tokens**, winning 4 of 6 categories
+(single-session-preference 83.3% vs 43.3%; single-session-user 88.6% vs 80.0%; temporal-reasoning
+83.5% vs 77.4%; multi-session 75.2% vs 70.7%). Log: `results/run500_semanticfloor_deepseekjudge.jsonl`
+(format-validated; judge-bias screen symmetric at 1/500 per system).
+
+**Read the judge swap honestly:** across the same swap, `engram_lean` barely moved (83.6 -> 83.4) while
+the full-context baseline rose 4.4 points (73.2 -> 77.6) — most of the margin compression is the
+measuring stick, not the memory system. The task that produced this run had pre-registered a >= +8
+margin gate calibrated on the retired judge's +10.4; that gate was NOT met under the new judge, and we
+report the miss rather than re-rolling or restating the old numbers. The single-session abstention
+collapse that motivated the work is fixed and verified (user-category 14% -> 88.6% on the full 500;
+per-fix logs `results/run50_postfix_deepseekjudge.jsonl`, `results/run50_round2_deepseekjudge.jsonl`).
+
 ## Per-category breakdown (`engram_lean`, full 500)
 
 | Category | Score | n | Notes |
