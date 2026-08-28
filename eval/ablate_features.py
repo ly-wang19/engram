@@ -523,7 +523,7 @@ def run_ablation() -> tuple[list[AblationResult], dict]:
         (
             "chain_evidence",
             _chain_context,
-            _contains("FACT EVOLUTION (retrieved supersession chain):", "Tencent"),
+            _contains("FACT EVOLUTION", "Tencent"),
             "Tencent",
         ),
         (

@@ -62,6 +62,7 @@ class Config:
     procedural_memory_k: int = 6  # candidate procedural facts inspected before abstaining or context packing
     chain_evidence: bool = True  # include bounded supersedes/evolution chains for retrieved facts
     temporal_history_queries: bool = True  # answer before/previous/former queries from supersession chains
+    chain_current_first: bool = True  # lead the evolution block with the CURRENT value per slot, then its history
     provenance_chunk_promotion: bool = True  # promote retrieved facts' source episodes into raw chunks
     provenance_evidence: bool = True  # include compact raw source episodes for retrieved fact provenance
     graph_proximity: bool = True  # n-hop graph proximity scoring / traversal ablation switch

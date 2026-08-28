@@ -1544,23 +1544,50 @@ class Memory:
         if not rows:
             return ""
         replaced_ids = {f.supersedes for f in self._all_facts() if f.supersedes}
+
+        def _role(f: Fact) -> str:
+            if f.is_live(as_of):
+                return "current"
+            if f.id in replaced_ids:
+                return "superseded"
+            return "replacement" if f.supersedes else "past"
+
+        if self.config.chain_current_first:
+            # Group by slot and lead with the CURRENT value, history indented beneath it. A flat table
+            # makes the reader scan a `role` column to find which row is true now, and on knowledge-update
+            # questions the answerer picked the superseded value often enough to lose to plain
+            # full-context (e.g. answering the old city after a documented move). Stating the current
+            # value first, as a claim rather than a row, removes that scan.
+            slots: dict[tuple[str, str], list[Fact]] = {}
+            for f in rows:
+                slots.setdefault((f.subject, f.predicate), []).append(f)
+            blocks = []
+            for (subj, pred), facts in slots.items():
+                facts.sort(key=lambda x: x.valid_at, reverse=True)
+                attr = pred.replace("_", " ")
+                live = next((f for f in facts if f.is_live(as_of)), None)
+                head = live or facts[0]
+                label = "CURRENT" if live is not None else f"LATEST KNOWN ({_role(head)})"
+                blocks.append(f"{label}: {subj} {attr} = {head.object}  (since {fmt_date(head.valid_at)})")
+                for f in facts:
+                    if f is head:
+                        continue
+                    until = fmt_date(f.invalid_at) if f.invalid_at is not None else "?"
+                    blocks.append(
+                        f"    was: {f.object}  ({fmt_date(f.valid_at)} - {until}, {_role(f)})"
+                    )
+            return ("FACT EVOLUTION (current value first, then what it replaced):\n"
+                    + "\n".join(blocks))
+
         lines = [
             "valid from | valid until | subject | attribute | value | role",
             "--- | --- | --- | --- | --- | ---",
         ]
         for f in rows:
             until = fmt_date(f.invalid_at) if f.invalid_at is not None else "current"
-            if f.is_live(as_of):
-                role = "current"
-            elif f.id in replaced_ids:
-                role = "superseded"
-            elif f.supersedes:
-                role = "replacement"
-            else:
-                role = "past"
             lines.append(
                 f"{fmt_date(f.valid_at)} | {until} | {f.subject} | "
-                f"{f.predicate.replace('_', ' ')} | {f.object} | {role}"
+                f"{f.predicate.replace('_', ' ')} | {f.object} | {_role(f)}"
             )
         return "FACT EVOLUTION (retrieved supersession chain):\n" + "\n".join(lines)
 

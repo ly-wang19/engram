@@ -729,7 +729,7 @@ def test_lean_context_adds_evolution_chain_for_current_lookup():
 
     assert new.supersedes == old.id
     assert "FACTS (current, dated):" in ctx
-    assert "FACT EVOLUTION (retrieved supersession chain):" in ctx
+    assert "FACT EVOLUTION" in ctx
     assert "Tencent" in ctx
     assert "Moonshot AI" in ctx
     assert "superseded" in ctx and "current" in ctx
@@ -751,7 +751,7 @@ def test_lean_context_evolution_chain_respects_as_of_boundary():
 
     assert "Tencent" in ctx
     assert "Moonshot AI" not in ctx
-    assert "FACT EVOLUTION (retrieved supersession chain):" not in ctx
+    assert "FACT EVOLUTION" not in ctx
 
 
 def test_context_for_adds_fact_evolution_chain():
@@ -761,7 +761,7 @@ def test_context_for_adds_fact_evolution_chain():
 
     ctx = mem.context_for("Where does Wei work?", user_id="u1", k_chunks=0)
 
-    assert "FACT EVOLUTION (retrieved supersession chain):" in ctx
+    assert "FACT EVOLUTION" in ctx
     assert "Tencent" in ctx
     assert "Moonshot AI" in ctx
 
@@ -782,7 +782,7 @@ def test_chain_evidence_can_be_disabled_for_ablation():
     )
 
     assert "Moonshot AI" in ctx
-    assert "FACT EVOLUTION (retrieved supersession chain):" not in ctx
+    assert "FACT EVOLUTION" not in ctx
 
 
 def test_lean_context_adds_provenance_raw_evidence_for_retrieved_fact():
@@ -2489,3 +2489,24 @@ def test_promotion_never_evicts_every_semantic_chunk():
         mem.fact_store.upsert(f.id, f.embedding, f)
     ctx = mem.lean_context("what is the screening room access code?", user_id="u1", n_chunks=2)
     assert "velvet poster" in ctx  # the semantic slot survived promotion pressure
+
+
+def test_evolution_block_leads_with_the_current_value():
+    """knowledge-update regression guard: a flat table made the answerer scan a `role` column to find
+    which value is true now, and it picked superseded values often enough to lose to plain
+    full-context (e.g. the pre-move city). The block must state the current value as a claim first,
+    with the replaced value clearly subordinate."""
+    from engram.config import Config
+
+    mem = Memory(config=Config(evidence_planner=False))
+    mem.add("I live in Hawaii.", user_id="u1", event_time=BASE)
+    mem.consolidate()
+    mem.add("I moved. I live in Paris now.", user_id="u1", event_time=BASE + 30 * DAY)
+    mem.consolidate()
+    ctx = mem.lean_context("where do I live?", user_id="u1")
+    assert "FACT EVOLUTION" in ctx
+    evo = ctx[ctx.index("FACT EVOLUTION"):]
+    assert "CURRENT:" in evo and "Paris" in evo
+    # the current value must be stated before the value it replaced
+    assert evo.index("Paris") < evo.index("Hawaii"), evo
+    assert "was:" in evo and "Hawaii" in evo
