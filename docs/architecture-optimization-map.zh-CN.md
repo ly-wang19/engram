@@ -102,6 +102,7 @@ flowchart TD
 | 2026-07-14 | `commercial_release_0_1_0` | Service boundary / Namespace storage / Deployment / Release gate | 修复命名空间路径穿越与字符过滤碰撞；默认鉴权失败关闭；增加 request limits、liveness/readiness、非 root 容器和统一发布门禁 | `results/commercial_release_0_1_0_validation.jsonl`, `specs/003-commercial-release/` |
 | 2026-08-27 | `provenance_promotion_semantic_floor` | Raw evidence fusion / chunk 预算合并 | promotion 可占满 chunk 预算，事实检索偏航时把携带答案的语义 chunk 全部挤出，single-session 塌陷为弃答（50 题 A/B：user 57%→14%）；改为 promotion 最多占一半预算、名额双向回流 | `results/readpath_ablation_report.md`（-provenance_chunk_promotion = 全场最大 +15.8pp）、`results/run50_prefix_deepseekjudge.jsonl`、`tests/test_lean.py::test_promotion_never_evicts_every_semantic_chunk` |
 | 2026-08-27 | `evidence_pool_main_query_majority` | bench 预整合抽取池选择 | 子查询与主查询等权轮转让弱子查询占走一半席位，主查询 #6 的 gold session 被挤出 8 席池（previous-occupation 弃答残留题根因）；改为每个子查询保底 1 席、主查询拿全部剩余 | `results/run50_round2_deepseekjudge.jsonl`（single-session 9/12 达标、增益类回吐 1 题在噪声内）、`tests/test_lean.py`（多跳小 limit 语义保留） |
+| 2026-08-28 | `chain_current_first` + `aggregation_pool_boost` + 启用 `verify_retry` | 读路径证据呈现 / 聚合抽取池 / 弃答重试 | 演化链平铺表格致 answerer 选中被 supersede 的旧值（Hawaii/Chicago）；聚合池对所有题一刀切致列举漏项（4 家航司答 3 家）；verify_retry 早已实现但从未在任何跑分中启用 | `results/run100_p1p0b_deepseekjudge.jsonl`：同 100 题 engram 80→87、full_context 76→77（对照组稳定）、差距 +4→+10、零类别回退、弃答 17→15 |
 
 ## 最近 PR 对架构的影响
 
