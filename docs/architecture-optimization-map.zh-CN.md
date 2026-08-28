@@ -123,6 +123,7 @@ flowchart TD
 | --- | --- | --- | --- |
 | 2026-08-27 | `entity_normalization`（图谱实体守门 + 规范名折叠），commit 185e0ac，已由 60682c5 回滚 | 守门阈值（40 字符 / 8 词 / 从句标点）是照**中文**个人记忆语料标定的，用到 LongMemEval 的**英文**实体上误杀率约 27%（"wireless blood pressure monitor from Omron" 这类正常名词短语被判为句子）；且实现是主语或宾语任一不合格就丢弃**整条边**，这些事实彻底失去 graph proximity 信号 | 同 4 题、同 rig 的 A/B：带改动 engram_lean **25%**，回滚后 **75%**（knowledge-update 与 multi-session 均 0%→100%）。日志：`results/entity_normalization_regression_ab.md` |
 | 2026-08-28 | `aggregation_pool_boost`（P0-B，commit 75406be，**默认开启但证据不足，待复议**） | 100 题混合切片上 multi-session +3 题看似最大单项收益，但在 60 题**纯 multi-session** 切片上复测：engram 44→43（-1）、full_context 46→43（-3），双方均在噪声内；71.7% 低于该类全 500 基线 76.7%，远未达预设 85% 判定线。原 +3 归因不成立（100 题里 multi-session 仅 27 道，+3 本就在噪声带内）。代价真实：该类抽取成本翻倍、p50 延迟 57.8s | `results/run60_multisession_p0b_deepseekjudge.jsonl` |
+| 2026-08-28 | `stronger_answerer`（假设：换强作答器可破 82.4% 天花板） | 同 60 题同上下文换 `univibe:gpt-5.6-sol`：46/60=76.7% vs doubao 47/60=78.3%（且 gpt-5.6 用的是**已改进**代码），延迟 40s→84s（p95 250s）。与「multi-session 上 lean 71.7% = full_context 71.7%」及官方 Oracle GPT-4o 82.4% 交叉印证 | **瓶颈非检索亦非作答器，是 benchmark 结构性天花板；90% 在此 rig 不可达**。副产品：推理作答器下 full_context 基线 100 题需 10h+ 跑不完，10× token 优势升级为「可行性」差异 | `results/run60_gpt56sol_answerer_probe.jsonl` |
 
 **教训（写给后续 AI）**：只在方便取到的语料上验证算法改动、然后宣布成功，是本仓库明令禁止的做法（§4）。任何触及 read path / graph / 检索排序的改动，合并前必须跑 harness 切片对照，不能只靠单测和个人语料的"看起来更干净"。
 
