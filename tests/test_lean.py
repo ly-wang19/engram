@@ -1551,7 +1551,9 @@ def test_bench_preconsolidation_uses_aggregation_recall_expansion():
         "u1",
         2,
     )
-    assert {e.id for e in eps} == {"jog", "yoga"}
+    # both halves of the aggregation must be present; the pool boost may also admit extra sessions,
+    # which is harmless here -- a missing occurrence is what makes aggregation answers wrong.
+    assert {"jog", "yoga"} <= {e.id for e in eps}
 
     baseline = retrieve_evidence_episodes(
         FakeMem(False),
@@ -2510,3 +2512,33 @@ def test_evolution_block_leads_with_the_current_value():
     # the current value must be stated before the value it replaced
     assert evo.index("Paris") < evo.index("Hawaii"), evo
     assert "was:" in evo and "Hawaii" in evo
+
+
+def test_aggregation_questions_widen_the_preconsolidation_pool():
+    """Aggregation answers are wrong when ONE occurrence is missing, and occurrences span sessions by
+    definition. A pool sized for pointed questions truncated them (a 4-airline list came back with 3),
+    so count/list/sum questions get a wider pool -- and only those, to contain extraction cost."""
+    from engram.config import Config
+    from engram.types import Episode
+    from eval.bench import retrieve_evidence_episodes
+
+    calls: list[int] = []
+
+    class FakeMem:
+        def __init__(self, boost=True):
+            self.config = Config(aggregation_pool_boost=boost)
+
+        def retrieve_episodes(self, query, user_id, k):
+            calls.append(k)
+            return [Episode(f"flight {i}", id=f"e{i}", user_id="u1") for i in range(k)]
+
+    retrieve_evidence_episodes(FakeMem(), "How many airlines have I flown with in total?", "u1", 8)
+    assert max(calls) == 16, f"aggregation question should widen the pool, got {calls}"
+
+    calls.clear()
+    retrieve_evidence_episodes(FakeMem(), "Where does my sister work?", "u1", 8)
+    assert max(calls) == 8, f"pointed question must keep the normal pool, got {calls}"
+
+    calls.clear()  # ablation restores the narrow pool
+    retrieve_evidence_episodes(FakeMem(boost=False), "How many airlines in total?", "u1", 8)
+    assert max(calls) == 8, f"ablated boost should not widen, got {calls}"

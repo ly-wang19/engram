@@ -88,6 +88,14 @@ def retrieve_evidence_episodes(mem: Memory, query: str, user_id: str, limit: int
     # Multi-hop still works: each hop's subquery seats its best hit (the small-limit case where the
     # subquery hits ARE the answer's halves). Planner subqueries are few (<=3), so the guaranteed
     # seats cannot themselves crowd out the main query at realistic limits.
+    # Aggregation questions ("how many...", "list all...") are answered wrong when ONE occurrence is
+    # missing, and occurrences are spread across sessions by definition -- a pool sized for pointed
+    # questions systematically truncates them (observed: an airline list answered 3-of-4). Widen the
+    # pool for exactly those questions rather than paying the extraction cost on every question.
+    if (need is not None and getattr(need, "aggregation", False)
+            and getattr(getattr(mem, "config", None), "aggregation_pool_boost", True)):
+        limit = limit * 2
+
     main_eps = mem.retrieve_episodes(query, user_id, limit)
     if not subqueries:
         return main_eps[:limit]
@@ -216,6 +224,10 @@ def engram_config(evidence_planner: bool = True, ablations: tuple[str, ...] = ()
             "aggregation_constraint_filter" not in disabled
             and "aggregation_constraints" not in disabled
             and "constraint_filter" not in disabled
+        ),
+        aggregation_pool_boost=(
+            "aggregation_pool_boost" not in disabled
+            and "agg_pool_boost" not in disabled
         ),
         chain_evidence="chain" not in disabled,
         temporal_history_queries=(

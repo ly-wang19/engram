@@ -55,6 +55,7 @@ class Config:
     numeric_aggregation_candidates: bool = True  # extract money/hour/page rows for count/sum questions
     aggregation_recall_expansion: bool = True  # expand count/sum queries into high-recall evidence lookups
     aggregation_constraint_filter: bool = True  # mark numeric candidates that violate query constraints as EXCLUDE
+    aggregation_pool_boost: bool = True  # count/list/sum questions consolidate a wider session pool (they need every occurrence)
     procedural_extraction: bool = True  # extract durable runbooks/how-to steps into typed procedure facts
     summary_fallback: bool = True  # answer from derived session summaries when facts cannot answer
     summary_fallback_k: int = 6  # candidate summaries inspected by the fallback before abstaining
