@@ -42,3 +42,4 @@ paper/*.out
 # Keep curated benchmark logs (committable evidence)
 !results/
 results/*.tmp
+eval/locomo10.json  # LOCOMO dataset: download from snap-research/locomo, not vendored
