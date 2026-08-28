@@ -45,28 +45,31 @@ a fraction of the tokens):
 
 | System | Overall | Avg tokens | Notes |
 |---|---:|---:|---|
-| **Engram** (`engram_lean`) | **83.6%** | **9.6k** | retrieves a lean slice; 0 errors / 500 |
-| full-context baseline (same answerer+judge) | 73.2% | 79k | stuffs the whole haystack in the prompt |
+| **Engram** (`engram_lean`) | **81.4%** | **8.0k** | retrieves a lean slice; 0 errors / 500 |
+| full-context baseline (same answerer+judge) | 77.4% | 79.2k | stuffs the whole haystack in the prompt |
 
-**Engram beats the full-context baseline by +10.4 points while using ~8× fewer tokens** (9.6k vs 79k) — the
-filtered slice is *more* accurate than the noisy full window on this run. Per-category (`engram_lean`,
-full 500):
+**Engram beats the full-context baseline by +4.0 points while using ~10× fewer tokens** (8.0k vs 79.2k) —
+the filtered slice is *more* accurate than the noisy full window, winning 4 of 6 categories
+(current `main`, DeepSeek official judge; log committed):
 
-| Category | Score | n |
-|---|---|---|
-| single-session-assistant | 92.9% | 56 |
-| abstention | 86.7% | 30 |
-| knowledge-update | 87.5% | 72 |
-| single-session-user | 87.5% | 64 |
-| temporal-reasoning | 81.1% | 127 |
-| multi-session | 79.3% | 121 |
-| single-session-preference | 73.3% | 30 |
+| Category | Engram | full-context |
+|---|---:|---:|
+| single-session-assistant | 98.2% | 94.6% |
+| single-session-user | 87.1% | 75.7% |
+| knowledge-update | 80.8% | 85.9% |
+| temporal-reasoning | 77.4% | 82.7% |
+| multi-session | **76.7%** | 66.2% |
+| single-session-preference | **76.7%** | 53.3% |
 
-**Where it stands:** at **83.6%** Engram beats the full-context baseline decisively (**+10.4**) at a fraction
-of the tokens. We report it openly — same answerer, same strict judge, every question logged, no
-cherry-picked slice. Engram leads on **token efficiency and reproducibility** in this run; scaling the
-same discipline to larger corpora is the active roadmap, alongside the hardest categories
-(multi-session reasoning, temporal aggregation).
+An earlier run on the since-retired Volcano judge scored **83.6% vs 73.2% (+10.4)** — kept pinned in
+[`RESULTS.md`](RESULTS.md) with its exact setup; the judge swap alone moved the baseline +4.4pp, so the
+two runs are different measuring sticks and we report both rather than restating either.
+
+**Where it stands:** the filtered slice beats the full window at ~1/10 the tokens, with the biggest wins
+exactly where long context drowns the signal (preference +23.4, multi-session +10.5). We report it
+openly — same answerer, same official judge prompts, every question logged, no cherry-picked slice.
+The active roadmap: the two categories where full context still wins (knowledge-update, temporal
+reasoning), and scaling the same discipline to larger corpora.
 
 ## Quickstart (zero setup, no API keys)
 
