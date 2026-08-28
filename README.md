@@ -45,28 +45,28 @@ a fraction of the tokens):
 
 | System | Overall | Avg tokens | Notes |
 |---|---:|---:|---|
-| **Engram** (`engram_lean`) | **81.4%** | **8.0k** | retrieves a lean slice; 0 errors / 500 |
-| full-context baseline (same answerer+judge) | 77.4% | 79.2k | stuffs the whole haystack in the prompt |
+| **Engram** (`engram_lean`) | **84.4%** | **7.9k** | retrieves a lean slice; 0 errors / 500 |
+| full-context baseline (same answerer+judge) | 78.8% | 79.2k | stuffs the whole haystack in the prompt |
 
-**Engram beats the full-context baseline by +4.0 points while using ~10× fewer tokens** (8.0k vs 79.2k) —
+**Engram beats the full-context baseline by +5.6 points while using ~10× fewer tokens** (7.9k vs 79.2k) —
 the filtered slice is *more* accurate than the noisy full window, winning 4 of 6 categories
 (current `main`, DeepSeek official judge; log committed):
 
 | Category | Engram | full-context |
 |---|---:|---:|
-| single-session-assistant | 98.2% | 94.6% |
-| single-session-user | 87.1% | 75.7% |
-| knowledge-update | 80.8% | 85.9% |
-| temporal-reasoning | 77.4% | 82.7% |
-| multi-session | **76.7%** | 66.2% |
-| single-session-preference | **76.7%** | 53.3% |
+| single-session-assistant | 94.6% | 94.6% |
+| single-session-user | **91.4%** | 82.9% |
+| knowledge-update | 84.6% | **91.0%** |
+| temporal-reasoning | **83.5%** | 81.2% |
+| single-session-preference | **80.0%** | 50.0% |
+| multi-session | **78.2%** | 66.9% |
 
 An earlier run on the since-retired Volcano judge scored **83.6% vs 73.2% (+10.4)** — kept pinned in
 [`RESULTS.md`](RESULTS.md) with its exact setup; the judge swap alone moved the baseline +4.4pp, so the
 two runs are different measuring sticks and we report both rather than restating either.
 
 **Where it stands:** the filtered slice beats the full window at ~1/10 the tokens, with the biggest wins
-exactly where long context drowns the signal (preference +23.4, multi-session +10.5). We report it
+exactly where long context drowns the signal (preference +30.0, multi-session +11.3). We report it
 openly — same answerer, same official judge prompts, every question logged, no cherry-picked slice.
 The active roadmap: the two categories where full context still wins (knowledge-update, temporal
 reasoning), and scaling the same discipline to larger corpora.

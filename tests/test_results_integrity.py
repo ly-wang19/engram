@@ -336,7 +336,7 @@ def test_public_headline_claims_are_traceable_to_results():
     # The number of record is the current-main run (deepseek official judge); the retired-judge run
     # stays quotable only where its exact setup is documented, so the landing pages carry the current
     # numbers and README/RESULTS additionally keep the pinned historical pair.
-    expected_claims = ("81.4", "77.4", "8.0k", "79.2k")
+    expected_claims = ("84.4", "78.8", "7.9k", "79.2k")
     for rel in ("README.md", "README.zh-CN.md", "docs/index.html", "demo/index.html"):
         text = (ROOT / rel).read_text(encoding="utf-8")
         for claim in expected_claims:
@@ -359,19 +359,19 @@ def test_contributor_headline_claims_match_results():
 
 def test_public_derived_headline_claims_match_raw_logs():
     """Every published delta/ratio must be re-derivable from the committed log it cites."""
-    log = ROOT / "results/run500_final_main_deepseekjudge.jsonl"
+    log = ROOT / "results/run500_v3_main_deepseekjudge.jsonl"
     lean = _metrics(log, "engram_lean")
     baseline = _metrics(log, "full_context")  # same run: same answerer, same judge, same items
     accuracy_delta = round(float(lean["accuracy"]) - float(baseline["accuracy"]), 1)
     token_ratio = round(float(baseline["avg_tokens"]) / float(lean["avg_tokens"]))
 
-    assert accuracy_delta == 4.0
+    assert accuracy_delta == 5.6
     assert token_ratio == 10
 
     docs = ("README.md", "README.zh-CN.md", "RESULTS.md", "docs/index.html", "demo/index.html")
     for rel in docs:
         text = (ROOT / rel).read_text(encoding="utf-8")
-        assert "+4.0" in text, f"derived accuracy delta missing from {rel}"
+        assert "+5.6" in text, f"derived accuracy delta missing from {rel}"
         compact = text.replace(" ", "")
         assert (
             "10×" in text

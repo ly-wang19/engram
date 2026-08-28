@@ -166,7 +166,7 @@
   <h1 class="rv in d1"><span class="i18n-en">Give your AI a<br><span class="hl">brain that remembers</span></span><span class="i18n-zh">给 AI 一个<br><span class="hl">会记事的大脑</span></span></h1>
   <p class="tag rv in d2"><span class="i18n-en">Like a human brain: it quietly distills <b>facts</b> as you chat, updates them over time without forgetting history,<br>and at question time pulls only the relevant slice — answering <b>more accurately on 1/8 the context</b>.</span><span class="i18n-zh">像人脑一样:聊天时悄悄提炼「事实」、随时间更新而不忘历史、<br>提问时只取出相关的一小片 —— 用 1/8 的信息,答得反而更准。</span></p>
   <div class="stats">
-    <div class="stat rv in d2"><div class="n hl">81.4%</div><div class="l"><span class="i18n-en">LongMemEval_S accuracy</span><span class="i18n-zh">LongMemEval_S 准确率</span></div></div>
+    <div class="stat rv in d2"><div class="n hl">84.4%</div><div class="l"><span class="i18n-en">LongMemEval_S accuracy</span><span class="i18n-zh">LongMemEval_S 准确率</span></div></div>
     <div class="stat rv in d3"><div class="n hl">10×</div><div class="l"><span class="i18n-en">fewer tokens than full-context</span><span class="i18n-zh">比塞全文更省 token</span></div></div>
     <div class="stat rv in d3"><div class="n hl"><span class="i18n-en">5</span><span class="i18n-zh">5 类</span></div><div class="l"><span class="i18n-en">typed memory stores</span><span class="i18n-zh">类型化记忆</span></div></div>
     <div class="stat rv in d4"><div class="n hl">100%</div><div class="l"><span class="i18n-en">open source · reproducible</span><span class="i18n-zh">开源 · 可复现</span></div></div>
@@ -190,16 +190,16 @@
         <li><span class="i18n-en">50 sessions ≈ <b>79.2k tokens</b>, re-read every time</span><span class="i18n-zh">50 段对话 ≈ <b>7.9 万 token</b>,全部重读一遍</span></li>
         <li><span class="i18n-en">Slow and expensive; tokens grow without bound</span><span class="i18n-zh">又慢、又贵,token 随历史无限增长</span></li>
         <li><span class="i18n-en">Too much context → "lost in the middle" → wrong answers</span><span class="i18n-zh">信息太多 → "迷失在中间" → 反而答错</span></li>
-        <li><span class="i18n-en">Only <b style="color:var(--red)">77.4%</b> accurate</span><span class="i18n-zh">准确率只有 <b style="color:var(--red)">77.4%</b></span></li>
+        <li><span class="i18n-en">Only <b style="color:var(--red)">78.8%</b> accurate</span><span class="i18n-zh">准确率只有 <b style="color:var(--red)">78.8%</b></span></li>
       </ul>
     </div>
     <div class="pcard good rv d3">
       <h3><span class="i18n-en">⚡ Engram: retrieve only the relevant slice</span><span class="i18n-zh">⚡ Engram:只取相关一小片</span></h3>
       <ul>
         <li><span class="i18n-en">Distills structured memory; <b>retrieves precisely</b> at query time</span><span class="i18n-zh">提炼成结构化记忆,提问时<b>精准检索</b></span></li>
-        <li><span class="i18n-en">Only <b>~8.0k tokens</b> (<b style="color:var(--teal)">10× leaner</b>)</span><span class="i18n-zh">只用 <b>~8.0k token</b>(<b style="color:var(--teal)">省 10 倍</b>)</span></li>
+        <li><span class="i18n-en">Only <b>~7.9k tokens</b> (<b style="color:var(--teal)">10× leaner</b>)</span><span class="i18n-zh">只用 <b>~7.9k token</b>(<b style="color:var(--teal)">省 10 倍</b>)</span></li>
         <li><span class="i18n-en">Drops the noise, keeps the signal → more focused</span><span class="i18n-zh">去掉噪声、只留精华 → 更聚焦</span></li>
-        <li><span class="i18n-en"><b style="color:var(--teal)">81.4%</b> accurate in this 500-question run</span><span class="i18n-zh">这次 500 题运行准确率 <b style="color:var(--teal)">81.4%</b></span></li>
+        <li><span class="i18n-en"><b style="color:var(--teal)">84.4%</b> accurate in this 500-question run</span><span class="i18n-zh">这次 500 题运行准确率 <b style="color:var(--teal)">84.4%</b></span></li>
       </ul>
     </div>
   </div>
@@ -257,13 +257,13 @@
       <h3 style="font-size:18px"><span class="i18n-en">🐢 Full-context</span><span class="i18n-zh">🐢 塞全文</span></h3>
       <div class="grid" id="gb"></div>
       <div class="vtok" style="color:var(--red)">79.2k <small><span class="i18n-en">tokens · read it all</span><span class="i18n-zh">token · 全读一遍</span></small></div>
-      <div style="margin-top:10px;color:var(--red)"><span class="i18n-en">❌ lost in the middle · 77.4%</span><span class="i18n-zh">❌ 迷失在中间 · 77.4% 准</span></div>
+      <div style="margin-top:10px;color:var(--red)"><span class="i18n-en">❌ lost in the middle · 78.8%</span><span class="i18n-zh">❌ 迷失在中间 · 78.8% 准</span></div>
     </div>
     <div class="vcard win rv d3">
       <h3 style="font-size:18px"><span class="i18n-en">⚡ Engram lean retrieval</span><span class="i18n-zh">⚡ Engram 精简检索</span></h3>
       <div class="grid" id="gg"></div>
-      <div class="vtok" style="color:var(--teal)">8.0k <small><span class="i18n-en">tokens · only the relevant slice</span><span class="i18n-zh">token · 只取相关片</span></small></div>
-      <div style="margin-top:10px;color:var(--teal)"><span class="i18n-en">✓ sharper · 81.4% · ~10× fewer tokens in this run</span><span class="i18n-zh">✓ 更聚焦 · 81.4% 准 · 本次运行约省 10× token</span></div>
+      <div class="vtok" style="color:var(--teal)">7.9k <small><span class="i18n-en">tokens · only the relevant slice</span><span class="i18n-zh">token · 只取相关片</span></small></div>
+      <div style="margin-top:10px;color:var(--teal)"><span class="i18n-en">✓ sharper · 84.4% · ~10× fewer tokens in this run</span><span class="i18n-zh">✓ 更聚焦 · 84.4% 准 · 本次运行约省 10× token</span></div>
     </div>
   </div>
 </div></section>
@@ -274,15 +274,15 @@
   <h2 class="rv d1"><span class="i18n-en">Beats the full-context baseline, <span class="hl">under a strict judge</span></span><span class="i18n-zh">严格判分器下,<span class="hl">大幅超过全文基线</span></span></h2>
   <p class="lead rv d2"><span class="i18n-en">LongMemEval_S · 500 questions · graded by a <b>standard, strict DeepSeek judge</b> — a fair number, not a friendly one.</span><span class="i18n-zh">LongMemEval_S 基准 · 500 题 · 用<b>标准、严格的 DeepSeek 判分器</b>,所以是公平的数字 —— 不是换个宽松判分器自我安慰。</span></p>
   <div class="bars">
-    <div class="bar rv d2" style="--h:77.4%"><div class="c" style="background:linear-gradient(180deg,#fb7185,#9f1239);color:#fff">77.4</div><div class="nm"><span class="i18n-en">Full-context<br><small>79.2k tokens</small></span><span class="i18n-zh">裸塞全文<br><small>79.2k token</small></span></div></div>
-    <div class="bar rv d3" style="--h:81.4%"><div class="c" style="background:linear-gradient(180deg,var(--cyan),var(--violet))">81.4</div><div class="nm" style="color:var(--cyan)"><b>Engram</b><br><small><span class="i18n-en">8.0k tokens · 10× leaner</span><span class="i18n-zh">8.0k token · 10× 精简</span></small></div></div>
+    <div class="bar rv d2" style="--h:78.8%"><div class="c" style="background:linear-gradient(180deg,#fb7185,#9f1239);color:#fff">78.8</div><div class="nm"><span class="i18n-en">Full-context<br><small>79.2k tokens</small></span><span class="i18n-zh">裸塞全文<br><small>79.2k token</small></span></div></div>
+    <div class="bar rv d3" style="--h:84.4%"><div class="c" style="background:linear-gradient(180deg,var(--cyan),var(--violet))">84.4</div><div class="nm" style="color:var(--cyan)"><b>Engram</b><br><small><span class="i18n-en">7.9k tokens · 10× leaner</span><span class="i18n-zh">7.9k token · 10× 精简</span></small></div></div>
   </div>
   <table class="bm rv d3">
     <tr><th><span class="i18n-en">System</span><span class="i18n-zh">系统</span></th><th><span class="i18n-en">Overall</span><span class="i18n-zh">总分</span></th><th><span class="i18n-en">Avg tokens</span><span class="i18n-zh">平均 token</span></th><th><span class="i18n-en">Open source?</span><span class="i18n-zh">开源?</span></th></tr>
-    <tr class="winrow"><td><b>Engram</b><span class="i18n-en"> (this project)</span><span class="i18n-zh">(本项目)</span></td><td class="sc hl">81.4%</td><td style="text-align:right">8.0k</td><td>✅ AGPL-3.0</td></tr>
-    <tr><td><span class="i18n-en">Full-context (same backbone)</span><span class="i18n-zh">裸塞全文(同 backbone)</span></td><td class="sc">77.4%</td><td style="text-align:right">79k</td><td>—</td></tr>
+    <tr class="winrow"><td><b>Engram</b><span class="i18n-en"> (this project)</span><span class="i18n-zh">(本项目)</span></td><td class="sc hl">84.4%</td><td style="text-align:right">7.9k</td><td>✅ AGPL-3.0</td></tr>
+    <tr><td><span class="i18n-en">Full-context (same backbone)</span><span class="i18n-zh">裸塞全文(同 backbone)</span></td><td class="sc">78.8%</td><td style="text-align:right">79k</td><td>—</td></tr>
   </table>
-  <p class="note rv d3"><span class="i18n-en"><b>Where it stands:</b> Engram beats full-context by <b>+4.0</b> at ~10× fewer tokens — fully open and reproducible. 81.4% on the official 500-question judge, every per-question log published. <a href="https://github.com/ly-wang19/engram/blob/main/RESULTS.md" target="_blank">Raw logs + methodology</a>.</span><span class="i18n-zh"><b>它的定位:</b>Engram 超过裸全文(<b>+4.0 分</b>)且省约 10 倍 token,<b>全开源、可复现</b>。500 题官方判分 ≈81.4%,每题原始日志公开。<a href="https://github.com/ly-wang19/engram/blob/main/RESULTS.md" target="_blank">原始日志与方法</a>。</span></p>
+  <p class="note rv d3"><span class="i18n-en"><b>Where it stands:</b> Engram beats full-context by <b>+5.6</b> at ~10× fewer tokens — fully open and reproducible. 84.4% on the official 500-question judge, every per-question log published. <a href="https://github.com/ly-wang19/engram/blob/main/RESULTS.md" target="_blank">Raw logs + methodology</a>.</span><span class="i18n-zh"><b>它的定位:</b>Engram 超过裸全文(<b>+5.6 分</b>)且省约 10 倍 token,<b>全开源、可复现</b>。500 题官方判分 ≈84.4%,每题原始日志公开。<a href="https://github.com/ly-wang19/engram/blob/main/RESULTS.md" target="_blank">原始日志与方法</a>。</span></p>
   <div class="repro rv d4">
 <span class="c1"># <span class="i18n-en">Reproduce every number yourself:</span><span class="i18n-zh">每个数字都能自己跑一遍验证:</span></span><br>
 git clone https://github.com/ly-wang19/engram && cd engram<br>
