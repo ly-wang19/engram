@@ -1,0 +1,75 @@
+# 读路径提升计划（2026-08-28，待用户拍板）
+
+数据来源：`results/run500_final_main_deepseekjudge.jsonl`（当前 main，500 题，0 错误）的零成本失败分析。
+**不是猜测**：每一项都指向日志里具体的失败题与失败模式。
+
+## 可夺回空间：50 题 = 10.0 分
+
+定义：`engram_lean` 答错但 `full_context` 答对的题——信息确实在 haystack 里，是读路径丢的。
+（反向：我们对而 full_context 错的有 70 题；净差 +20 题 = 当前的 +4.0 分。）
+
+| 类别 | 输掉 | 弃答 | 答错 | 病因 |
+|---|---:|---:|---:|---|
+| temporal-reasoning | 15 | 11 | 4 | 召回不足 |
+| multi-session | 14 | 3 | 11 | 聚合漏项 |
+| knowledge-update | 9 | 2 | 7 | 选错版本 |
+| single-session-user | 6 | 5 | 1 | 召回不足 |
+| single-session-preference | 5 | 4 | 1 | 召回不足 |
+| single-session-assistant | 1 | 0 | 1 | — |
+| **合计** | **50** | **25** | **25** | 两种病各占一半 |
+
+**核心洞察**：弃答 25 / 答错 25，是两类完全不同的故障，不能用同一招治。
+
+## P1 · 启用 `verify_retry`（0 行代码，零风险）
+
+**现状**：功能早已实现（`eval/bench.py:804`）且逻辑严谨，但**从未被启用过**——它是 CLI flag
+`--verify-retry`，历次跑分都没带这个参数。不是评估后关掉的，是从没测过。
+
+**机制**：仅在答案确为弃答（`looks_like_abstention`）且该题本身可答（`not is_abstention(item)`）时，
+以 `expand=1`（更多完整会话 + 时间线 + 多跳分解）重试一次；**只有重试结果不再弃答才采纳**——严格单调，
+不可能变差。有线程级 mem 缓存，重试不重新摄取，仅多一次答题调用。
+
+**瞄准**：25 题弃答（其中 temporal 11 题为最大单块）。**预期 +8~15 题**。
+
+## P0-A · knowledge-update「当前值优先」呈现（~40 行）
+
+**证据**：`gold=Paris / 我们=Hawaii`、`gold=the suburbs / 我们=Chicago`——都是**把被 supersede 的旧值
+当成了现值**。这是记忆系统最不该犯的错，且正是 Bet C 的正面战场。
+
+**根因假设**：`chain_evidence` 把新旧值平铺进上下文做演化链，answerer 分不清哪个是当前值。
+
+**方案**：`_fact_evolution_block` 改为显式结构化：
+```
+CURRENT: lives_in = Paris  (as of 2023-05-12)
+  ← superseded: Hawaii (2023-01-08 – 2023-05-12)
+```
+新增开关 `chain_current_first`。**预期 +5~7 题**。
+
+## P0-B · 聚合类动态放大抽取池（~20 行）
+
+**证据**：`gold=JetBlue, Delta, United, American / 我们=JetBlue, United, American`——**漏了 Delta**。
+列举/计数漏项，不是不会答，是候选不全。
+
+**根因**：多会话聚合天然需要更多会话，但 `extract_k=8` 对所有题一视同仁。
+
+**方案**：识别为 count/list/sum 意图时把 `extract_k` 临时提到 16。新增开关 `aggregation_pool_boost`。
+**预期 +4~6 题**。代价：这类题（约 27%）抽取成本翻倍。
+
+## P2 · embedder 升级 bge-small → bge-m3（单独议）
+
+消融显示 answer-in-context 仅 90%——**10% 的题答案从未进过上下文**，下游任何优化都救不了。
+bge-m3（1024 维、多语言、8k 上下文）抬高召回上限，**预期 +3~5 题**，且对中文场景提升更大。
+**风险高**：需重建索引，且历史数字不再可比。
+
+## 建议执行顺序
+
+P1（0 行）→ P0-A（40 行）→ P0-B（20 行），**三者全部完成后一次性跑 100 题验证**，
+而不是每改一次跑一次（避免落入噪声地板陷阱：单项效应 < answerer 方差 ±6~10 题）。
+
+**理论上限**：+17~25 题 ≈ **+3.4~5.0 分**，即 81.4 → 85~86，差距 +4.0 → +7~9。
+
+P2 单独评估。
+
+## 待用户拍板
+
+① 按建议顺序全做，做完一次验证　② 只做 P1 先看效果　③ 调整某项
