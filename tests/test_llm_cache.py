@@ -90,3 +90,53 @@ def test_empty_replies_are_not_cached():
 def test_unknown_attributes_fall_through_to_the_real_model():
     with tempfile.TemporaryDirectory() as d:
         assert CachedLLM(FlakyLLM(), d).model == "flaky-1"
+
+
+def test_identity_registration_does_not_depend_on_extraction_order():
+    """The last 10% of A/B noise: extraction ran under a thread pool, and registering the user's
+    canonical name is order-dependent, so whichever call returned first decided whether later facts read
+    'Evan lives in X' or 'user lives in X'. The fact set flipped between identical runs, which flipped
+    the persona prompt, which defeated the pinned cache. Extraction is now two-phase: model calls fan
+    out, conversion runs in chronological order."""
+    from engram import Memory
+    from engram.types import Episode
+
+    class StubExtractor:
+        """Mimics the LLM extractor's split API; the name is only stated in the LAST episode."""
+
+        def __init__(self):
+            self.self_name = {}
+
+        def raw_items(self, ep):
+            if "call me" in ep.content:
+                return [{"subject": "user", "predicate": "name", "object": "Evan"}]
+            return [{"subject": "user", "predicate": "likes", "object": ep.content.split()[-1]}]
+
+        def facts_from(self, ep, items):
+            from engram.types import Fact
+
+            out = []
+            for it in items:
+                if it["predicate"] == "name":
+                    self.self_name.setdefault(ep.user_id, it["object"])
+                    continue
+                subj = self.self_name.get(ep.user_id, it["subject"])
+                out.append(Fact(subject=subj, predicate=it["predicate"], object=it["object"],
+                                user_id=ep.user_id, valid_at=ep.event_time))
+            return out
+
+        def extract(self, ep):
+            return self.facts_from(ep, self.raw_items(ep))
+
+    seen = []
+    for _ in range(3):
+        mem = Memory()
+        mem.engine.extractor = StubExtractor()
+        for i, text in enumerate(["I like coffee", "I like hiking", "you can call me Evan"]):
+            mem.add(text, user_id="u1", event_time=1_700_000_000.0 + i * 86400)
+        mem.consolidate()
+        seen.append(sorted(f.text for f in mem._all_facts()))
+    assert seen[0] == seen[1] == seen[2], f"fact set varied across runs: {seen}"
+    # the name arrives last chronologically, so earlier facts keep the pre-name subject -- the point is
+    # that this is the SAME every run, not which subject wins.
+    assert all("coffee" in " ".join(s) for s in seen)

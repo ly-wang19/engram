@@ -77,7 +77,28 @@ class ConsolidationEngine:
         import os
         _xw = int(os.environ.get("ENGRAM_EXTRACT_WORKERS", "4"))
         ep_facts: dict[str, list] = {}
-        if len(chrono) > 1:
+        # Two-phase when the extractor supports it: the model calls fan out (stateless), then the
+        # conversion to Facts runs in chronological order. Identity registration lives in that second
+        # phase and is order-dependent -- doing it under the pool made the canonical name depend on which
+        # call returned first, so the same episode produced "Evan ..." on one run and "user ..." on the
+        # next, silently changing the fact set between identical runs.
+        two_phase = hasattr(self.extractor, "raw_items") and hasattr(self.extractor, "facts_from")
+        if len(chrono) > 1 and two_phase:
+            raw: dict[str, list] = {}
+            with ThreadPoolExecutor(max_workers=min(_xw, len(chrono))) as pool:
+                futs = {pool.submit(self.extractor.raw_items, ep): ep for ep in chrono}
+                for fut in as_completed(futs):
+                    ep = futs[fut]
+                    try:
+                        raw[ep.id] = fut.result()
+                    except Exception:  # noqa: BLE001
+                        raw[ep.id] = []
+            for ep in chrono:  # chronological => canonical name is the first one actually stated
+                try:
+                    ep_facts[ep.id] = self.extractor.facts_from(ep, raw.get(ep.id, []))
+                except Exception:  # noqa: BLE001
+                    ep_facts[ep.id] = []
+        elif len(chrono) > 1:
             with ThreadPoolExecutor(max_workers=min(_xw, len(chrono))) as pool:
                 futs = {pool.submit(self.extractor.extract, ep): ep for ep in chrono}
                 for fut in as_completed(futs):

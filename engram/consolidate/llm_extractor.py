@@ -91,10 +91,27 @@ class LLMExtractor:
         return self.system
 
     def extract(self, ep: Episode) -> list[Fact]:
-        raw = self.llm.complete(self.template.format(speaker=ep.speaker, content=ep.content),
-                                system=self._effective_system())
+        return self.facts_from(ep, self.raw_items(ep))
+
+    def raw_items(self, ep: Episode) -> list[dict]:
+        """The model call alone — no shared state touched, so it is safe to run concurrently.
+
+        Split out from `facts_from` because identity registration (which name is canonical) is
+        order-dependent: run under a thread pool it resolved by completion order, so the same episode
+        yielded "Evan lives in X" on one run and "user lives in X" on the next. That flipped the fact
+        set, which flipped the persona prompt, which defeated a pinned extraction cache. The caller now
+        does the model calls in parallel and the stateful conversion in chronological order.
+        """
+        return parse_json_facts(
+            self.llm.complete(self.template.format(speaker=ep.speaker, content=ep.content),
+                              system=self._effective_system())
+        )
+
+    def facts_from(self, ep: Episode, items: list[dict]) -> list[Fact]:
+        """Turn parsed items into Facts, registering names/aliases. Order-dependent by design: call it
+        in chronological order so the canonical name is the first one the user actually stated."""
         facts: list[Fact] = []
-        for item in parse_json_facts(raw):
+        for item in items:
             subj = str(item.get("subject", "")).strip()
             pred = _norm_predicate(str(item.get("predicate", "")))
             obj = str(item.get("object", "")).strip()
