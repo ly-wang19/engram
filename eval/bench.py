@@ -235,12 +235,6 @@ def engram_config(evidence_planner: bool = True, ablations: tuple[str, ...] = ()
             and "history_queries" not in disabled
             and "temporal_history_queries" not in disabled
         ),
-        temporal_span_block=(
-            "temporal_span_block" not in disabled and "span_block" not in disabled
-        ),
-        temporal_phrase_preservation=(
-            "temporal_phrase_preservation" not in disabled and "time_phrase" not in disabled
-        ),
         provenance_evidence="raw" not in disabled and "provenance" not in disabled,
         provenance_chunk_promotion=(
             "raw" not in disabled

@@ -1215,7 +1215,7 @@ class Memory:
             source = self._procedural_source_label(f)
             pred = f.predicate.replace("_", " ")
             lines.append(
-                f"- [{self._stamp(f)}] ({source}) {f.subject} {pred}: {f.object}"
+                f"- [{fmt_date(f.valid_at)}] ({source}) {f.subject} {pred}: {f.object}"
             )
         return "PROCEDURAL MEMORY (standing rules/how-to, source-backed):\n" + "\n".join(lines)
 
@@ -1805,18 +1805,6 @@ class Memory:
         )
         return f"{candidates}\n\n{evidence}" if candidates else evidence
 
-    def _stamp(self, f: Fact) -> str:
-        """Date label for a fact: the absolute stamp, plus the source's own wording when it had one.
-
-        valid_at is a single point because retrieval and conflict resolution need one; but a temporal
-        question often asks for the phrasing ("the week before 9 June", "first weekend of August"), and
-        answering with the stamp alone was wrong on every LOCOMO granularity failure. Showing both lets
-        the answerer pick whichever the question wants.
-        """
-        d = fmt_date(f.valid_at)
-        phrase = getattr(f, "time_phrase", "") if self.config.temporal_phrase_preservation else ""
-        return f'{d} · said: "{phrase}"' if phrase else d
-
     def _duration_block(
         self,
         query: str,
@@ -1870,42 +1858,13 @@ class Memory:
         if not rows:
             return ""
         rows.sort(key=lambda x: (x[1].lower(), x[0]))
-        kept = rows[:limit]
         lines = ["date | item | evidence", "--- | --- | ---"]
-        for t, anchor, evidence in kept:
+        for t, anchor, evidence in rows[:limit]:
             lines.append(f"{fmt_date(t)} | {anchor} | {evidence}")
-        out = (
+        return (
             "DURATION EVIDENCE (pair start/finish dates per item; compute each end-start, then sum):\n"
             + "\n".join(lines)
         )
-        spans = self._span_lines(kept) if self.config.temporal_span_block else []
-        if spans:
-            # The old block handed over dates and told the model to subtract them. It does that badly:
-            # on LOCOMO every "how long did X take" failure abstained or was off by months, and the gold
-            # ("four months") appears nowhere in the haystack -- it IS the difference between two session
-            # dates. Doing the arithmetic here turns a computation the answerer fails into a fact it reads.
-            out += "\n\nTIME SPANS (already computed, same item, earliest -> latest):\n" + "\n".join(spans)
-        return out
-
-    @staticmethod
-    def _span_lines(rows: list[tuple[float, str, str]], max_items: int = 6) -> list[str]:
-        """Day/month spans between the first and last dated evidence for each anchor."""
-        by_anchor: dict[str, list[float]] = {}
-        for t, anchor, _ in rows:
-            by_anchor.setdefault(anchor.lower(), []).append(t)
-        lines: list[str] = []
-        for anchor, times in list(by_anchor.items())[:max_items]:
-            if len(times) < 2:
-                continue
-            lo, hi = min(times), max(times)
-            days = int(round((hi - lo) / DAY))
-            if days <= 0:
-                continue
-            months = days / 30.44
-            approx = f"~{months:.1f} months" if days >= 45 else f"~{days // 7} weeks" if days >= 14 else ""
-            suffix = f" ({approx})" if approx else ""
-            lines.append(f"{anchor}: {fmt_date(lo)} -> {fmt_date(hi)} = {days} days{suffix}")
-        return lines
 
     def _graph_paths_block(
         self,
@@ -1922,7 +1881,7 @@ class Memory:
             for f in plan.facts[:limit]:
                 if redact_sensitive and getattr(f, "sensitive", False):
                     continue
-                lines.append(f"- [{self._stamp(f)}] {f.text}")
+                lines.append(f"- [{fmt_date(f.valid_at)}] {f.text}")
             if lines:
                 return "GRAPH PATHS (relation evidence):\n" + "\n".join(lines)
             return ""
@@ -2248,7 +2207,7 @@ class Memory:
             for f in all_facts:  # reinforcement-on-access: surfaced facts stay salient (spacing effect)
                 reinforce(f, self.config.access_boost)
             by_date = sorted(all_facts, key=lambda f: f.valid_at, reverse=True)  # latest first (updates)
-            fl = "\n".join(f"- [{self._stamp(f)}] {f.text}" for f in by_date)
+            fl = "\n".join(f"- [{fmt_date(f.valid_at)}] {f.text}" for f in by_date)
             blocks.append(f"FACTS (current, dated):\n{fl}")
             if need is not None and need.current_state:
                 state = self._current_state_block(all_facts)
@@ -2619,7 +2578,7 @@ class Memory:
         # fact (e.g., new job, new city) at the top — and trust it over older facts lower in the list.
         ranked_by_date = sorted(ranked, key=lambda x: x[0].valid_at, reverse=True)
         ranked_facts = [f for f, _ in ranked_by_date]
-        fact_lines = [f"- [{self._stamp(f)}] {f.text}" for f in ranked_facts]
+        fact_lines = [f"- [{fmt_date(f.valid_at)}] {f.text}" for f in ranked_facts]
         facts_block = "\n".join(fact_lines) or "(none)"
 
         chunk_block = ""
@@ -2662,14 +2621,14 @@ class Memory:
         if timeline:
             # explicit chronological ordering of the relevant facts — helps "first/after/how long" (M2b)
             ordered = sorted((f for f, _ in ranked), key=lambda f: f.valid_at)
-            tl = "\n".join(f"- [{self._stamp(f)}] {f.text}" for f in ordered) or "(none)"
+            tl = "\n".join(f"- [{fmt_date(f.valid_at)}] {f.text}" for f in ordered) or "(none)"
             result = f"TIMELINE (oldest to newest):\n{tl}\n\n" + result
         if graph:
             # L2: traverse the entity graph from the query's anchor entities to pull connected facts
             # across sessions (multi-hop / multi-session).
             related = self._graph_related_facts(search_query, user, as_of)
             if related:
-                block = "\n".join(f"- [{self._stamp(f)}] {f.text}" for f in related)
+                block = "\n".join(f"- [{fmt_date(f.valid_at)}] {f.text}" for f in related)
                 result += f"\n\nRELATED FACTS (graph traversal):\n{block}"
         if wiki:
             # L4: LLM-curated per-entity notes (current vs past), synthesized at query time.
