@@ -25,6 +25,10 @@ EXTRACT_SYSTEM = (
     "Resolve first-person ('I','my','me') to the user's name when it is known in the conversation, "
     "otherwise to \"user\". Capture a stated name as "
     "{\"subject\":\"user\",\"predicate\":\"name\",\"object\":\"<Name>\"}. "
+    "TIME WORDING: when the source says WHEN something happened in relative or coarse terms "
+    "(\"the week before\", \"first weekend of August\", \"three years ago\", \"last winter\"), copy "
+    "that phrase verbatim into an optional \"when\" key. Do NOT convert it to a date and do NOT "
+    "invent one; omit \"when\" when the source gave no such wording. "
     "LANGUAGE: keep subject and object VALUES (names, places, brands, products, free text) in the SAME "
     "language the user used — do NOT translate them (keep e.g. \"字节跳动\", not \"ByteDance\"). Only the "
     "predicate stays English snake_case as specified above. "
@@ -119,6 +123,7 @@ class LLMExtractor:
                     # native-language phrasing from the model (Chinese in -> Chinese record); shown in the
                     # UI. The canonical English-predicate `text` is still built for embedding/retrieval.
                     display=str(item.get("text", "")).strip(),
+                    time_phrase=str(item.get("when", "")).strip()[:80],
                     user_id=ep.user_id,
                     valid_at=ep.event_time,
                     created_at=ep.ingested_at,
