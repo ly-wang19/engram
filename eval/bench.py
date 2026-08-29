@@ -126,6 +126,20 @@ def retrieve_evidence_episodes(mem: Memory, query: str, user_id: str, limit: int
     return out
 
 
+def _maybe_pinned(llm, cache_dir: str, model_tag: str):
+    """Pin the extractor's replies when --pin-extraction is given.
+
+    Only the extractor is ever wrapped. Pinning the answerer or judge would hide real variance in the
+    thing being graded; pinning the extractor removes variance in the thing being held constant.
+    """
+    if not cache_dir:
+        return llm
+    from engram.llm.cache import CachedLLM
+
+    print(f"  extraction PINNED -> {cache_dir} (same prompt => same facts across runs)")
+    return CachedLLM(llm, cache_dir, model_tag=model_tag)
+
+
 def percentile(values: list[float], p: float) -> float:
     if not values:
         return 0.0
@@ -866,6 +880,10 @@ def main():
     ap.add_argument("--answerer", default="univibe:gemini-2.5-flash")
     ap.add_argument("--judge", default="univibe:gpt-5.5")
     ap.add_argument("--extractor", default="deepseek")
+    ap.add_argument("--pin-extraction", default="", metavar="DIR",
+                    help="cache extractor replies in DIR so two runs build the SAME facts. Required for "
+                         "an honest read-path A/B: without it the extractor's own run-to-run variance "
+                         "swamps the code change being measured (see engram/llm/cache.py).")
     ap.add_argument("--embedder", default="bge-small")
     ap.add_argument("--reranker", default="none",
                     help="none | bge-reranker | bge-reranker-large | bge-reranker-v2 (cross-encoder over chunk pool)")
@@ -968,7 +986,9 @@ def main():
     ans_max_tok = 1500 if args.reasoning else 256
     rig = Rig(
         embedder=make_embedder(args.embedder),
-        extractor_llm=make_llm(args.extractor, max_tokens=512, num_retries=3, timeout=60),
+        extractor_llm=_maybe_pinned(
+            make_llm(args.extractor, max_tokens=512, num_retries=3, timeout=60),
+            args.pin_extraction, args.extractor),
         answerer_llm=make_llm(args.answerer, max_tokens=ans_max_tok, num_retries=3, timeout=args.answerer_timeout),
         judge_llm=make_llm(args.judge, max_tokens=8, num_retries=3, timeout=60),
         reranker=make_reranker(args.reranker),
