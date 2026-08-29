@@ -63,6 +63,8 @@ class Config:
     procedural_memory_k: int = 6  # candidate procedural facts inspected before abstaining or context packing
     chain_evidence: bool = True  # include bounded supersedes/evolution chains for retrieved facts
     temporal_history_queries: bool = True  # answer before/previous/former queries from supersession chains
+    temporal_span_block: bool = True  # duration questions get precomputed day-spans, not just dates to subtract
+    temporal_phrase_preservation: bool = True  # keep the source time phrase ('the week before') beside the stamp
     chain_current_first: bool = True  # lead the evolution block with the CURRENT value per slot, then its history
     provenance_chunk_promotion: bool = True  # promote retrieved facts' source episodes into raw chunks
     provenance_evidence: bool = True  # include compact raw source episodes for retrieved fact provenance
