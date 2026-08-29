@@ -1805,16 +1805,23 @@ class Memory:
         )
         return f"{candidates}\n\n{evidence}" if candidates else evidence
 
-    def _stamp(self, f: Fact) -> str:
-        """Date label for a fact: the absolute stamp, plus the source's own wording when it had one.
+    def _stamp(self, f: Fact, temporal: bool = False) -> str:
+        """Date label for a fact: the absolute stamp, plus -- only for time-shaped questions -- the
+        source's own wording.
 
         valid_at is a single point because retrieval and conflict resolution need one; but a temporal
         question often asks for the phrasing ("the week before 9 June", "first weekend of August"), and
-        answering with the stamp alone was wrong on every LOCOMO granularity failure. Showing both lets
-        the answerer pick whichever the question wants.
+        answering with the stamp alone was wrong on every LOCOMO granularity failure.
+
+        Gated on `temporal` because the first version rendered the phrase on EVERY fact line: LOCOMO
+        temporal gained 2 items while single-hop lost 6, four of them turning into abstentions and one
+        answering with a date the question never asked about. The wording is signal when the question is
+        about time and clutter otherwise, so it is shown only when the evidence planner says so.
         """
         d = fmt_date(f.valid_at)
-        phrase = getattr(f, "time_phrase", "") if self.config.temporal_phrase_preservation else ""
+        if not (temporal and self.config.temporal_phrase_preservation):
+            return d
+        phrase = getattr(f, "time_phrase", "")
         return f'{d} · said: "{phrase}"' if phrase else d
 
     def _duration_block(
@@ -1922,7 +1929,7 @@ class Memory:
             for f in plan.facts[:limit]:
                 if redact_sensitive and getattr(f, "sensitive", False):
                     continue
-                lines.append(f"- [{self._stamp(f)}] {f.text}")
+                lines.append(f"- [{self._stamp(f, True)}] {f.text}")
             if lines:
                 return "GRAPH PATHS (relation evidence):\n" + "\n".join(lines)
             return ""
@@ -2248,7 +2255,12 @@ class Memory:
             for f in all_facts:  # reinforcement-on-access: surfaced facts stay salient (spacing effect)
                 reinforce(f, self.config.access_boost)
             by_date = sorted(all_facts, key=lambda f: f.valid_at, reverse=True)  # latest first (updates)
-            fl = "\n".join(f"- [{self._stamp(f)}] {f.text}" for f in by_date)
+            # When the planner is off there is no `need`, so fall back to the query itself -- a
+            # time-shaped question must still get the wording, planner or not.
+            _t = (bool(need.timeline or need.duration or need.history) if need is not None
+                  else bool(re.search(r"\b(when|what\s+date|how\s+long|before|after|since|during|"
+                                      r"first|last|earliest|latest|recent)\b", query, re.I)))
+            fl = "\n".join(f"- [{self._stamp(f, _t)}] {f.text}" for f in by_date)
             blocks.append(f"FACTS (current, dated):\n{fl}")
             if need is not None and need.current_state:
                 state = self._current_state_block(all_facts)
@@ -2662,14 +2674,14 @@ class Memory:
         if timeline:
             # explicit chronological ordering of the relevant facts — helps "first/after/how long" (M2b)
             ordered = sorted((f for f, _ in ranked), key=lambda f: f.valid_at)
-            tl = "\n".join(f"- [{self._stamp(f)}] {f.text}" for f in ordered) or "(none)"
+            tl = "\n".join(f"- [{self._stamp(f, True)}] {f.text}" for f in ordered) or "(none)"
             result = f"TIMELINE (oldest to newest):\n{tl}\n\n" + result
         if graph:
             # L2: traverse the entity graph from the query's anchor entities to pull connected facts
             # across sessions (multi-hop / multi-session).
             related = self._graph_related_facts(search_query, user, as_of)
             if related:
-                block = "\n".join(f"- [{self._stamp(f)}] {f.text}" for f in related)
+                block = "\n".join(f"- [{self._stamp(f, True)}] {f.text}" for f in related)
                 result += f"\n\nRELATED FACTS (graph traversal):\n{block}"
         if wiki:
             # L4: LLM-curated per-entity notes (current vs past), synthesized at query time.
