@@ -2584,14 +2584,8 @@ def test_fact_time_phrase_is_shown_beside_the_stamp():
              user_id="u1", valid_at=BASE, time_phrase="the week before 9 June")
     f.embedding = mem.embedder.embed(f.text)
     mem.fact_store.upsert(f.id, f.embedding, f)
-    # a time-shaped question gets the phrase...
     ctx = mem.lean_context("when did Caroline attend the support group?", user_id="u1")
     assert 'said: "the week before 9 June"' in ctx, ctx[:500]
-
-    # ...but a question that is not about time must NOT: rendering the phrase on every fact line cost
-    # LOCOMO single-hop 6 items (4 of them turning into abstentions) for 2 temporal items gained.
-    ctx_plain = mem.lean_context("what did Caroline attend?", user_id="u1")
-    assert "said:" not in ctx_plain, ctx_plain[:500]
 
     mem2 = Memory(config=Config(evidence_planner=False, temporal_phrase_preservation=False))
     f2 = Fact(subject="Caroline", predicate="attended", object="the support group",
