@@ -60,11 +60,6 @@ class Fact:
     # keeping snapshots backward-compatible. Sensitive facts can be redacted from shared/export contexts.
     category: str = ""
     sensitive: bool = False
-    # The source's own wording for WHEN this happened ("the week before", "first weekend of August").
-    # valid_at collapses time to one stamp, which is what retrieval and conflict resolution need, but the
-    # phrasing is what a temporal question often asks for -- on LOCOMO every granularity failure answered
-    # with a stamp where the gold wanted the phrase. Empty for facts whose time was never stated relatively.
-    time_phrase: str = ""
 
     # --- valid time (world) ---
     valid_at: float = field(default_factory=now)
