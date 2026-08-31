@@ -259,8 +259,9 @@ class CloseSessionReq(BaseModel):
     summarize: bool = True
     clear_working: bool = True
     # Distil the session into decision/finding/lesson facts. None = follow the server's
-    # session_outcomes config; True/False lets a client opt in per session without changing the server
-    # default (the benchmark read path depends on that default staying off).
+    # session_outcomes config (now ON by default); True/False lets a client opt out of, or back into,
+    # the distillation for one close without changing the server default. It is NOT an escape hatch
+    # from the operator's cost ceiling: ENGRAM_SESSION_OUTCOMES=0 forces this off whatever is sent.
     outcomes: Optional[bool] = None
 
 
@@ -501,6 +502,7 @@ def memories(
     episodes_limit: Optional[int] = None,
     episodes_offset: int = 0,
     status: Optional[str] = None,
+    kind: Optional[str] = None,
     q: str = "",
     include_sensitive: bool = False,
     user: str = Depends(auth),
@@ -510,6 +512,8 @@ def memories(
     Defaults to a share-safe view: non-sensitive facts plus content-free counts, with profile/raw episodes
     omitted. Pass `include_sensitive=true` only for an explicit owner-visible inspection view with raw
     episodes, summaries, profile, and sensitive facts.
+    `kind=outcomes` keeps only session conclusions (decision/finding/lesson/open_question),
+    `kind=attributes` keeps only everything else; any other value is ignored, like `status`.
     """
     return svc().memories(
         user,
@@ -518,6 +522,7 @@ def memories(
         episodes_limit=episodes_limit,
         episodes_offset=episodes_offset,
         status=status,
+        kind=kind,
         q=q,
         include_sensitive=include_sensitive,
     )
@@ -718,6 +723,24 @@ def edit_fact(fact_id: str, req: FactEdit, user: str = Depends(auth)):
 def remove_fact(fact_id: str, user: str = Depends(auth)):
     """Right-to-forget: permanently delete a single fact."""
     return svc().delete_fact(user, fact_id)
+
+
+class ClearSlotReq(BaseModel):
+    subject: str
+    predicate: str
+    # The count the owner was shown when they approved. Required: an unguarded bulk delete is the one
+    # shape this endpoint must not offer, so there is no way to spell it.
+    expect_count: int
+
+
+# POST, not DELETE /v1/facts/{slot}: a slot is a (subject, predicate) pair, and routing it as a path
+# segment would collide with /v1/facts/{fact_id}.
+@app.post("/v1/facts/clear-slot")
+def clear_slot(req: ClearSlotReq, user: str = Depends(auth)):
+    """Act on an audit slot_overflow finding: erase every fact crammed into one single-valued slot."""
+    if not req.subject.strip() or not req.predicate.strip():
+        raise HTTPException(400, "subject and predicate are both required")
+    return svc().clear_slot(user, req.subject, req.predicate, expect_count=req.expect_count)
 
 
 # --- ③ focus areas: customize what memory emphasizes (track) or suppresses (mute) ---

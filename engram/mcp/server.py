@@ -256,7 +256,7 @@ async def engram_close_session(
     drains pending consolidation for this session, creates missing summaries, reflects knowledge
     updates into summaries, clears short-lived working memory, and persists the namespace.
 
-    Returns (json): {"ok","session_id","episodes","pending_consolidated","facts_added",
+    Returns (json): {"ok","session_id","episodes","pending_consolidated","facts_added","outcomes",
     "summaries","working_cleared",...}.
     """
     try:
@@ -269,13 +269,17 @@ async def engram_close_session(
         return _err(e)
     if response_format == ResponseFormat.JSON:
         return _json(data)
+    # Session outcomes are the part of a close a person would want to see happened; a silent count keeps
+    # the distillation invisible in the one place an agent reports back.
+    distilled = data.get("outcomes") or 0
     return (
         f"Closed session `{data.get('session_id', session_id)}`. "
         f"Processed {data.get('episodes', 0)} episode(s), "
         f"consolidated {data.get('pending_consolidated', 0)} pending episode(s), "
         f"added {data.get('facts_added', 0)} fact(s), "
         f"created {data.get('summaries', 0)} summary(ies), "
-        f"cleared {data.get('working_cleared', 0)} working item(s)."
+        f"cleared {data.get('working_cleared', 0)} working item(s)"
+        + (f", distilled {distilled} conclusion(s)." if distilled else ".")
     )
 
 
@@ -558,7 +562,14 @@ async def engram_audit(limit: int = 40, response_format: ResponseFormat = Respon
         lines += ["", "## Details", ""]
         for f in findings:
             what = f.get("text") or f.get("entity") or ""
+            if not what and f.get("predicate"):
+                # A group finding (slot_overflow) describes a whole (subject, predicate) slot, not one
+                # row, so it carries no `text`. Without this the line renders as an empty bold and the
+                # agent is told to "clear this slot" without being told which slot.
+                what = f"{f.get('subject', '')} {f.get('predicate')} ×{f.get('count', 0)}".strip()
             lines.append(f"- **{what}** — {f.get('why', '')} → _{f.get('action', '')}_")
+            for sample in (f.get("samples") or [])[:3]:
+                lines.append(f"  - {sample.get('text', '')}")
     if data.get("truncated"):
         lines += ["", f"_(showing {len(findings)}; raise `limit` for more)_"]
     return "\n".join(lines)

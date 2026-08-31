@@ -1,6 +1,6 @@
 # Engram 全链路架构与数据流报告
 
-最后更新：2026-07-14
+最后更新：2026-09-01
 
 本文是 Engram 当前实现的中文工程说明书，目标是让项目负责人不用逐行读代码，也能完整掌握：
 
@@ -292,6 +292,7 @@ flowchart TD
 | LLM 抽取 | `engram/consolidate/llm_extractor.py::LLMExtractor` | 可选增强，不作为 zero-setup 必需项 |
 | 分类 | `engram/consolidate/classify.py` | 给 fact 标 category/sensitive，用于 redaction 和 profile |
 | 结构化画像 | `engram/consolidate/structured.py` | 把 live facts 组织为 profile |
+| 会话结论蒸馏 | `engram/consolidate/outcomes.py::extract_outcomes` | `close_session` 时对整段会话做**一次** LLM 调用，产出 `decision` / `finding` / `lesson` / `open_question` 四类结论 Fact（主语是 session id，宾语是整句结论，`text` = `结论 （依据：why）`）。逐轮抽取只会给出传记式三元组，工作会话的结论一条都留不下，故独立成层。结论与其他写入路径一样过 `classify()` 取敏感位（category 强制为「会话结论」），否则分享安全视图会漏出含敏感内容的结论 |
 
 当前已经落地的抽取优化包括显式偏好、偏好对象过滤/规范化、偏好反转、过程记忆、数值聚合候选等。详见
 `docs/architecture-optimization-map.zh-CN.md` 的“已落地优化台账”。
@@ -329,6 +330,7 @@ graph relation for old fact 被 invalidate
 | `self lives_in Beijing` | upsert entity `self` 和 `Beijing`，增加 `lives_in` relation |
 | `sister works_at Acme` | upsert `sister` 和 `Acme`，增加 `works_at` relation |
 | `procedure/how_to/routine` | 默认不投影为对象节点，留在 procedural memory |
+| `decision/finding/lesson/open_question` | 同上，不投影。结论的宾语是整句话、主语是 session id，建边会把整句话 upsert 成实体、每个 session 造一个孤立节点，并在体检里伪造出 `orphan_entity` |
 
 图谱主要支持：
 
@@ -604,10 +606,11 @@ flowchart TD
 | `graph_negative_constraints` | true | Graph filtering | 负约束排除 |
 | `planner_location_chains` | true | Multi-hop planner | 地点链路 |
 | `planner_project_chains` | true | Multi-hop planner | 项目链路 |
+| `session_outcomes` | true | System-2 / 会话生命周期 | `close_session` 时蒸馏会话结论。它是唯一一个**每次关会话花一次 LLM 调用**的默认开启项：`ENGRAM_SESSION_OUTCOMES=0` 是运维强制开关（在 `close_session` 里覆盖请求体，`outcomes: true` 也无法解除）；未配置 `ENGRAM_LLM` 时该分支不执行，zero-setup 不受影响 |
 
 验收规则：
 
-1. 新增开关必须在 `eval/bench.py::engram_config` 里能关闭。
+1. 新增开关必须在 `eval/bench.py::engram_config` 里能关闭。`session_outcomes` 是这条规则的显式例外：`eval/` 全目录不调用 `close_session`（grep 0 命中），harness 根本走不到这条路径，因此它既不可能移动已发布数字，也没有可 ablate 的读路径分支；验收证据只能是单测，不能是 benchmark 分数（Bet D：不可复现的分数不许报）。
 2. 新增算法路径必须有目标单测或离线 ablation。
 3. 影响 read path/fusion 的改动必须留下真实 benchmark 切片日志。
 4. 准备影响公开数字时，必须跑完整或明确标注探索，不允许只凭小样本宣传。
@@ -622,6 +625,8 @@ flowchart TD
 | 批量导入 | `import_` | `/v1/import` |
 | 回忆 | `recall` | `/v1/recall`, MCP recall/search |
 | 用户事实增删改 | `add_fact`, `update_fact`, `delete_fact` | fact APIs |
+| 记忆体检 | `audit` | `GET /v1/audit`, MCP `engram_audit`（只读；逐条发现 + 按槽分组的 `slot_overflow`） |
+| 清空单值槽 | `clear_slot` | `POST /v1/facts/clear-slot`（**不可逆**；仅 HTTP，MCP 未暴露） |
 | focus/policy | `set_focus`, `set_policy` | focus/policy APIs |
 | working memory | `add_working`, `working_memory`, `clear_working` | working APIs |
 | 冲突处理 | `conflicts`, `resolve_conflict` | conflicts APIs |
@@ -639,6 +644,10 @@ flowchart TD
 6. 读写锁和文件锁避免同租户并发写坏。
 7. 自动保存到用户数据目录。
 8. 给 HTTP/MCP/TypeScript SDK 提供稳定管理面。
+9. `clear_slot` 是 `delete_fact` 之外的第二条右删路径，写在这里是因为它是全仓唯一的**批量**硬删除：
+   它只删某个 `(subject, predicate)` 槽上的 **live** 事实（显式跳过 supersedes 历史，见第 16 节不变量 1），
+   删除集与 `audit()` 的分组集必须描述同一批行——两侧都对 `user_id` 走 `resolver.resolve`，否则
+   `expect_count` 这个乐观并发守卫会在两个不同人群之间比大小、放行一次删错对象的操作。
 
 ### 10.1 商业自托管请求与落盘数据流
 
@@ -772,6 +781,9 @@ python eval/validate_results.py
 | 冲突怎么变 supersedes | `engram/consolidate/conflict.py` |
 | consolidation 主流程 | `engram/consolidate/engine.py::ConsolidationEngine.consolidate` |
 | 图谱怎么建 | `engram/consolidate/graph_builder.py` |
+| 会话结论怎么来的 | `engram/consolidate/outcomes.py`, `engram/service.py::MemoryService.close_session` |
+| 记忆体检规则在哪 | `engram/service.py::MemoryService.audit`（`slot_overflow` 的边界是 `structured._BASIC` 减 `_MULTI_VALUED_FIELDS`） |
+| 批量硬删除在哪 | `engram/service.py::MemoryService.clear_slot`, `engram/server/app.py::clear_slot` |
 | 问题怎么分类 | `engram/retrieve/evidence.py::plan_evidence` |
 | 多信号检索 | `engram/retrieve/hybrid.py::HybridRetriever.retrieve` |
 | 多跳规划 | `engram/retrieve/planner.py::MultiHopPlanner` |
@@ -794,7 +806,8 @@ python eval/validate_results.py
 
 这些是后续 AI 改代码不能破坏的底线：
 
-1. 不删除 contradicted facts，必须非破坏性失效。
+1. 不删除 contradicted facts，必须非破坏性失效。用户主动行使删除权的两条路径（`delete_fact` 单条、
+   `clear_slot` 按槽）只作用于 live 事实，不得把 supersedes 链上的历史一起抹掉。
 2. 不把 facts-only 当成默认 QA 主路径。
 3. 不让 LLM 成为 zero-setup 必需依赖。
 4. 不让 recency/salience 这种 prior 单独伪装成证据。

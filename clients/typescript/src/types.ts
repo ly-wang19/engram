@@ -59,6 +59,9 @@ export interface CloseSessionResult {
   summaries: number
   reflected: number
   working_cleared: number
+  /** Conclusions newly distilled from this session. Re-closing an unchanged session adds none, and a
+   *  server with no LLM configured (or `ENGRAM_SESSION_OUTCOMES=0`) always reports 0. */
+  outcomes?: number
 }
 
 export interface SessionReportFact {
@@ -146,6 +149,9 @@ export interface Fact {
   redacted?: boolean
   salience: number
   provenance: string[]
+  /** Session conclusions embed their grounds in `text` ("statement （依据：why）"); the server splits the
+   *  grounds back out here. Empty string for ordinary attribute facts. */
+  why?: string
 }
 
 export interface EpisodeView {
@@ -160,6 +166,8 @@ export interface MemoryCounts {
   facts_live: number
   facts_superseded: number
   summaries: number
+  /** Live facts that are session conclusions. Counted over the unfiltered set, like the two above. */
+  facts_outcomes?: number
 }
 
 export type MemoryStatusFilter = 'live' | 'current' | 'superseded' | 'old' | 'history'
@@ -185,7 +193,12 @@ export interface MemoryListOptions {
   q?: string
   /** Defaults to a share-safe list; pass true only for explicit owner-visible raw episodes/profile. */
   includeSensitive?: boolean
+  /** Split the fact set: 'outcomes' = session conclusions only, 'attributes' = everything else.
+   *  Unknown values are ignored by the server, like `status`. */
+  kind?: MemoryKindFilter
 }
+
+export type MemoryKindFilter = 'outcomes' | 'attributes'
 
 /** Paged memory view (GET /v1/memories); share-safe by default. */
 export interface MemoryDump {

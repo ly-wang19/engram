@@ -92,7 +92,11 @@ export default function Conversations() {
             onClick={() =>
               closeSession.mutate(currentSession, {
                 onSuccess: (r) => {
-                  toast.success(t.conversations.closedSession(r.facts_added))
+                  toast.success(
+                    r.outcomes > 0
+                      ? t.conversations.closedSessionOutcomes(r.facts_added, r.outcomes)
+                      : t.conversations.closedSession(r.facts_added),
+                  )
                   setAuditSession(currentSession)
                   working.refetch()
                 },

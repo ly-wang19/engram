@@ -4,8 +4,16 @@ from __future__ import annotations
 from ..embed import Embedder
 from ..store import GraphStore
 from ..types import Entity, Fact, Relation
+from .outcomes import OUTCOME_PREDICATES
 
-_TEXTUAL_OBJECT_PREDICATES = {"procedure", "how_to", "routine", "instruction", "agent_instruction"}
+# Predicates whose object is prose, not a nameable thing. An edge here would upsert the whole sentence as
+# an entity. Session outcomes are the worst case of that: the object is a full conclusion and the subject
+# is a session id, so every distilled statement would manufacture one junk node plus one node per session,
+# poisoning /v1/graph and inventing orphan_entity findings in the very audit meant to clean the store up.
+_TEXTUAL_OBJECT_PREDICATES = {
+    "procedure", "how_to", "routine", "instruction", "agent_instruction",
+    *OUTCOME_PREDICATES,
+}
 
 
 class GraphBuilder:

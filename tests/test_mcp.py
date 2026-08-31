@@ -734,3 +734,24 @@ async def test_forget_requires_confirm(local_backend):
     assert "erased" in done.lower()
     facts = await call("engram_list_facts")
     assert "No facts stored yet" in facts
+
+
+@pytest.mark.asyncio
+async def test_audit_markdown_names_the_slot_of_a_group_finding(local_backend):
+    """A `slot_overflow` finding describes a whole (subject, predicate) slot, so it carries no `text` —
+    the per-fact field the markdown renderer prints. Without a fallback the agent is handed an empty
+    bold and told to "clear this slot" without being told which slot, on the one finding whose remedy
+    is an irreversible bulk delete."""
+    from engram.types import Fact
+
+    mem = local_backend.get("me")
+    for i in range(4):
+        junk = Fact(subject="user", predicate="occupation", object=f"borrowed title {i}", user_id="me")
+        junk.embedding = mem.embedder.embed(junk.text)
+        mem.fact_store.upsert(junk.id, junk.embedding, junk)
+
+    md = await call("engram_audit")
+    assert "`slot_overflow`: 1" in md
+    assert "**** —" not in md               # the empty-bold render
+    assert "**user occupation ×4**" in md   # which slot, and how big
+    assert "borrowed title 0" in md         # the samples its action tells the reader to look at

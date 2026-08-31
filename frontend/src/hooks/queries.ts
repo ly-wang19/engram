@@ -28,6 +28,11 @@ export const qk = {
   working: (sessionId?: string) => ['working', ns(), sessionId ?? 'all'] as const,
   conflicts: () => ['conflicts', ns()] as const,
   health: () => ['health'] as const,
+  // Namespaced like every other key (see ns() above) — the audit is per-memory-space, so an
+  // un-namespaced key would show the previous space's findings, with its one-click bulk delete, after
+  // a key switch. Prefix key: invalidating ['audit', ns()] matches every limit the Health page holds.
+  auditRoot: () => ['audit', ns()] as const,
+  audit: (limit: number) => ['audit', ns(), limit] as const,
 }
 
 export function useHealth() {
@@ -84,6 +89,10 @@ function useInvalidateMemory() {
     qc.invalidateQueries({ queryKey: qk.graphRoot() })
     qc.invalidateQueries({ queryKey: qk.focus() })
     qc.invalidateQueries({ queryKey: qk.profile() })
+    // The health audit is derived from the same facts. Without this a delete leaves the Health page
+    // showing the rows it just erased — and re-clicking its (irreversible) clear button reports
+    // "the slot changed since it was checked", blaming the store for the owner's own edit.
+    qc.invalidateQueries({ queryKey: qk.auditRoot() })
   }
 }
 
@@ -98,7 +107,7 @@ export function useSourceEpisodes(enabled: boolean) {
 
 export function useAudit(limit = 60) {
   return useQuery({
-    queryKey: ['audit', limit],
+    queryKey: qk.audit(limit),
     queryFn: () => api.audit(limit),
   })
 }
@@ -193,6 +202,15 @@ export function useEditFact() {
 export function useDeleteFact() {
   const invalidate = useInvalidateMemory()
   return useMutation({ mutationFn: (id: string) => api.deleteFact(id), onSuccess: invalidate })
+}
+
+export function useClearSlot() {
+  const invalidate = useInvalidateMemory()
+  return useMutation({
+    mutationFn: ({ subject, predicate, count }: { subject: string; predicate: string; count: number }) =>
+      api.clearSlot(subject, predicate, count),
+    onSuccess: invalidate,
+  })
 }
 
 export function useSetFocus() {

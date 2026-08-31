@@ -37,6 +37,9 @@ export default function Facts() {
   }, [q, showOld, hideSensitive])
 
   const { data, isLoading, isError, error } = useMemories({
+    // Attributes only — session conclusions have their own page, and mixing them means the newer,
+    // bulkier family buries the older one in both directions.
+    kind: 'attributes',
     facts_limit: limit,
     episodes_limit: 0,
     q,

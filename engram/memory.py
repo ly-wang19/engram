@@ -683,7 +683,28 @@ class Memory:
             f.predicate = predicate
         if object is not None:
             f.object = object
-        f.text = f"{f.subject} {f.predicate.replace('_', ' ')} {f.object}".strip()
+        # An outcome is not a triple: its subject is a session id and its object is a whole sentence, so
+        # the generic "subject predicate object" rebuild would embed `s-2026-08-31 lesson ...` and drop
+        # the 依据 clause that recall matches a lesson by (people search a lesson by its cause).
+        from .consolidate.outcomes import OUTCOME_CATEGORY, OUTCOME_PREDICATES, split_outcome_text
+        if f.predicate.lower() in OUTCOME_PREDICATES:
+            _, why = split_outcome_text(f.text)
+            f.text = f"{f.object} （依据：{why}）" if why else f.object
+        else:
+            f.text = f"{f.subject} {f.predicate.replace('_', ' ')} {f.object}".strip()
+        # display_of() prefers `display` over `text`, so a stale display makes every surface keep
+        # rendering the pre-edit wording after a save the user was told succeeded. Not outcome-specific.
+        # An outcome's display IS its object (outcomes.py writes `display=statement`), so it can be
+        # reassigned. Every other fact's display is the extractor's whole sentence ("Wei works at
+        # Tencent"), and assigning the bare object there would render it as "Moonshot AI" — the fragment
+        # problem this feature exists to fix, reintroduced on the attributes side. Clear it instead and
+        # let display_of() fall back to render_display(subject, predicate, object), which is already how
+        # every rule-extracted fact (display="") renders.
+        # Gate on "text was rebuilt", not on "object changed": renaming a predicate (finding -> lesson)
+        # or a subject also rewrites text, and leaving display behind is the same stale-render bug.
+        if (subject is not None or predicate is not None or object is not None) \
+                and (getattr(f, "display", "") or "").strip():
+            f.display = f.object if f.predicate.lower() in OUTCOME_PREDICATES else ""
         f.embedding = self.embedder.embed(f.text)
         f.source = "user"
         f.invalid_at = None  # a user edit makes it current again
@@ -691,6 +712,10 @@ class Memory:
         # re-classify from the edited content, then apply any explicit user override
         from .consolidate.classify import classify
         f.category, f.sensitive = classify(f.predicate, f.object, f.text)
+        # A conclusion stays a conclusion after a correction. classify() only knows about attribute
+        # buckets, so without this an edit silently demotes the fact out of the Journal.
+        if f.predicate.lower() in OUTCOME_PREDICATES:
+            f.category = OUTCOME_CATEGORY
         if category is not None:
             f.category = category
         if sensitive is not None:

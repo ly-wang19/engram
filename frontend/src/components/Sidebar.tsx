@@ -5,6 +5,7 @@ import {
   HeartPulse,
   LayoutDashboard,
   MessagesSquare,
+  NotebookPen,
   Search,
   Share2,
   ShieldCheck,
@@ -20,6 +21,7 @@ import { cx } from './ui'
 
 const NAV: Array<{ to: string; key: keyof Dict['nav']; icon: typeof LayoutDashboard; end?: boolean }> = [
   { to: '/', key: 'dashboard', icon: LayoutDashboard, end: true },
+  { to: '/journal', key: 'journal', icon: NotebookPen },
   { to: '/profile', key: 'profile', icon: UserRound },
   { to: '/ask', key: 'ask', icon: Search },
   { to: '/facts', key: 'facts', icon: Database },

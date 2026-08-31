@@ -27,6 +27,10 @@ from .util import fmt_date, fmt_datetime
 
 DEFAULT_DATA_DIR = os.path.expanduser("~/.engram/data")
 
+# _BASIC normalized fields that legitimately hold several values at once. The audit's slot_overflow
+# pre-pass ("a single-valued slot cannot hold N values") is only true of the others.
+_MULTI_VALUED_FIELDS = {"children", "language", "education"}
+
 # Frame the assembled memory for the answerer used by /v1/recall (the console's 问答 view).
 _ANSWER_SYSTEM = (
     "你是用户的记忆助手。只依据下面提供的【记忆】回答用户的问题,简洁、准确、口语化。"
@@ -133,6 +137,16 @@ class MemoryService:
         # default so the offline/zero-setup path stays deterministic (pure-rules conflict handling).
         if os.environ.get("ENGRAM_CONFLICT_DETECTION") == "1" and self.llm is not None:
             self.config.conflict_detection = True
+        # Operator kill switch. Session outcomes are the only default that spends an LLM call per session
+        # close, and a deployed server cannot control what its clients pass in the request body — so the
+        # cost ceiling has to be settable server-side, not per-request. Which means it cannot be only a
+        # DEFAULT: /v1/sessions/close takes an `outcomes` field, and this repo's own watcher
+        # (connectors/watch.py) posts `outcomes: True` on every session it imports, so a switch that only
+        # moved the default would leave the operator's cost ceiling off for the one caller that runs
+        # unattended. Keep the flag and enforce it in close_session as an override.
+        self._outcomes_forced_off = os.environ.get("ENGRAM_SESSION_OUTCOMES") == "0"
+        if self._outcomes_forced_off:
+            self.config.session_outcomes = False
         self._hot: "OrderedDict[str, Memory]" = OrderedDict()
         self._hot_versions: dict[str, tuple[int, int] | None] = {}
         self._locks: dict[str, threading.Lock] = {}
@@ -517,6 +531,48 @@ class MemoryService:
             self._save(user, mem)
             return {"ok": ok}
 
+    def clear_slot(self, user: str, subject: str, predicate: str, expect_count: int) -> dict:
+        """Hard-delete every fact on one (subject, predicate) slot.
+
+        The audit's slot_overflow finding tells the owner to clear the slot; without this the console is
+        a diagnosis with no cure — on a real store that meant 84 rows behind 84 separate confirm dialogs.
+        Erasure rather than invalidation is right here: a slot that holds 84 values never held a claim
+        that was true and later stopped being true, so there is no history worth preserving. That is the
+        same right-to-forget path `delete_fact` already models.
+
+        `expect_count` is a required optimistic-concurrency guard, not an option. The owner approves
+        deleting the N rows the audit showed them; if the store moved in between (a watcher run, another
+        session), refusing is the only safe answer — silently erasing more than was approved is exactly
+        the corruption CLAUDE.md §8 forbids. Making it optional would leave the unguarded call as the
+        API's default shape, which is the one shape this operation must not have.
+        """
+        with self.write_lock(user):
+            mem = self.get(user)
+            canonical = mem.resolver.resolve(user)
+            pred = predicate.strip().lower()
+            # The doomed set must be EXACTLY the set audit() grouped, or the count guard compares two
+            # different populations and passes while erasing the wrong rows:
+            #   * resolve BOTH sides of the identity check. Facts written before an identity link carry
+            #     the raw handle and facts written after carry the canonical one; comparing a stored
+            #     `user_id` against one spelling silently targets the other half of the same person.
+            #   * live facts only. audit() groups live facts, so `expect_count` is a live count; matching
+            #     superseded rows here would both break the guard permanently on any slot that has a
+            #     supersedes chain and, when the guard is omitted, hard-delete bi-temporal history the
+            #     owner was never shown (CLAUDE.md §3.1: invalidate, never erase, a superseded fact).
+            #   * skip source="user". A fact the owner typed is not extraction junk, and audit() leaves
+            #     it out of the group for the same reason.
+            doomed = [f for f in _all_facts(mem)
+                      if f.is_live() and f.source != "user"
+                      and mem.resolver.resolve(f.user_id) == canonical
+                      and f.subject == subject and f.predicate.strip().lower() == pred]
+            if len(doomed) != expect_count:
+                return {"ok": False, "deleted": 0, "found": len(doomed),
+                        "expected": expect_count, "reason": "slot changed since it was audited"}
+            for f in doomed:
+                mem.delete_fact(f.id)
+            self._save(user, mem)
+            return {"ok": True, "deleted": len(doomed), "subject": subject, "predicate": predicate}
+
     def set_focus(self, user: str, track: Optional[list[str]] = None,
                   mute: Optional[list[str]] = None) -> dict:
         with self.write_lock(user):
@@ -702,10 +758,25 @@ class MemoryService:
             # yields biographical triples, which a working session simply does not contain.
             outcome_facts = 0
             want = self.config.session_outcomes if outcomes is None else outcomes
+            if self._outcomes_forced_off:
+                want = False  # ENGRAM_SESSION_OUTCOMES=0 is the operator's ceiling; no request body lifts it
             if want and self.llm is not None and episodes:
-                from .consolidate.outcomes import extract_outcomes
+                from .consolidate.outcomes import (
+                    OUTCOME_PREDICATES, extract_outcomes, split_outcome_text,
+                )
 
+                # Closing the same session twice must not double the conclusions. extract_outcomes only
+                # dedupes within one call, and re-closing is the normal case: connectors/watch.py
+                # re-sends any transcript that grew and closes it again. Same 120-char key it uses.
+                seen_keys = {
+                    split_outcome_text(f.text)[0].lower()[:120]
+                    for f in _all_facts(mem)
+                    if f.is_live() and f.user_id == canonical
+                    and f.predicate.lower() in OUTCOME_PREDICATES and f.subject == session_id
+                }
                 for fact in extract_outcomes(self.llm, episodes, canonical, session_id=session_id):
+                    if split_outcome_text(fact.text)[0].lower()[:120] in seen_keys:
+                        continue
                     fact.embedding = mem.embedder.embed(fact.text)
                     mem.fact_store.upsert(fact.id, fact.embedding, fact)
                     mem.engine.graph_builder.add_fact(fact)
@@ -991,6 +1062,7 @@ class MemoryService:
         episodes_limit: Optional[int] = None,
         episodes_offset: int = 0,
         status: Optional[str] = None,
+        kind: Optional[str] = None,
         q: str = "",
         include_sensitive: bool = False,
     ) -> dict:
@@ -999,7 +1071,12 @@ class MemoryService:
         Default is share-safe: non-sensitive facts plus content-free counts, with profile/raw episodes
         omitted. With `include_sensitive=True`, this is the owner-visible inspection payload: profile,
         raw episodes + L2 summaries, and sensitive facts.
+
+        `kind` splits the fact set into the two things a reader actually browses separately: 'outcomes'
+        (what sessions concluded) vs 'attributes' (everything else). Unknown values are ignored rather
+        than rejected, like `status`.
         """
+        from .consolidate.outcomes import OUTCOME_PREDICATES, split_outcome_text
         from .localize import display_of  # localized rendering for Chinese-recorded facts
 
         mem = self.get(user)
@@ -1018,6 +1095,11 @@ class MemoryService:
                 "source": f.source, "supersedes": f.supersedes,
                 "category": getattr(f, "category", ""), "sensitive": getattr(f, "sensitive", False),
                 "salience": round(f.salience, 2), "provenance": f.provenance,
+                # An outcome's `text` is "statement （依据：why）" — one embedded string, because that is
+                # what recall matches. A reader wants the two apart, so split once here instead of
+                # asking every surface to re-parse the separator. Always present, "" for attributes.
+                "why": split_outcome_text(f.text)[1]
+                       if f.predicate.lower() in OUTCOME_PREDICATES else "",
             }
 
         def episode_view(ep) -> dict:
@@ -1041,6 +1123,12 @@ class MemoryService:
             filtered_facts = [f for f in filtered_facts if f.is_live()]
         elif status in {"superseded", "old", "history"}:
             filtered_facts = [f for f in filtered_facts if not f.is_live()]
+        # Facts only: episodes have no predicate, so `kind` never touches filtered_episodes.
+        kind_key = (kind or "").strip().lower()
+        if kind_key == "outcomes":
+            filtered_facts = [f for f in filtered_facts if f.predicate.lower() in OUTCOME_PREDICATES]
+        elif kind_key == "attributes":
+            filtered_facts = [f for f in filtered_facts if f.predicate.lower() not in OUTCOME_PREDICATES]
         if not include_sensitive:
             filtered_facts = [f for f in filtered_facts if not getattr(f, "sensitive", False)]
         if needle:
@@ -1075,6 +1163,10 @@ class MemoryService:
             "counts": {"episodes": len(episodes_all),
                        "facts_live": sum(1 for f in all_facts if f.is_live()),
                        "facts_superseded": sum(1 for f in all_facts if not f.is_live()),
+                       # Over the UNFILTERED set, like facts_live/facts_superseded: a count that shrank
+                       # with the current filter could not tell a caller whether outcomes exist at all.
+                       "facts_outcomes": sum(1 for f in all_facts
+                                             if f.is_live() and f.predicate.lower() in OUTCOME_PREDICATES),
                        "summaries": len(mem.summary_vec.values())},
             "facts": facts_payload,
             "episodes": episodes_payload,
@@ -1097,8 +1189,15 @@ class MemoryService:
         """
         import re
 
+        from .consolidate.outcomes import OUTCOME_PREDICATES
+        from .consolidate.structured import _BASIC
+
         mem = self.get(user)
-        facts = [f for f in _all_facts(mem) if f.user_id == user and f.is_live()]
+        # Resolve both sides: an owner whose handles were linked has facts stamped with either spelling,
+        # and clear_slot() acts on exactly this set — the two must never disagree about who owns a fact.
+        canonical = mem.resolver.resolve(user)
+        facts = [f for f in _all_facts(mem)
+                 if mem.resolver.resolve(f.user_id) == canonical and f.is_live()]
         graph = mem.graph_data(user, include_sensitive=True)
         referenced = {e["source"] for e in graph.get("edges", [])} | {e["target"] for e in graph.get("edges", [])}
 
@@ -1115,7 +1214,50 @@ class MemoryService:
                 row["entity"] = entity
             findings.append(row)
 
+        # Pre-pass: what is wrong with a store holding 84 live `occupation` facts is not any one row —
+        # every row passes the per-fact rules — it is that a single-valued identity slot holds 84 values.
+        # Only _BASIC predicates qualify: `likes` with 20 values is a correct list, `occupation` with 3
+        # cannot be. Reported once per slot, and its facts skip the per-fact loop so one broken slot does
+        # not bury every other finding under 84 duplicate rows.
+        by_slot: dict[tuple[str, str], list] = {}
         for f in facts:
+            # A fact the owner typed is by definition not extraction output, so it cannot be the junk
+            # this rule names — and it is the most costly thing in the slot to lose to a bulk delete.
+            # clear_slot() applies the same exclusion: the two must describe the same population or the
+            # count guard compares one set while the delete runs on another.
+            if f.source == "user":
+                continue
+            by_slot.setdefault((f.subject, f.predicate), []).append(f)
+        overflowed: set[str] = set()
+        for (subject, predicate), group in by_slot.items():
+            if len(group) < 3 or predicate.lower() not in _BASIC:
+                continue
+            field, label = _BASIC[predicate.lower()]
+            # ...and only the SINGLE-valued ones. _BASIC also normalizes children / speaks /
+            # graduated_from, where three values is a person with three kids, three languages, three
+            # degrees — not extraction junk. Telling the owner "单值属性不可能有 3 个值" about those is
+            # false, and the finding carries a one-click irreversible delete.
+            if field in _MULTI_VALUED_FIELDS:
+                continue
+            findings.append({
+                "kind": "slot_overflow",
+                # Prose in the same language as every other rule's; the console composes its own
+                # localized sentence from count/predicate/label instead of rendering this one, because
+                # a one-click irreversible delete must be explained in the reader's language.
+                "why": f"{len(group)} facts all claim {label} ({predicate}) — a single-valued slot "
+                       f"cannot have {len(group)} values; these are extraction fragments, not memories",
+                "action": "look at the samples, then clear the slot",
+                "subject": subject, "predicate": predicate, "label": label, "count": len(group),
+                "samples": [{"fact_id": g.id, "text": g.text} for g in group[:5]],
+            })
+            overflowed.update(g.id for g in group)
+
+        for f in facts:
+            # Outcome statements are 400-char sentences that routinely name a config path, so
+            # unreduced_claim and code_artifact would flag most session conclusions as junk. They are
+            # written whole by design; the per-fact rules exist to catch triples the extractor botched.
+            if f.predicate.lower() in OUTCOME_PREDICATES or f.id in overflowed:
+                continue
             obj, pred = f.object.strip(), f.predicate.strip()
             # A snake_case object is source text that was never turned into a value: "user interested in
             # kind_bar_fruit_nut_flavor" reads as machine output and matches no natural phrasing at recall.

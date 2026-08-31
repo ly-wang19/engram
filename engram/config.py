@@ -57,9 +57,16 @@ class Config:
     aggregation_constraint_filter: bool = True  # mark numeric candidates that violate query constraints as EXCLUDE
     aggregation_pool_boost: bool = True  # count/list/sum questions consolidate a wider session pool (they need every occurrence)
     procedural_extraction: bool = True  # extract durable runbooks/how-to steps into typed procedure facts
-    session_outcomes: bool = False  # distil each session into decision/finding/lesson facts (one LLM
-    #   call per session). OFF by default: it is for personal working memory, not the QA benchmark, and
-    #   the read path must stay byte-identical unless someone opts in.
+    session_outcomes: bool = True  # distil each session into decision/finding/lesson facts (one LLM
+    #   call per session). ON by default. "The read path must stay byte-identical" was the reason to keep
+    #   it off, and it is now the evidence that flipping it is safe: (1) nothing under eval/ calls
+    #   close_session (grep: zero hits), so no published number can move — and eval/bench.py passes
+    #   --embedder explicitly, so server-side defaults never reach the harness at all; (2) service.py
+    #   leaves self.llm = None unless ENGRAM_LLM is set, and the outcomes branch in close_session is
+    #   guarded by `self.llm is not None`, so pytest and quickstart produce zero outcomes, zero LLM calls
+    #   and zero new deps — the zero-setup invariant is untouched. A knob would be dead UI: the console
+    #   and the MCP tool both close sessions through the server default and so cannot reach the feature
+    #   at all while it is off. ENGRAM_SESSION_OUTCOMES=0 is the operator escape hatch.
     summary_fallback: bool = True  # answer from derived session summaries when facts cannot answer
     summary_fallback_k: int = 6  # candidate summaries inspected by the fallback before abstaining
     procedural_memory: bool = True  # surface standing rules/how-to memories as a typed derived read layer

@@ -46,6 +46,7 @@ export const en = {
 
   nav: {
     dashboard: 'Overview',
+    journal: 'Journal',
     profile: 'Profile',
     ask: 'Ask',
     facts: 'Facts',
@@ -97,7 +98,7 @@ export const en = {
     statLive: 'Current facts',
     statSuperseded: 'History (updated)',
     statEpisodes: 'Conversations',
-    statSummaries: 'Summaries',
+    statOutcomes: 'Conclusions',
     rememberHint: 'System-1 write · System-2 async extraction / conflict resolution',
     rememberPlaceholder: "e.g. I'm in Shanghai next Tuesday for work, staying near the Bund.",
     quickSave: '⌘/Ctrl + Enter to save',
@@ -105,11 +106,41 @@ export const en = {
     personaTitle: 'Profile',
     personaEmptyTitle: 'Your profile is still forming',
     personaEmptyHint: 'Chat a bit more, or add a few entries under "Facts", and the profile builds itself.',
-    recentAll: 'View all →',
-    recentTitle: 'Recent facts',
-    recentEmptyTitle: 'No facts yet',
-    recentEmptyHint: 'Try saving a memory.',
+    conclusionsTitle: 'Latest conclusions',
+    conclusionsAll: 'View all →',
+    conclusionsEmptyTitle: 'No conclusions yet',
+    conclusionsEmptyHint: 'Close a session — or distil an existing one from the Journal — and what it decided, found and learned shows up here.',
     structuredHint: 'Structured profile · easier to scan than raw Markdown',
+  },
+
+  journal: {
+    title: 'Journal',
+    subtitle: 'What each session decided, found, learned and left open — distilled once, when the session closes.',
+    loading: 'Loading your journal…',
+    searchPlaceholder: 'Search conclusions…',
+    showSuperseded: 'Show updated ones',
+    loadMore: 'Load more conclusions',
+    kindAll: 'All',
+    kind: {
+      decision: 'Decision',
+      finding: 'Finding',
+      lesson: 'Lesson',
+      open_question: 'Open',
+    },
+    openQuestionsTitle: (n: number) => `Still open · ${n}`,
+    sessionLabel: 'Session',
+    conclusionCount: (n: number) => `${n} conclusion${n === 1 ? '' : 's'}`,
+    mine: 'Edited by me',
+    editHint: 'Click a line to edit · ⌘/Ctrl + Enter saves · Esc cancels',
+    saved: 'Saved — and marked as yours, so the next distillation will not overwrite it',
+    deleteTitle: 'Delete this conclusion?',
+    deleteBody: 'The conclusion is erased permanently. The conversation it came from stays.',
+    emptyTitle: 'Nothing distilled yet',
+    emptyBody:
+      'Until now Engram only extracted attribute-shaped facts, one per turn — which is why the store read as fragments. It now also records what a session decided, what it found, what it learned and what stayed open. Conclusions are written when a session is closed; `python -m engram.connectors.watch --once` batch-imports this machine\'s agent sessions.',
+    backfillTitle: 'Distil a session you already have',
+    backfillButton: 'Distil',
+    backfillDone: (n: number) => `Distilled — ${n} new conclusion${n === 1 ? '' : 's'}`,
   },
 
   ask: {
@@ -212,6 +243,8 @@ export const en = {
     scopeWorking: 'Working',
     closeSession: 'Close session',
     closedSession: (n: number) => `Session closed — ${n} durable fact${n === 1 ? '' : 's'} saved`,
+    closedSessionOutcomes: (facts: number, outcomes: number) =>
+      `Session closed — ${facts} fact${facts === 1 ? '' : 's'} and ${outcomes} conclusion${outcomes === 1 ? '' : 's'} saved`,
     statusNamespace: (user: string) => `namespace ${user}`,
     statusSession: (session: string) => `session ${session}`,
     statusFacts: (n: number) => `${n} live facts`,
@@ -301,7 +334,7 @@ export const en = {
     loading: 'Loading facts…',
     title: 'Facts',
     subtitle:
-      "Every fact carries bi-temporal stamps and a source. Whatever you edit or add by hand is locked 🔒 and won't be overwritten by auto-extraction.",
+      "Every fact carries bi-temporal stamps and a source. Whatever you edit or add by hand is locked 🔒 and won't be overwritten by auto-extraction. This page holds attributes only — what a session decided, found or learned lives in the Journal.",
     addManual: 'Add one manually',
     searchPlaceholder: 'Search facts…',
     showOld: 'Show history',
@@ -427,7 +460,23 @@ export const en = {
       empty_value: 'says nothing',
       unreduced_claim: 'not a value',
       orphan_entity: 'unconnected',
+      fragment: 'clipped',
+      code_artifact: 'code, not memory',
+      dangling_subject: 'no subject',
+      slot_overflow: 'slot overflow',
     },
+    // `label` is the backend's Chinese display name for the slot; the English console names the
+    // predicate instead so the sentence stays in one language.
+    slotOverflowWhy: (n: number, _label: string, predicate: string) =>
+      `${n} facts all claim \`${predicate}\` — a slot that holds one value cannot have ${n}; these are extraction fragments, not memories`,
+    slotOverflowAction: 'look at the samples, then clear the slot',
+    clearSlot: (n: number) => `Clear all ${n}`,
+    clearSlotTitle: 'Clear this slot?',
+    clearSlotBody: (n: number, predicate: string) =>
+      `${n} facts are all crammed into "${predicate}", a slot that can only hold one value. They are extraction fragments, not memories.`,
+    clearSlotIrreversible: 'Permanently deleted — this is not an invalidation and cannot be undone.',
+    clearSlotDone: (n: number) => `${n} fragments cleared`,
+    clearSlotStale: 'The slot changed since it was checked — nothing was deleted. Refresh and try again.',
   },
   privacy: {
     title: 'Privacy & data',
