@@ -258,6 +258,10 @@ class CloseSessionReq(BaseModel):
     session_id: str = Field(default="default", min_length=1, max_length=512)
     summarize: bool = True
     clear_working: bool = True
+    # Distil the session into decision/finding/lesson facts. None = follow the server's
+    # session_outcomes config; True/False lets a client opt in per session without changing the server
+    # default (the benchmark read path depends on that default staying off).
+    outcomes: Optional[bool] = None
 
 
 @app.get("/health")
@@ -445,6 +449,7 @@ def close_session(req: CloseSessionReq, user: str = Depends(auth)):
         req.session_id,
         summarize=req.summarize,
         clear_working=req.clear_working,
+        outcomes=req.outcomes,
     )
 
 

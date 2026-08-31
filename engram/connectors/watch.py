@@ -83,10 +83,27 @@ def pending_sessions(state: dict, since: Optional[float] = None,
     return out
 
 
-def ingest(base_url: str, api_key: str, paths: list[str], timeout: int = 900) -> dict:
-    """POST parsed sessions to /v1/import. Returns the server's stats."""
+def _post(base_url: str, api_key: str, path: str, body: dict, timeout: int) -> dict:
     import urllib.request
 
+    req = urllib.request.Request(
+        base_url.rstrip("/") + path,
+        data=json.dumps(body).encode("utf-8"),
+        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
+def ingest(base_url: str, api_key: str, paths: list[str], timeout: int = 900,
+           outcomes: bool = True) -> dict:
+    """Import the sessions, then close each one so it gets distilled.
+
+    Importing alone only stores the transcript. The distillation — what was decided, found, learned —
+    happens at close_session, so a watcher that skips the close leaves the memory full of raw turns and
+    empty of conclusions, which is the state this whole path exists to fix.
+    """
     sessions = load_sessions(paths)
     if not sessions:
         return {"ok": True, "sessions": 0, "episodes": 0, "note": "nothing conversational in those files"}
@@ -97,14 +114,25 @@ def ingest(base_url: str, api_key: str, paths: list[str], timeout: int = 900) ->
             for s in sessions
         ]
     }
-    req = urllib.request.Request(
-        base_url.rstrip("/") + "/v1/import",
-        data=json.dumps(payload).encode("utf-8"),
-        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-        method="POST",
-    )
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        return json.loads(resp.read().decode("utf-8"))
+    result = _post(base_url, api_key, "/v1/import", payload, timeout)
+    if not outcomes:
+        return result
+
+    # Distil each imported session. Per-session rather than one bulk call: the extractor reasons over a
+    # single conversation's arc, and one session failing must not cost the others their conclusions.
+    distilled = 0
+    failed = 0
+    for s in sessions:
+        try:
+            closed = _post(base_url, api_key, "/v1/sessions/close",
+                           {"session_id": s.session_id, "outcomes": True}, timeout)
+            distilled += int(closed.get("outcomes") or 0)
+        except Exception:  # noqa: BLE001 — the transcripts are already stored; a failed distil is retryable
+            failed += 1
+    result["outcomes"] = distilled
+    if failed:
+        result["distil_failed"] = failed
+    return result
 
 
 def main(argv: Optional[list[str]] = None) -> int:
@@ -117,6 +145,8 @@ def main(argv: Optional[list[str]] = None) -> int:
     ap.add_argument("--quiet-seconds", type=int, default=QUIET_SECONDS,
                     help="how long a transcript must be idle before it counts as finished")
     ap.add_argument("--state", default=DEFAULT_STATE)
+    ap.add_argument("--no-outcomes", action="store_true",
+                    help="import transcripts only, skip distilling them into decisions/lessons")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--once", action="store_true", help="accepted for clarity; this always runs once")
     args = ap.parse_args(argv)
@@ -148,7 +178,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         print(f"\n[dry-run] would send {len(sessions)} session(s), {turns} turn(s) — nothing was stored")
         return 0
 
-    result = ingest(args.url, args.key, paths)
+    result = ingest(args.url, args.key, paths, outcomes=not args.no_outcomes)
     # `skipped` is the server telling us how many turns it already had: re-sending a grown session is
     # normal and cheap, because /v1/import fingerprints content rather than trusting the caller.
     print(f"\nimported: {result}")

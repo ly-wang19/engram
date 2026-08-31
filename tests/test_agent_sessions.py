@@ -163,3 +163,54 @@ class TestWatcher:
         assert watch.pending_sessions(state, now=later, quiet_seconds=900) == []
         f.write_text("y" * 8192)  # the session continued
         assert watch.pending_sessions(state, now=later, quiet_seconds=900) == [str(f)]
+
+
+def test_watcher_closes_each_session_so_it_gets_distilled(monkeypatch):
+    """Importing alone only stores transcripts. The distillation into decisions/findings/lessons happens
+    at close_session, so a watcher that skips the close leaves the memory full of raw turns and empty of
+    conclusions — the exact state this whole path exists to fix."""
+    from engram.connectors import watch
+    from engram.connectors.base import ImportMessage, ImportSession
+
+    sessions = [
+        ImportSession(session_id="claude-code:a", messages=[ImportMessage(content="a long enough turn")]),
+        ImportSession(session_id="codex:b", messages=[ImportMessage(content="another long enough turn")]),
+    ]
+    monkeypatch.setattr(watch, "load_sessions", lambda paths, **kw: sessions)
+    calls = []
+
+    def fake_post(base, key, path, body, timeout):
+        calls.append((path, body))
+        if path == "/v1/import":
+            return {"ok": True, "sessions": 2, "episodes": 2}
+        return {"ok": True, "outcomes": 3}
+
+    monkeypatch.setattr(watch, "_post", fake_post)
+    result = watch.ingest("http://x", "k", ["p1", "p2"])
+
+    assert [c[0] for c in calls] == ["/v1/import", "/v1/sessions/close", "/v1/sessions/close"]
+    assert {c[1]["session_id"] for c in calls[1:]} == {"claude-code:a", "codex:b"}
+    assert all(c[1]["outcomes"] is True for c in calls[1:])
+    assert result["outcomes"] == 6  # 3 per session
+
+
+def test_one_failed_distil_does_not_cost_the_others(monkeypatch):
+    """The transcripts are already stored by then; a failed distillation is retryable, not fatal."""
+    from engram.connectors import watch
+    from engram.connectors.base import ImportMessage, ImportSession
+
+    monkeypatch.setattr(watch, "load_sessions", lambda paths, **kw: [
+        ImportSession(session_id=f"s{i}", messages=[ImportMessage(content="a long enough turn")])
+        for i in range(3)
+    ])
+
+    def flaky(base, key, path, body, timeout):
+        if path == "/v1/import":
+            return {"ok": True, "sessions": 3}
+        if body["session_id"] == "s1":
+            raise RuntimeError("model timeout")
+        return {"ok": True, "outcomes": 2}
+
+    monkeypatch.setattr(watch, "_post", flaky)
+    result = watch.ingest("http://x", "k", ["p"])
+    assert result["outcomes"] == 4 and result["distil_failed"] == 1
