@@ -87,6 +87,13 @@ function useInvalidateMemory() {
   }
 }
 
+export function useAudit(limit = 60) {
+  return useQuery({
+    queryKey: ['audit', limit],
+    queryFn: () => api.audit(limit),
+  })
+}
+
 export function useStructuredProfile() {
   const enabled = !!useAuth((s) => s.apiKey)
   return useQuery({ queryKey: qk.profile(), queryFn: api.structuredProfile, enabled, retry: false })

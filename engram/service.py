@@ -505,7 +505,10 @@ class MemoryService:
             if f is None:
                 return None
             self._save(user, mem)
-            return {"ok": True, "id": f.id, "text": f.text}
+            # Report `source` back: an edit makes the fact user-authored, and that is precisely what a
+            # caller needs to confirm — without it there is no way to tell that the correction will
+            # survive the next extraction pass rather than being silently overwritten.
+            return {"ok": True, "id": f.id, "text": f.text, "source": f.source}
 
     def delete_fact(self, user: str, fact_id: str) -> dict:
         with self.write_lock(user):
@@ -1054,6 +1057,83 @@ class MemoryService:
                 "facts": facts_page["next_offset"],
                 "episodes": episodes_page["next_offset"],
             },
+        }
+
+    def audit(self, user: str, limit: int = 40) -> dict:
+        """Memory health check: surface entries a person would want to fix, with the reason attached.
+
+        The point of a personal memory store is not that it remembers a lot — it is that you can CHECK
+        and CORRECT what it remembers. Extraction on real corpora reliably produces junk (snake_case
+        tokens lifted from source text, facts whose object repeats the predicate, one-off noise that will
+        never be recalled), and today none of it is visible unless you read the raw fact list. Each
+        finding carries a `why` and a suggested `action` so the console can offer a fix, not just a count.
+        """
+        import re
+
+        mem = self.get(user)
+        facts = [f for f in _all_facts(mem) if f.user_id == user and f.is_live()]
+        graph = mem.graph_data(user, include_sensitive=True)
+        referenced = {e["source"] for e in graph.get("edges", [])} | {e["target"] for e in graph.get("edges", [])}
+
+        findings: list[dict] = []
+
+        def add(kind: str, why: str, action: str, fact=None, entity: str = "") -> None:
+            row = {"kind": kind, "why": why, "action": action}
+            if fact is not None:
+                row.update({"fact_id": fact.id, "text": fact.text, "subject": fact.subject,
+                            "predicate": fact.predicate, "object": fact.object,
+                            "source": fact.source, "valid_at": fact.valid_at,
+                            "valid_at_h": fmt_date(fact.valid_at)})
+            if entity:
+                row["entity"] = entity
+            findings.append(row)
+
+        for f in facts:
+            obj, pred = f.object.strip(), f.predicate.strip()
+            # A snake_case object is source text that was never turned into a value: "user interested in
+            # kind_bar_fruit_nut_flavor" reads as machine output and matches no natural phrasing at recall.
+            if "_" in obj and " " not in obj and len(obj) > 12:
+                add("machine_token", f"object '{obj}' looks like a raw token, not a value",
+                    "edit into natural wording, or delete if meaningless", f)
+            # The object restating the predicate carries no information ("occupation: named Rex").
+            elif obj.lower().replace("_", " ") == pred.lower().replace("_", " "):
+                add("empty_value", f"object repeats the predicate ('{pred}')",
+                    "delete: it asserts nothing", f)
+            # A sentence-length object is a claim the extractor failed to reduce to a fact.
+            elif len(obj) > 120:
+                add("unreduced_claim", f"object is {len(obj)} chars — a sentence, not a value",
+                    "shorten to the value, or delete", f)
+            # Rules below come from auditing a real personal corpus (notes + technical docs), where the
+            # offline extractor produced these shapes in bulk. Without them the check reports "all clear"
+            # on a store that is visibly full of fragments.
+            elif re.search(r'[)"\'`\]]\s*$|^[("\'`\[]', obj) or "`" in obj:
+                add("fragment", f"object '{obj[:40]}' carries stray punctuation — a clipped sentence",
+                    "rewrite as a plain value, or delete", f)
+            elif re.search(r"[/\\]|\.(py|ts|md|json|yaml|sh)\b", obj):
+                add("code_artifact", f"object '{obj[:40]}' looks like a path or code, not a memory",
+                    "delete: source-code detail does not belong in a personal profile", f)
+            elif len(obj.split()) <= 2 and obj.isupper():
+                add("empty_value", f"object '{obj}' is a bare token with no statement around it",
+                    "delete: it asserts nothing on its own", f)
+            elif f.subject.lower() in {"this", "that", "it", "these", "those", "there", "here"}:
+                add("dangling_subject", f"subject is the pronoun '{f.subject}' — no identifiable entity",
+                    "delete, or rewrite naming who/what it refers to", f)
+
+        for node in graph.get("nodes", []):
+            if node.get("id") not in referenced:
+                add("orphan_entity", f"entity '{node.get('name')}' has no relations",
+                    "harmless, but it means no fact connects it", entity=node.get("name", ""))
+
+        by_kind: dict[str, int] = {}
+        for row in findings:
+            by_kind[row["kind"]] = by_kind.get(row["kind"], 0) + 1
+        return {
+            "user": user,
+            "checked": {"facts": len(facts), "entities": len(graph.get("nodes", []))},
+            "total_findings": len(findings),
+            "by_kind": by_kind,
+            "findings": findings[:limit],
+            "truncated": len(findings) > limit,
         }
 
     def stats(self, user: str) -> dict:

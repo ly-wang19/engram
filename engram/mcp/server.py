@@ -525,6 +525,45 @@ async def engram_agent_status(
     return "\n".join(lines)
 
 
+@mcp.tool(name="engram_audit", annotations=ToolAnnotations(title="Check memory health", **_READ))
+async def engram_audit(limit: int = 40, response_format: ResponseFormat = ResponseFormat.MARKDOWN) -> str:
+    """Find stored memories worth fixing, each with why it was flagged and what to do about it.
+
+    A personal memory store earns trust by being checkable, not by being large: extraction on real
+    conversations reliably leaves junk (raw tokens used as values, objects that just repeat the
+    predicate, sentence-length claims that were never reduced to a fact), and none of it is visible
+    without reading every fact by hand. Use before trusting a profile, or when recall returns something
+    odd. Read-only — it proposes fixes, it does not apply them (see engram_update_fact/engram_delete_fact).
+
+    Returns (json): {"checked", "total_findings", "by_kind", "findings":[{kind, why, action, ...}]}.
+    """
+    try:
+        data = await backend().audit(limit)
+    except Exception as e:  # noqa: BLE001
+        return _err(e)
+    if response_format == ResponseFormat.JSON:
+        return _json(data)
+    checked = data.get("checked") or {}
+    lines = [
+        "# Memory health",
+        "",
+        f"Checked {checked.get('facts', 0)} facts / {checked.get('entities', 0)} entities — "
+        f"**{data.get('total_findings', 0)} worth a look**",
+        "",
+    ]
+    for kind, n in (data.get("by_kind") or {}).items():
+        lines.append(f"- `{kind}`: {n}")
+    findings = data.get("findings") or []
+    if findings:
+        lines += ["", "## Details", ""]
+        for f in findings:
+            what = f.get("text") or f.get("entity") or ""
+            lines.append(f"- **{what}** — {f.get('why', '')} → _{f.get('action', '')}_")
+    if data.get("truncated"):
+        lines += ["", f"_(showing {len(findings)}; raise `limit` for more)_"]
+    return "\n".join(lines)
+
+
 @mcp.tool(name="engram_stats", annotations=ToolAnnotations(title="Get memory stats", **_READ))
 async def engram_stats(response_format: ResponseFormat = ResponseFormat.MARKDOWN) -> str:
     """Get content-free namespace observability: episode counts, consolidation backlog, fact counts,

@@ -2,6 +2,7 @@ import { NavLink } from 'react-router-dom'
 import {
   Clock,
   Database,
+  HeartPulse,
   LayoutDashboard,
   MessagesSquare,
   Search,
@@ -22,6 +23,7 @@ const NAV: Array<{ to: string; key: keyof Dict['nav']; icon: typeof LayoutDashbo
   { to: '/profile', key: 'profile', icon: UserRound },
   { to: '/ask', key: 'ask', icon: Search },
   { to: '/facts', key: 'facts', icon: Database },
+  { to: '/health', key: 'health', icon: HeartPulse },
   { to: '/timeline', key: 'timeline', icon: Clock },
   { to: '/graph', key: 'graph', icon: Share2 },
   { to: '/focus', key: 'focus', icon: Target },

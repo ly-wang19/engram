@@ -9,6 +9,7 @@ import Dashboard from './pages/Dashboard'
 import Profile from './pages/Profile'
 import Ask from './pages/Ask'
 import Facts from './pages/Facts'
+import Health from './pages/Health'
 import TimelinePage from './pages/TimelinePage'
 import GraphPage from './pages/GraphPage'
 import FocusPage from './pages/Focus'
@@ -42,6 +43,7 @@ export default function App() {
         <Route path="profile" element={<Profile />} />
         <Route path="ask" element={<Ask />} />
         <Route path="facts" element={<Facts />} />
+        <Route path="health" element={<Health />} />
         <Route path="timeline" element={<TimelinePage />} />
         <Route path="graph" element={<GraphPage />} />
         <Route path="focus" element={<FocusPage />} />

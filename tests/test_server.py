@@ -808,3 +808,52 @@ def test_open_mode_allows_anonymous_only_when_explicitly_enabled():
         os.environ.pop("ENGRAM_API_KEYS", None)
         os.environ.pop("ENGRAM_ALLOW_ANONYMOUS", None)
         shutil.rmtree(d, ignore_errors=True)
+
+
+def test_audit_flags_junk_and_says_what_to_do(client):
+    """Memory earns trust by being checkable. Extraction on real corpora leaves values that are not
+    values -- raw tokens, objects echoing the predicate, clipped sentences, pronoun subjects -- and none
+    of it is visible without reading every fact by hand. Each finding must carry why AND an action."""
+    h = hdr("audit-ns")
+    junk = [
+        ("interested_in", "kind_bar_fruit_nut_flavor"),      # machine token
+        ("occupation", "occupation"),                         # says nothing
+        ("note", 'open keystone."'),                          # clipped sentence
+        ("stores_in", "store/memory_store.py"),               # code artifact
+    ]
+    for pred, obj in junk:
+        r = client.post("/v1/facts", json={"subject": "user", "predicate": pred, "object": obj}, headers=h)
+        assert r.status_code == 200
+    client.post("/v1/facts", json={"subject": "user", "predicate": "works_at", "object": "Moonshot AI"},
+                headers=h)
+
+    data = client.get("/v1/audit", headers=h).json()
+    assert data["total_findings"] >= 4, data
+    kinds = set(data["by_kind"])
+    assert {"machine_token", "empty_value"} <= kinds, kinds
+    for f in data["findings"]:
+        assert f["why"] and f["action"], f  # a finding you cannot act on is noise
+    # the clean fact must not be flagged
+    assert not any("Moonshot" in str(f.get("text", "")) for f in data["findings"])
+
+
+def test_audit_finding_can_be_fixed_in_place(client):
+    """The point is the loop: flagged -> corrected -> gone, without leaving the console. The correction
+    must also stick (source=user), or auto-extraction would quietly undo it."""
+    h = hdr("audit-fix")
+    created = client.post("/v1/facts",
+                          json={"subject": "user", "predicate": "likes", "object": "small_luxury_ships"},
+                          headers=h).json()
+    fact_id = created.get("id") or created.get("fact", {}).get("id")
+    assert fact_id
+
+    before = client.get("/v1/audit", headers=h).json()
+    assert any(f.get("fact_id") == fact_id for f in before["findings"])
+
+    r = client.patch(f"/v1/facts/{fact_id}", json={"object": "small luxury cruises"}, headers=h)
+    assert r.status_code == 200
+    assert r.json().get("source") == "user", r.json()
+
+    after = client.get("/v1/audit", headers=h).json()
+    assert not any(f.get("fact_id") == fact_id for f in after["findings"])
+    assert after["total_findings"] < before["total_findings"]

@@ -518,6 +518,16 @@ def memories(
     )
 
 
+@app.get("/v1/audit")
+def audit(limit: int = 40, user: str = Depends(auth)):
+    """Memory health check: entries worth fixing, each with why it was flagged and what to do.
+
+    A personal memory store earns trust by being checkable, not by being large. Extraction on real
+    corpora produces junk that is invisible unless you read every fact by hand.
+    """
+    return svc().audit(user, limit=max(1, min(limit, 200)))
+
+
 @app.get("/v1/stats")
 def stats(user: str = Depends(auth)):
     """Content-free namespace stats for dashboards and readiness checks. Unlike /v1/memories, this does

@@ -1,6 +1,6 @@
 import { currentKey, useAuth } from '../store/auth'
 import { getT } from '../i18n'
-import type {
+import type { AuditReport,
   AgentStatus,
   CloseSessionResult,
   Conflict,
@@ -116,6 +116,7 @@ export const api = {
   health: () => request<Health>('/health'),
 
   memories: (params: MemoriesQuery = {}) => request<MemoryDump>(`/v1/memories${qs(params)}`),
+  audit: (limit = 60) => request<AuditReport>(`/v1/audit?limit=${limit}`),
   sessions: (params: SessionsQuery = {}) => request<SessionsIndex>(`/v1/sessions${qs(params)}`),
   agentStatus: (sessionId?: string) =>
     request<AgentStatus>(`/v1/agent/status${sessionId ? `?session_id=${encodeURIComponent(sessionId)}` : ''}`),

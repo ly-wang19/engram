@@ -51,6 +51,8 @@ class Backend(Protocol):
     ) -> dict: ...
     async def memories(self) -> dict: ...
     async def stats(self) -> dict: ...
+
+    async def audit(self, limit: int = 40) -> dict: ...
     async def agent_status(self, session_id: str | None = None) -> dict: ...
     async def profile(self) -> dict: ...
     async def get_focus(self) -> dict: ...
@@ -152,6 +154,9 @@ class LocalBackend:
 
     async def stats(self) -> dict:
         return await asyncio.to_thread(self.svc.stats, self.ns)
+
+    async def audit(self, limit: int = 40) -> dict:
+        return await asyncio.to_thread(self.svc.audit, self.ns, limit)
 
     async def agent_status(self, session_id: str | None = None) -> dict:
         return await asyncio.to_thread(self.svc.agent_status, self.ns, session_id)
@@ -324,6 +329,9 @@ class RemoteBackend:
 
     async def stats(self) -> dict:
         return await self._get("/v1/stats")
+
+    async def audit(self, limit: int = 40) -> dict:
+        return await self._get(f"/v1/audit?limit={int(limit)}")
 
     async def agent_status(self, session_id: str | None = None) -> dict:
         query = f"?{urlencode({'session_id': session_id})}" if session_id is not None else ""

@@ -323,3 +323,26 @@ export interface StructuredProfile {
   tentative: ProfileItem[]
   counts: { basic: number; preferences: number; tentative: number; habits: number }
 }
+
+export interface AuditFinding {
+  kind: 'machine_token' | 'empty_value' | 'unreduced_claim' | 'orphan_entity'
+  why: string
+  action: string
+  fact_id?: string
+  text?: string
+  subject?: string
+  predicate?: string
+  object?: string
+  source?: FactSource
+  valid_at_h?: string
+  entity?: string
+}
+
+export interface AuditReport {
+  user: string
+  checked: { facts: number; entities: number }
+  total_findings: number
+  by_kind: Record<string, number>
+  findings: AuditFinding[]
+  truncated: boolean
+}
