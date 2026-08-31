@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { GitMerge, Lock, Pencil, Plus, Search, ShieldAlert, Trash2 } from 'lucide-react'
+import { FileSearch, GitMerge, Lock, Pencil, Plus, Search, ShieldAlert, Trash2 } from 'lucide-react'
 
 import { Badge, Button, Card, CardTitle, EmptyState, ErrorState, Field, PageHeader, Spinner } from '../components/ui'
 import { ConfirmDialog, Modal } from '../components/Modal'
@@ -10,11 +10,12 @@ import {
   useDeleteFact,
   useEditFact,
   useMemories,
+  useSourceEpisodes,
   useResolveConflict,
 } from '../hooks/queries'
 import { useT } from '../i18n'
 import { splitStamp } from '../lib/format'
-import type { MemoryFact } from '../types'
+import type { MemoryEpisode, MemoryFact } from '../types'
 
 export default function Facts() {
   const addFact = useAddFact()
@@ -27,6 +28,7 @@ export default function Facts() {
   const [hideSensitive, setHideSensitive] = useState(false)
   const [limit, setLimit] = useState(40)
   const [editing, setEditing] = useState<MemoryFact | null>(null)
+  const [sourceOf, setSourceOf] = useState<MemoryFact | null>(null)
   const [adding, setAdding] = useState(false)
   const [confirmFact, setConfirmFact] = useState<MemoryFact | null>(null)
 
@@ -42,6 +44,7 @@ export default function Facts() {
     include_sensitive: !hideSensitive,
   })
   const facts = data?.facts ?? []
+  const sourceQuery = useSourceEpisodes(!!sourceOf)
   const factsPage = data?.facts_page
   const hasMore = factsPage?.has_more ?? false
 
@@ -124,6 +127,16 @@ export default function Facts() {
                   </div>
                 </div>
                 <div className="flex shrink-0 items-center gap-1 sm:opacity-80 sm:transition sm:group-hover:opacity-100">
+                  {!!f.provenance?.length && (
+                    <button
+                      onClick={() => setSourceOf(f)}
+                      className="rounded-lg border border-line p-2 text-ghost transition hover:border-brand-violet/50 hover:text-brand-violet"
+                      aria-label={t.facts.viewSource}
+                      title={t.facts.viewSource}
+                    >
+                      <FileSearch className="h-4 w-4" />
+                    </button>
+                  )}
                   <button
                     onClick={() => setEditing(f)}
                     className="rounded-lg border border-line p-2 text-ghost transition hover:border-brand-cyan/50 hover:text-brand-cyan"
@@ -157,6 +170,46 @@ export default function Facts() {
           <EmptyState title={t.facts.emptyTitle} hint={t.facts.emptyHint} />
         )}
       </Card>
+
+      {/* provenance: a fact you cannot trace is a fact you cannot trust */}
+      <Modal open={!!sourceOf} title={t.facts.sourceTitle} onClose={() => setSourceOf(null)}>
+        {sourceOf && (
+          <div className="space-y-4">
+            <div className="rounded-xl border border-line bg-white/[0.035] p-3">
+              <p className="text-sm text-slate-100">{sourceOf.display || sourceOf.text}</p>
+              <p className="mt-1 text-xs text-ghost">
+                {sourceOf.source === 'user' ? t.facts.sourceUser : t.facts.sourceExtracted}
+              </p>
+            </div>
+            {sourceQuery.isLoading ? (
+              <Spinner label={t.facts.sourceLoading} />
+            ) : (
+              (() => {
+                const eps = (sourceQuery.data?.episodes ?? []).filter((e: MemoryEpisode) =>
+                  sourceOf.provenance?.includes(e.id),
+                )
+                if (!eps.length) return <p className="text-sm text-ghost">{t.facts.sourceMissing}</p>
+                return (
+                  <div className="space-y-3">
+                    <p className="text-xs text-ghost">{t.facts.sourceFrom(eps.length)}</p>
+                    {eps.map((e: MemoryEpisode) => (
+                      <div key={e.id} className="rounded-xl border border-line bg-ink-900/50 p-3">
+                        <div className="mb-1 flex flex-wrap items-center gap-2 text-[11px] text-ghost">
+                          <span className="text-brand-cyan">{e.date}</span>
+                          <span className="rounded bg-white/5 px-1.5 py-px font-mono">{e.session}</span>
+                        </div>
+                        <p className="whitespace-pre-wrap break-words text-xs leading-relaxed text-slate-300">
+                          {e.content}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                )
+              })()
+            )}
+          </div>
+        )}
+      </Modal>
 
       {/* edit */}
       <FactModal

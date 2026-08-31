@@ -1003,6 +1003,9 @@ class MemoryService:
 
         def episode_view(ep) -> dict:
             return {
+                # Facts carry provenance as episode ids; without the id here a caller holding a fact
+                # cannot resolve "where did this come from?" — which is the whole point of provenance.
+                "id": ep.id,
                 "date": ep.metadata.get("date") or fmt_date(ep.event_time),
                 "session": ep.session_id,
                 "content": ep.content[:500],

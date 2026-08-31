@@ -40,6 +40,7 @@ export interface WorkingItem {
 }
 
 export interface MemoryEpisode {
+  id: string
   date: string
   session: string
   content: string

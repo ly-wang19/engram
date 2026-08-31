@@ -87,6 +87,15 @@ function useInvalidateMemory() {
   }
 }
 
+/** Raw episodes, fetched only when something needs to resolve a fact's provenance ids to source text. */
+export function useSourceEpisodes(enabled: boolean) {
+  return useQuery({
+    queryKey: ['source-episodes'],
+    queryFn: () => api.memories({ facts_limit: 0, episodes_limit: 200, include_sensitive: true }),
+    enabled,
+  })
+}
+
 export function useAudit(limit = 60) {
   return useQuery({
     queryKey: ['audit', limit],

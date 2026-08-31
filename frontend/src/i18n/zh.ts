@@ -279,6 +279,13 @@ export const zh: Dict = {
   },
 
   facts: {
+    viewSource: '这条是哪来的?',
+    sourceTitle: '这条记忆的来源',
+    sourceUser: '这是你自己确认的 —— 自动抽取不会覆盖它。',
+    sourceExtracted: '从下面这些对话里自动抽取出来的。',
+    sourceLoading: '正在加载原始对话…',
+    sourceMissing: '来源对话已不在库中(可能被删除了)。',
+    sourceFrom: (n: number) => `来自 ${n} 段已存对话:`,
     loading: '加载事实…',
     title: '事实管理',
     subtitle: '每条事实都有双时间轴与来源。你手动改/加的会被锁定 🔒，不会被自动抽取覆盖。',

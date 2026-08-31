@@ -291,6 +291,13 @@ export const en = {
   },
 
   facts: {
+    viewSource: 'Where did this come from?',
+    sourceTitle: 'Where this memory came from',
+    sourceUser: 'You asserted this yourself — extraction will not overwrite it.',
+    sourceExtracted: 'Extracted automatically from the conversation(s) below.',
+    sourceLoading: 'Loading the original conversation…',
+    sourceMissing: 'The source conversation is no longer stored (it may have been deleted).',
+    sourceFrom: (n: number) => `From ${n} stored conversation${n === 1 ? '' : 's'}:`,
     loading: 'Loading facts…',
     title: 'Facts',
     subtitle:
