@@ -20,15 +20,17 @@ from typing import Any
 
 from .base import ImportMessage, ImportSession, extract_text, load_json, to_epoch
 from .chatgpt import parse_chatgpt
+from .agent_sessions import find_sessions, load_sessions, parse_agent_session
 from .generic import parse_jsonl, parse_messages, parse_records, parse_transcript
 
 __all__ = [
     "ImportMessage", "ImportSession", "parse", "sniff",
     "parse_chatgpt", "parse_messages", "parse_records", "parse_jsonl", "parse_transcript",
+    "parse_agent_session", "find_sessions", "load_sessions",
     "extract_text", "to_epoch",
 ]
 
-FORMATS = ("chatgpt", "messages", "records", "jsonl", "transcript")
+FORMATS = ("chatgpt", "messages", "records", "jsonl", "transcript", "agent_session")
 
 
 def sniff(data: Any) -> str:
@@ -44,6 +46,11 @@ def sniff(data: Any) -> str:
         # multiple lines each starting with '{' => JSON-Lines
         lines = [ln for ln in data.splitlines() if ln.strip()]
         if len(lines) > 1 and all(ln.lstrip().startswith("{") for ln in lines):
+            # Agent session logs are JSONL too, but the generic reader would keep their tool calls and
+            # drop the conversation, so detect them by their distinctive envelope first.
+            head = "\n".join(lines[:60])
+            if '"isSidechain"' in head or '"type": "response_item"' in head or '"type":"response_item"' in head:
+                return "agent_session"
             return "jsonl"
         try:
             data = load_json(data)
@@ -94,6 +101,11 @@ def parse(data: Any, format: str = "auto", session_id: str = "imported") -> list
     if fmt == "transcript" or fmt in ("text", "markdown", "md"):
         text = data.decode("utf-8") if isinstance(data, (bytes, bytearray)) else str(data)
         return parse_transcript(text, session_id=session_id)
+    if fmt in ("agent_session", "claude_code", "codex"):
+        # A Claude Code / Codex session log: mostly tool machinery, so it needs its own reader rather
+        # than the generic JSONL one (which would keep the tool calls and lose the conversation).
+        text = data.decode("utf-8") if isinstance(data, (bytes, bytearray)) else str(data)
+        return parse_agent_session(text, session_id=session_id)
     if fmt == "jsonl":
         text = data.decode("utf-8") if isinstance(data, (bytes, bytearray)) else str(data)
         return parse_jsonl(text, session_id=session_id)

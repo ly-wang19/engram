@@ -1008,7 +1008,12 @@ class MemoryService:
                 "id": ep.id,
                 "date": ep.metadata.get("date") or fmt_date(ep.event_time),
                 "session": ep.session_id,
-                "content": ep.content[:500],
+                # Full text, not a 500-char stub. This view is how the owner answers "what did I
+                # actually write?" — the one thing a plain .md file always got right and this did not.
+                # Callers that want a preview slice it themselves; callers that want the record need it
+                # whole. Response size is already bounded by episodes_limit/episodes_offset paging.
+                "content": ep.content,
+                "chars": len(ep.content),
                 "summary": ep.summary,
             }
 
