@@ -51,6 +51,38 @@ def _norm_predicate(p: str) -> str:
     return p
 
 
+def _complete_objects_prefix(text: str) -> str:
+    """Rebuild a valid JSON array from the objects that finished, dropping a truncated tail."""
+    if not text.startswith("["):
+        return ""
+    objects: list[str] = []
+    depth = 0
+    start = -1
+    in_string = False
+    escaped = False
+    for i, ch in enumerate(text):
+        if in_string:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_string = False
+            continue
+        if ch == '"':
+            in_string = True
+        elif ch == "{":
+            if depth == 0:
+                start = i
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0 and start >= 0:
+                objects.append(text[start:i + 1])
+                start = -1
+    return "[" + ",".join(objects) + "]" if objects else ""
+
+
 def parse_json_facts(raw: str) -> list[dict]:
     """Tolerant JSON-array parsing: handle code fences and surrounding prose."""
     if not raw:
@@ -60,7 +92,13 @@ def parse_json_facts(raw: str) -> list[dict]:
     text = re.sub(r"```$", "", text).strip()
     start, end = text.find("["), text.rfind("]")
     candidate = text[start : end + 1] if (start != -1 and end > start) else text
-    for attempt in (candidate, text):
+    # A reply cut off by max_tokens leaves a valid prefix and a half-written final object. Salvaging the
+    # complete objects is strictly better than discarding the whole batch, which is what a long session
+    # otherwise produces: the model fills its budget and every extracted item is thrown away.
+    salvaged = _complete_objects_prefix(candidate)
+    for attempt in (candidate, text, salvaged):
+        if not attempt:
+            continue
         try:
             data = json.loads(attempt)
             if isinstance(data, list):

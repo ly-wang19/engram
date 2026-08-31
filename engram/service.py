@@ -671,6 +671,7 @@ class MemoryService:
         session_id: str,
         summarize: bool = True,
         clear_working: bool = True,
+        outcomes: Optional[bool] = None,
     ) -> dict:
         """End-of-session grooming for agent clients.
 
@@ -695,6 +696,23 @@ class MemoryService:
             summaries = mem.summarize_episodes(episodes) if summarize else 0
             reflected = mem.reflect(user) if summarize else 0
             working_cleared = mem.clear_session(user, session_id) if clear_working else 0
+
+            # Session end is when a conclusion exists to record: mid-session there is only a task in
+            # progress. This is the write that keeps a personal memory fed — the per-turn extractor
+            # yields biographical triples, which a working session simply does not contain.
+            outcome_facts = 0
+            want = self.config.session_outcomes if outcomes is None else outcomes
+            if want and self.llm is not None and episodes:
+                from .consolidate.outcomes import extract_outcomes
+
+                for fact in extract_outcomes(self.llm, episodes, canonical, session_id=session_id):
+                    fact.embedding = mem.embedder.embed(fact.text)
+                    mem.fact_store.upsert(fact.id, fact.embedding, fact)
+                    mem.engine.graph_builder.add_fact(fact)
+                    outcome_facts += 1
+                if outcome_facts:
+                    mem._persona_cache.clear()
+
             self._save(user, mem)
             return {
                 "ok": True,
@@ -702,6 +720,7 @@ class MemoryService:
                 "episodes": len(episodes),
                 "pending_consolidated": len(pending),
                 "facts_added": stats.get("facts_added", 0),
+                "outcomes": outcome_facts,
                 "duplicates": stats.get("duplicates", 0),
                 "invalidated": stats.get("invalidated", 0),
                 "summaries": summaries,

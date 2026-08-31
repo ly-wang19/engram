@@ -57,6 +57,9 @@ class Config:
     aggregation_constraint_filter: bool = True  # mark numeric candidates that violate query constraints as EXCLUDE
     aggregation_pool_boost: bool = True  # count/list/sum questions consolidate a wider session pool (they need every occurrence)
     procedural_extraction: bool = True  # extract durable runbooks/how-to steps into typed procedure facts
+    session_outcomes: bool = False  # distil each session into decision/finding/lesson facts (one LLM
+    #   call per session). OFF by default: it is for personal working memory, not the QA benchmark, and
+    #   the read path must stay byte-identical unless someone opts in.
     summary_fallback: bool = True  # answer from derived session summaries when facts cannot answer
     summary_fallback_k: int = 6  # candidate summaries inspected by the fallback before abstaining
     procedural_memory: bool = True  # surface standing rules/how-to memories as a typed derived read layer
