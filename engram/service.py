@@ -426,11 +426,13 @@ class MemoryService:
 
     @timed("import")
     def import_(self, user: str, sessions: Optional[list] = None, format: str = "auto",
-                data: Any = None, consolidate: bool = True, summarize: bool = True,
+                data: Any = None, consolidate: Optional[bool] = None, summarize: bool = True,
                 session_id: str = "imported", dedupe: bool = True) -> dict:
         """Bulk import: either pre-parsed `sessions` (list of ImportSession/dicts) OR raw `data` to parse
         with `format` (chatgpt/messages/records/jsonl/transcript/auto). One batched ingest + consolidation.
-        Idempotent by default: re-posting the same export skips already-ingested episodes (`skipped`)."""
+        Idempotent by default: re-posting the same export skips already-ingested episodes (`skipped`).
+        `consolidate=None` resolves inside Memory.import_messages: per-turn extraction for every source
+        except agent-session transcripts, which are stored for close-time distillation instead."""
         with self.write_lock(user):
             mem = self.get(user)
             if sessions is None:
@@ -840,6 +842,12 @@ class MemoryService:
         ]
         if (stats.get("counts") or {}).get("pending_conflicts", 0):
             next_actions.append("Review pending conflicts before relying on disputed memories.")
+        blind = self._embedder_blindness(mem, canonical)
+        if blind:
+            next_actions.append(
+                f"{round(blind['ratio'] * 100)}% of this namespace's memories cannot be ranked by the "
+                f"configured embedder ({blind['embedder']}); recall will return the same items for "
+                f"unrelated queries. Ask the operator to run: {blind['migrate']}")
         return {
             "ok": True,
             "user": user,
@@ -854,6 +862,7 @@ class MemoryService:
             },
             "counts": stats.get("counts", {}),
             "consolidation_backlog": stats.get("consolidation_backlog", False),
+            "feed": stats.get("feed"),
             "storage": stats.get("storage"),
             "embedder": stats.get("embedder"),
             "llm_configured": stats.get("llm_configured"),
@@ -1178,6 +1187,92 @@ class MemoryService:
             },
         }
 
+    def _embedder_blindness(self, mem: Memory, canonical: str) -> Optional[dict]:
+        """One store-level finding when the configured embedder cannot rank what this namespace holds.
+
+        Measured on the owner's real store: HashingEmbedder scored 0.000 for every Chinese query/fact
+        pair and /v1/recall returned the identical four facts for three unrelated queries
+        (results/embedder_zh_2026-09-01.md). Nothing in the product said why. The cause is structural —
+        the hashing stemmer only emits [a-z0-9] tokens, so a CJK-dominated text hashes to (almost)
+        nothing and BM25 sees the same empty token stream — which makes it detectable without a model
+        call: count how much of the corpus is non-ASCII. Shared by audit() and agent_status() so the
+        console and the agent see the same verdict.
+        """
+        from .embed import HashingEmbedder
+
+        embedder = self.embedder
+        if isinstance(embedder, HashingEmbedder):
+            exact = True  # the blindness is a property of the tokenizer, not a heuristic
+        elif (embedder.__class__.__name__ == "SentenceTransformerEmbedder"
+              and "-en-" in str(getattr(embedder, "model_name", "") or "")):
+            exact = False  # an English-only model degrades on CJK rather than zeroing out
+        else:
+            return None
+
+        def split(text: str) -> tuple[int, int]:
+            """(rankable, dark) character counts. Rankable = ASCII alphanumerics, the only thing the
+            hashing stemmer's [a-z0-9]+ tokenizer keeps; dark = letters in any other script, which it
+            drops on the floor. Punctuation and whitespace are neither: a JSON blob or a shell line is
+            100% rankable even though most of its characters are braces and pipes — the first version
+            counted those against the text and called a store of code facts "33% unrankable"."""
+            rankable = dark = 0
+            for c in text:
+                if c.isascii():
+                    if c.isalnum():
+                        rankable += 1
+                elif c.isalpha():
+                    dark += 1
+            return rankable, dark
+
+        def blind(text: str) -> bool:
+            rankable, dark = split(text)
+            return (rankable + dark) > 0 and dark / (rankable + dark) >= 0.5
+
+        facts = [f for f in _all_facts(mem)
+                 if mem.resolver.resolve(f.user_id) == canonical and f.is_live()]
+        episodes = sorted((ep for ep in mem.episodes_doc.values() if ep.user_id == canonical),
+                          key=lambda ep: ep.ingested_at, reverse=True)[:2000]
+        facts_blind = sum(1 for f in facts if blind(f.text or ""))
+        episodes_blind = sum(1 for ep in episodes if blind(ep.content or ""))
+        checked = len(facts) + len(episodes)
+        total_blind = facts_blind + episodes_blind
+        # Gate on letter mass, not item count: a namespace holding two 120k-char Chinese transcripts is
+        # entirely unrankable and must not stay silent for being "only 2 memories". 200 letters is a
+        # paragraph — enough that a three-line store says nothing, little enough that a dozen one-line
+        # notes do. (A dozen English facts with one CJK name stays far under the 20% share either way.)
+        rankable_chars = dark_chars = 0
+        for text in [f.text or "" for f in facts] + [ep.content or "" for ep in episodes]:
+            r, d = split(text)
+            rankable_chars += r
+            dark_chars += d
+        if rankable_chars + dark_chars < 200:
+            return None
+        ratio = total_blind / checked if checked else 0.0
+        mass_ratio = dark_chars / (rankable_chars + dark_chars)
+        if ratio < 0.20 and mass_ratio < 0.20:
+            return None
+        ratio = max(ratio, mass_ratio)
+        name = embedder.__class__.__name__
+        pct = round(ratio * 100)
+        migrate = "ENGRAM_EMBEDDER=multilingual ENGRAM_REEMBED_ON_MISMATCH=1"
+        return {
+            "kind": "embedder_blind",
+            "text": f"{name} cannot rank {pct}% of {checked} memories",
+            "why": (f"{pct}% of what this namespace holds is written in a script {name} cannot "
+                    f"tokenize — it only indexes [a-z0-9] tokens, so those memories are invisible to both "
+                    f"the semantic and lexical channels and recall returns the same items for unrelated "
+                    f"queries"),
+            "action": (f"switch the server embedder and re-embed: {migrate} "
+                       f"(or bge-small-zh, 92MB, if memory is tight)"),
+            "embedder": name,
+            "model": getattr(embedder, "model_name", None),
+            "blind": total_blind, "checked": checked, "ratio": ratio,
+            "dark_chars": dark_chars, "rankable_chars": rankable_chars,
+            "facts_blind": facts_blind, "episodes_blind": episodes_blind,
+            "exact": exact, "recommended": "multilingual", "alternative": "bge-small-zh",
+            "migrate": migrate,
+        }
+
     def audit(self, user: str, limit: int = 40) -> dict:
         """Memory health check: surface entries a person would want to fix, with the reason attached.
 
@@ -1251,6 +1346,13 @@ class MemoryService:
                 "samples": [{"fact_id": g.id, "text": g.text} for g in group[:5]],
             })
             overflowed.update(g.id for g in group)
+
+        # Store-level, not per-fact: when the embedder cannot rank the corpus, every per-fact finding
+        # is beside the point — the owner asked "why does recall return the same four facts" and the
+        # answer is the embedder, reported once with the migration command attached.
+        row = self._embedder_blindness(mem, canonical)
+        if row:
+            findings.append(row)
 
         for f in facts:
             # Outcome statements are 400-char sentences that routinely name a config path, so
@@ -1338,6 +1440,22 @@ class MemoryService:
             eid for r in user_relations for eid in (r.subject_id, r.object_id)
         }
         stale_relations = [r for r in user_relations if r.fact_id not in facts_by_id]
+        # Feed: is this memory being fed from the machine's agent sessions at all? Measured before this
+        # existed: across 1909 of the owner's own sessions, remember/recall/close_session were called
+        # zero times — an empty memory looks exactly like a healthy one unless something says when it
+        # was last fed. Derived from episode metadata; nothing persisted.
+        from .consolidate.outcomes import OUTCOME_PREDICATES
+
+        fed = [ep for ep in episodes if ep.metadata.get("source") == "agent_session"]
+        fed_sessions = {ep.session_id for ep in fed}
+        last_fed_at = max((ep.ingested_at for ep in fed), default=None)
+        feed = {
+            "last_fed_at": last_fed_at,
+            "last_fed_at_h": fmt_datetime(last_fed_at) if last_fed_at is not None else None,
+            "sessions": len(fed_sessions),
+            "conclusions": sum(1 for f in live_facts
+                               if f.predicate.lower() in OUTCOME_PREDICATES and f.subject in fed_sessions),
+        }
         return {
             "user": user,
             "counts": {
@@ -1376,6 +1494,7 @@ class MemoryService:
             "llm_configured": self.llm is not None,
             "answerer_configured": self.answerer is not None,
             "consolidation_backlog": bool(pending_episodes),
+            "feed": feed,
         }
 
     def export(self, user: str, include_sensitive: bool = False) -> dict:

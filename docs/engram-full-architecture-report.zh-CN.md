@@ -622,17 +622,18 @@ flowchart TD
 | 能力 | 服务函数 | HTTP/MCP 对应 |
 | --- | --- | --- |
 | 记住消息 | `remember` | `/v1/remember`, MCP remember |
-| 批量导入 | `import_` | `/v1/import` |
+| 批量导入 | `import_` | `/v1/import`（`consolidate: Optional[bool] = None`：`null` 对普通来源等于 `true`；对 `metadata.source == "agent_session"` 的会话，只有 `true` **且**服务端有 LLM 才逐轮抽取，否则存储+摘要并盖 `consolidated=True`/`metadata.extraction="outcomes_only"`，永不进 RuleExtractor；响应新增 `facts_deferred` 与 `deferred_reason: outcomes_only \| no_llm \| null`） |
 | 回忆 | `recall` | `/v1/recall`, MCP recall/search |
 | 用户事实增删改 | `add_fact`, `update_fact`, `delete_fact` | fact APIs |
-| 记忆体检 | `audit` | `GET /v1/audit`, MCP `engram_audit`（只读；逐条发现 + 按槽分组的 `slot_overflow`） |
+| 记忆体检 | `audit` | `GET /v1/audit`, MCP `engram_audit`（只读；逐条发现 + 按槽分组的 `slot_overflow` + 库级的 `embedder_blind`：`MemoryService._embedder_blindness` 统计 live 事实 `text` ∪ 最新 2000 条 episode `content` 中非空白字符里 ASCII 字母数字占比 <50% 的条目，`checked>=10` 且比例 ≥20% 且 embedder 为 `HashingEmbedder`（`exact=true`）或模型名含 `-en-` 的 `SentenceTransformerEmbedder`（`exact=false`）时报一条，附 `migrate` 命令） |
 | 清空单值槽 | `clear_slot` | `POST /v1/facts/clear-slot`（**不可逆**；仅 HTTP，MCP 未暴露） |
 | focus/policy | `set_focus`, `set_policy` | focus/policy APIs |
 | working memory | `add_working`, `working_memory`, `clear_working` | working APIs |
 | 冲突处理 | `conflicts`, `resolve_conflict` | conflicts APIs |
 | 会话收尾 | `close_session`, `session_report`, `sessions` | session APIs |
 | 图谱查看 | `graph` | graph API |
-| 导出/统计 | `export`, `stats`, `memories` | export/stats APIs |
+| 导出/统计 | `export`, `stats`, `memories` | export/stats APIs（`stats` 新增派生块 `feed: {last_fed_at, last_fed_at_h, sessions, conclusions}`：按 `metadata.source == "agent_session"` 的 episode 算，不持久化；`agent_status` 透传同一块，并在 embedder 失明时追加一条 next action） |
+| 会话喂入调度 | `engram/connectors/watch.py`（`run_once`）+ `engram/connectors/watch_install.py` | 控制台脚本 `engram-watch`：`--once/--every DUR` 跑 tick，`--install/--uninstall/--status` 管 launchd（`~/Library/LaunchAgents/<label>.plist`）或 systemd --user 定时器，cron 只打印行并写 key 文件；wire payload 每会话带 `metadata.source=agent_session` 与会话级 `event_time`，默认不传 `consolidate`；状态文件 `~/.engram/watch_state.json`（`seen`/`close_failures`/`target`/`last_result`），只有全部会话 close 成功（或第 3 次失败）才标 seen；`flock` 防重叠；服务器不可达退出码 75 且状态不动；安装前置检查目标解释器能在干净环境导入本模块 |
 
 服务层职责：
 

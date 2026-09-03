@@ -406,7 +406,7 @@ class Memory:
         self,
         sessions,
         user_id: str = "default",
-        consolidate: bool = True,
+        consolidate: Optional[bool] = None,
         summarize: bool = True,
         roles: bool = True,
         batch_size: int = 256,
@@ -427,6 +427,10 @@ class Memory:
         already ingested is skipped (counted in `skipped`) — re-posting the same export no longer doubles
         every memory. Fingerprints are content+identity (never time: re-imports get fresh synthetic
         clocks). `dedupe=False` restores raw append behavior.
+
+        `consolidate=None` (the default) means "extract facts" for every source except agent-session
+        transcripts (`metadata.source == "agent_session"`), which are stored + summarized but never
+        per-turn extracted unless the caller asks (`True`) AND an LLM is attached — see the gate below.
         """
         import hashlib
 
@@ -485,7 +489,7 @@ class Memory:
                     et = m.event_time if m.event_time is not None else fallback
                     et = et if et is not None else base + i * DAY + j
                     texts.append(body)
-                    metas.append((sid, et, s.title, fp))
+                    metas.append((sid, et, s.title, fp, source))
                     added += 1
                 if added:
                     session_count += 1
@@ -502,29 +506,52 @@ class Memory:
             et = s.start_time()
             et = et if et is not None else base + i * DAY  # synthetic but ordered
             texts.append(body)
-            metas.append((sid, et, s.title, fp))
+            metas.append((sid, et, s.title, fp, source))
             session_count += 1
         if not texts:
-            return {"sessions": 0, "episodes": 0, "facts_added": 0, "summaries": 0, "skipped": skipped}
+            return {"sessions": 0, "episodes": 0, "facts_added": 0, "summaries": 0, "skipped": skipped,
+                    "facts_deferred": 0, "deferred_reason": None}
 
         vecs: list = []
         for j in range(0, len(texts), batch_size):
             vecs.extend(self.embedder.embed_batch(texts[j:j + batch_size]))
 
         new_eps: list[Episode] = []
-        for (sid, et, title, fp), text, vec in zip(metas, texts, vecs):
+        for (sid, et, title, fp, source), text, vec in zip(metas, texts, vecs):
             ep = self.add(text, user_id=user_id, session_id=sid, speaker="session",
                           event_time=et, embedding=vec)
             ep.metadata["date"] = fmt_date(et)
             if title:
                 ep.metadata["title"] = title
+            if source:
+                ep.metadata["source"] = source  # the read side (stats.feed, the gate below) keys on it
             new_eps.append(ep)
             self._import_seen.add(fp)  # only after the episode actually landed
 
+        agent_eps = [ep for ep in new_eps if ep.metadata.get("source") == "agent_session"]
+        want_facts = consolidate is True and self.llm is not None
+        if agent_eps and not want_facts:
+            for ep in agent_eps:
+                # A working session's durable memory is its close-time outcome (consolidate/outcomes.py),
+                # not per-turn triples: RuleExtractor turned 12 real turns into 11 junk facts and 84
+                # `occupation` rows, and even an LLM yields biographical triples a working session does
+                # not contain (357ae16). Stamping consolidated=True is what keeps every later drain
+                # (close_session, remember, the async worker — all filter on `not ep.consolidated`) from
+                # ever extracting it.
+                ep.consolidated = True
+                ep.metadata["extraction"] = "outcomes_only"
+        agent_ids = {ep.id for ep in agent_eps}
+        extract = new_eps if want_facts else [ep for ep in new_eps if ep.id not in agent_ids]
+        do_consolidate = True if consolidate is None else consolidate
+
         stats = {"sessions": session_count, "episodes": len(new_eps), "facts_added": 0, "summaries": 0,
                  "skipped": skipped}
-        if consolidate:
-            stats["facts_added"] = self.consolidate(new_eps).get("facts_added", 0)
+        # Guard the empty list: consolidate([]) would still run _apply_policy/sweep for nothing.
+        if do_consolidate and extract:
+            stats["facts_added"] = self.consolidate(extract).get("facts_added", 0)
+        stats["facts_deferred"] = 0 if want_facts else len(agent_eps)
+        stats["deferred_reason"] = ("no_llm" if (consolidate is True and self.llm is None and agent_eps)
+                                    else ("outcomes_only" if stats["facts_deferred"] else None))
         if summarize:
             stats["summaries"] = self.summarize_episodes(new_eps)
         return stats

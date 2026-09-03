@@ -48,6 +48,7 @@ engram-migrate-pickle = "engram.store.migrate:main" # migrate trusted legacy pic
 engram-agent-setup = "engram.agent_setup:main"     # print cross-agent memory config snippets
 engram-agent-bootstrap = "engram.agent_setup:bootstrap_main" # install + verify common agent configs
 engram-agent-doctor = "engram.agent_doctor:main"   # verify an agent's Python/MCP memory runtime
+engram-watch = "engram.connectors.watch:main"      # feed memory from local agent sessions (+ scheduler)
 
 [project.urls]
 Homepage = "https://github.com/ly-wang19/engram"

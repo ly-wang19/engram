@@ -214,3 +214,283 @@ def test_one_failed_distil_does_not_cost_the_others(monkeypatch):
     monkeypatch.setattr(watch, "_post", flaky)
     result = watch.ingest("http://x", "k", ["p"])
     assert result["outcomes"] == 4 and result["distil_failed"] == 1
+
+
+# ---------------------------------------------------------------------------------------------------
+# The gate: agent sessions are stored for close-time distillation, never handed to RuleExtractor.
+# Measured before the gate: 12 real turns -> 11 junk facts (`The | occupation | nearly empty`), and the
+# owner's store held 84 `occupation` rows out of 88 facts, all from the no-LLM fallback period.
+# ---------------------------------------------------------------------------------------------------
+
+# Prose shaped like a real working-session transcript: sentence subjects that are pronouns/articles,
+# markdown, a config path. RuleExtractor turns this into junk (see test_records_import_still_rule_extracts,
+# which proves it DOES extract from the very same text when the source is not an agent session).
+_TRANSCRIPT_A = [
+    {"role": "user", "content": "The config file is nearly empty. This is now clear: **EKOS is deployed on "
+                                "an Ubuntu server** and the backend framework is FastAPI."},
+    {"role": "assistant", "content": "This confirms the deployment. The next step is to check nginx."},
+]
+_TRANSCRIPT_B = [
+    {"role": "user", "content": "That module is broken. The extractor is volcano and the judge is deepseek."},
+    {"role": "assistant", "content": "It looks like the retry loop is the problem here."},
+]
+
+
+def _agent_sessions(prefix: str = "claude-code") -> list[dict]:
+    return [
+        {"session_id": f"{prefix}:a", "event_time": 1_756_000_000.0,
+         "metadata": {"source": "agent_session"}, "messages": _TRANSCRIPT_A},
+        {"session_id": f"{prefix}:b", "event_time": 1_756_000_100.0,
+         "metadata": {"source": "agent_session"}, "messages": _TRANSCRIPT_B},
+    ]
+
+
+def test_agent_session_import_without_llm_defers_per_turn_extraction(tmp_path):
+    from engram.memory import Memory
+    from engram.service import MemoryService
+
+    mem = Memory()
+    stats = mem.import_messages(_agent_sessions(), user_id="u")
+    assert stats["episodes"] == 2
+    assert stats["facts_added"] == 0, stats
+    assert stats["facts_deferred"] == 2 and stats["deferred_reason"] == "outcomes_only", stats
+    eps = [ep for ep in mem.episodes_doc.values() if ep.user_id == "u"]
+    assert len(eps) == 2
+    for ep in eps:
+        assert ep.consolidated is True  # nothing downstream may ever drain it into RuleExtractor
+        assert ep.metadata["extraction"] == "outcomes_only"
+        assert ep.metadata["source"] == "agent_session"
+    assert stats["summaries"] >= 1  # chunk/summary retrieval of the transcript still works offline
+
+    # close_session is the drain that would otherwise per-turn-extract "pending" episodes.
+    svc = MemoryService(data_dir=str(tmp_path), embedder_name="hashing", llm_name="")
+    assert svc.import_("u", sessions=_agent_sessions())["facts_deferred"] == 2
+    closed = svc.close_session("u", "claude-code:a")
+    assert closed["episodes"] == 1
+    assert closed["pending_consolidated"] == 0 and closed["facts_added"] == 0, closed
+
+
+def test_agent_session_import_with_llm_and_consolidate_true_extracts():
+    """With an LLM the same 12 turns gave 10 clean facts (`EKOS | deployed_on | Ubuntu server`), so an
+    explicit opt-in must still run per-turn extraction."""
+    from engram.memory import Memory
+
+    class StubLLM:
+        def complete(self, prompt: str, system: str = "", **kw) -> str:
+            return '[{"subject": "EKOS", "predicate": "deployed_on", "object": "Ubuntu server"}]'
+
+    mem = Memory(llm=StubLLM())
+    stats = mem.import_messages(_agent_sessions(), user_id="u", consolidate=True)
+    assert stats["facts_added"] >= 1, stats
+    assert stats["facts_deferred"] == 0 and stats["deferred_reason"] is None, stats
+    assert all("extraction" not in ep.metadata for ep in mem.episodes_doc.values())
+
+
+def test_agent_session_consolidate_true_without_llm_reports_no_llm():
+    """Asking for facts with no LLM attached is the corrupting case; the answer is a reason, not junk."""
+    from engram.memory import Memory
+
+    mem = Memory()
+    stats = mem.import_messages(_agent_sessions(), user_id="u", consolidate=True)
+    assert stats["facts_added"] == 0, stats
+    assert stats["facts_deferred"] == 2 and stats["deferred_reason"] == "no_llm", stats
+    assert not [f for f in mem.fact_store.values() if f.user_id == "u"]
+
+
+def test_records_import_still_rule_extracts():
+    """Regression guard for the zero-setup demo: the gate keys on the source, not on the prose. The same
+    sentences arriving as `records` go through RuleExtractor exactly as before."""
+    from engram.connectors import parse
+    from engram.memory import Memory
+
+    records = [{"content": m["content"], "speaker": m["role"], "session_id": "r1"}
+               for m in _TRANSCRIPT_A + _TRANSCRIPT_B]
+    records.append({"content": "I moved to Shenzhen last year and I work at Moonshot AI.",
+                    "speaker": "user", "session_id": "r1"})
+    mem = Memory()
+    stats = mem.import_messages(parse(records, format="records"), user_id="u")
+    assert stats["facts_added"] >= 1, stats
+    assert stats["facts_deferred"] == 0 and stats["deferred_reason"] is None
+
+
+# ---------------------------------------------------------------------------------------------------
+# Watcher wire format + state discipline.
+# ---------------------------------------------------------------------------------------------------
+
+def _session(sid: str, when: float | None = 1_756_000_000.0):
+    from engram.connectors.base import ImportMessage, ImportSession
+    return ImportSession(session_id=sid, event_time=when,
+                         messages=[ImportMessage(content="a long enough turn to survive")],
+                         metadata={"source": "agent_session"})
+
+
+def _args(tmp_path, **over):
+    import argparse
+    base = dict(url="http://127.0.0.1:9", key="k", key_file="", since="", limit=25, quiet_seconds=0,
+                state=str(tmp_path / "state" / "watch_state.json"), no_outcomes=False,
+                extract_facts=False, dry_run=False, once=True, every="")
+    base.update(over)
+    return argparse.Namespace(**base)
+
+
+def _quiet_file(tmp_path, name: str = "s.jsonl", age: int = 3600) -> str:
+    f = tmp_path / name
+    f.write_text("x" * 4096)
+    old = f.stat().st_mtime - age
+    os.utime(f, (old, old))
+    return str(f)
+
+
+def test_watcher_payload_carries_source_and_session_time(monkeypatch):
+    """`metadata.source` is what routes the transcript away from per-turn extraction on the server;
+    `event_time` keeps the bi-temporal axis; no `consolidate` key means the server decides (outcomes
+    only). Per-message timestamps and file paths never leave the machine."""
+    from engram.connectors import watch
+
+    monkeypatch.setattr(watch, "load_sessions", lambda paths, **kw: [_session("claude-code:a")])
+    bodies = []
+
+    def fake_post(base, key, path, body, timeout):
+        bodies.append((path, body))
+        return {"ok": True, "sessions": 1, "episodes": 1, "outcomes": 1}
+
+    monkeypatch.setattr(watch, "_post", fake_post)
+    result = watch.ingest("http://x", "k", ["p1"])
+    path, body = bodies[0]
+    assert path == "/v1/import"
+    row = body["sessions"][0]
+    assert row["metadata"] == {"source": "agent_session"}
+    assert row["event_time"] == 1_756_000_000.0
+    assert set(row["messages"][0]) == {"role", "content"}
+    assert "consolidate" not in body
+    assert result["closed_ok"] == ["claude-code:a"] and result["close_failed"] == []
+    assert result["sessions_by_path"] == {"p1": ["claude-code:a"]}
+
+    bodies.clear()
+    watch.ingest("http://x", "k", ["p1"], extract_facts=True)
+    assert bodies[0][1]["consolidate"] is True
+
+    monkeypatch.setattr(watch, "load_sessions", lambda paths, **kw: [_session("codex:b", when=None)])
+    bodies.clear()
+    watch.ingest("http://x", "k", ["p2"])
+    assert "event_time" not in bodies[0][1]["sessions"][0]
+
+
+def test_watcher_does_not_strand_sessions_older_than_last_run(tmp_path, monkeypatch):
+    """Deriving `since` from last_run silently dropped every transcript a --limit'ed tick did not reach.
+    The size ledger is the idempotency mechanism; `since` is only ever the explicit window."""
+    from engram.connectors import watch
+
+    old = _quiet_file(tmp_path, age=3 * 86400)
+    mtime = os.path.getmtime(old)
+    monkeypatch.setattr(watch, "find_sessions",
+                        lambda since=None, **kw: [old] if since is None or mtime >= since else [])
+    monkeypatch.setattr(watch, "load_sessions", lambda paths, **kw: [_session("s")])
+    monkeypatch.setattr(watch, "_post", lambda *a, **k: {"ok": True, "episodes": 1, "outcomes": 0})
+
+    state_path = tmp_path / "state" / "watch_state.json"
+    state_path.parent.mkdir()
+    state_path.write_text(json.dumps({"seen": {}, "last_run": mtime + 86400}))
+    out = watch.run_once(_args(tmp_path))
+    assert out["exit"] == 0 and out["sessions"] == 1, out
+    assert old in json.loads(state_path.read_text())["seen"]
+
+
+def test_failed_close_is_not_marked_seen_until_third_failure(tmp_path, monkeypatch):
+    """A stored-but-not-distilled transcript must be retried, or the memory keeps raw turns and no
+    conclusions — bounded, so one undigestible file cannot hold a slot of every tick's --limit."""
+    from engram.connectors import watch
+
+    path = _quiet_file(tmp_path)
+    monkeypatch.setattr(watch, "find_sessions", lambda **kw: [path])
+    monkeypatch.setattr(watch, "load_sessions", lambda paths, **kw: [_session("s")])
+
+    def flaky(base, key, route, body, timeout):
+        if route == "/v1/import":
+            return {"ok": True, "episodes": 1}
+        raise RuntimeError("model timeout")
+
+    monkeypatch.setattr(watch, "_post", flaky)
+    args = _args(tmp_path)
+    for n in (1, 2):
+        out = watch.run_once(args)
+        assert out["exit"] == 0 and out["close_failed"] == 1
+        state = watch._load_state(args.state)
+        assert path not in state["seen"], state
+        assert state["close_failures"][path] == n
+        assert state["last_result"]["close_failed"] == 1
+    watch.run_once(args)
+    state = watch._load_state(args.state)
+    assert path in state["seen"] and path not in state["close_failures"], state
+
+
+def test_unreachable_server_exits_75_and_leaves_state_untouched(tmp_path, monkeypatch):
+    import urllib.error
+
+    from engram.connectors import watch
+
+    path = _quiet_file(tmp_path)
+    monkeypatch.setattr(watch, "find_sessions", lambda **kw: [path])
+    monkeypatch.setattr(watch, "load_sessions", lambda paths, **kw: [_session("s")])
+
+    def down(*a, **k):
+        raise urllib.error.URLError("connection refused")
+
+    monkeypatch.setattr(watch, "_post", down)
+    args = _args(tmp_path)
+    assert watch.run_once(args)["exit"] == 75
+    assert not os.path.exists(args.state)
+
+
+def test_every_loop_runs_n_times_with_injected_sleep(tmp_path, monkeypatch):
+    from engram.connectors import watch
+
+    runs = []
+    monkeypatch.setattr(watch, "run_once", lambda args: runs.append(args.state) or {"exit": 0})
+    naps = []
+
+    def fake_sleep(seconds):
+        naps.append(seconds)
+        if len(naps) == 3:
+            raise KeyboardInterrupt
+
+    monkeypatch.setattr(watch, "_sleep", fake_sleep)
+    code = watch.main(["--every", "2m", "--key", "k", "--state", str(tmp_path / "s.json")])
+    assert code == 0 and len(runs) == 3 and naps == [120, 120, 120]
+
+
+def test_lock_makes_second_run_skip(tmp_path, monkeypatch):
+    """launchd fires every 30 minutes regardless of whether the last backfill tick is still posting."""
+    import fcntl
+
+    from engram.connectors import watch
+
+    path = _quiet_file(tmp_path)
+    monkeypatch.setattr(watch, "find_sessions", lambda **kw: [path])
+    monkeypatch.setattr(watch, "load_sessions", lambda paths, **kw: [_session("s")])
+    posted = []
+    monkeypatch.setattr(watch, "_post", lambda *a, **k: posted.append(a) or {"ok": True})
+
+    args = _args(tmp_path)
+    os.makedirs(os.path.dirname(args.state))
+    holder = open(os.path.join(os.path.dirname(args.state), "watch.lock"), "a+")
+    fcntl.flock(holder.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    try:
+        out = watch.run_once(args)
+        assert out == {"exit": 0, "skipped": "locked"} and posted == []
+    finally:
+        holder.close()
+    assert watch.run_once(args)["exit"] == 0 and posted  # released -> the next tick proceeds
+
+
+def test_key_file_and_url_env_alias(tmp_path, monkeypatch):
+    from engram.connectors import watch
+
+    kf = tmp_path / "watch.key"
+    kf.write_text("from-file\n")
+    assert watch._resolve_key(_args(tmp_path, key="", key_file=str(kf))) == "from-file"
+    assert watch._resolve_key(_args(tmp_path, key="explicit", key_file=str(kf))) == "explicit"
+    monkeypatch.setenv("ENGRAM_API_KEY", "from-env")
+    assert watch._resolve_key(_args(tmp_path, key="", key_file="")) == "from-env"
+    assert watch._parse_duration("30m") == 1800 and watch._parse_duration("2h") == 7200
+    assert watch._parse_duration("1d") == 86400

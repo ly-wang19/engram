@@ -79,6 +79,15 @@ export interface MemoryStatsCounts {
   pending_conflicts: number
 }
 
+/** Derived by the server from agent-session episodes; tells the console whether the memory is
+ *  being fed by `engram-watch` at all (a memory nobody feeds stays empty). */
+export interface FeedStatus {
+  last_fed_at: number | null
+  last_fed_at_h: string | null
+  sessions: number
+  conclusions: number
+}
+
 export interface AgentStatus {
   ok: boolean
   user: string
@@ -96,6 +105,7 @@ export interface AgentStatus {
   storage: string
   embedder: string
   llm_configured: boolean
+  feed?: FeedStatus
   recommended_next_actions: string[]
   tools: {
     read_context: string

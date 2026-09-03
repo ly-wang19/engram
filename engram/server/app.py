@@ -575,7 +575,9 @@ class ImportReq(BaseModel):
     sessions: Optional[list] = None
     data: Optional[object] = None
     format: str = "auto"
-    consolidate: bool = True
+    # None = extract facts per turn for every source EXCEPT agent-session transcripts (those are stored
+    # for close-time distillation; per-turn extraction on them needs an explicit true AND an LLM).
+    consolidate: Optional[bool] = None
     summarize: bool = True
     dedupe: bool = True  # idempotent re-import: skip episodes already ingested (content fingerprint)
 

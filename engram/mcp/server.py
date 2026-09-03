@@ -107,6 +107,15 @@ def _err(e: Exception) -> str:
     return f"Error: {type(e).__name__}: {e}"
 
 
+def _format_feed(feed: dict) -> str:
+    """When the memory was last fed from this machine's agent sessions — the line that distinguishes an
+    empty memory from a healthy one."""
+    if not feed.get("last_fed_at_h"):
+        return "- Last fed: never — run engram-watch --install"
+    return (f"- Last fed: {feed.get('last_fed_at_h')} · {feed.get('sessions', 0)} session(s) · "
+            f"{feed.get('conclusions', 0)} conclusion(s)")
+
+
 def _format_focus(focus: dict) -> str:
     track = focus.get("track") or []
     mute = focus.get("mute") or []
@@ -520,6 +529,7 @@ async def engram_agent_status(
         f"{c.get('summaries', 0)} summary(ies), {c.get('pending_conflicts', 0)} pending conflict(s)",
         f"- Overall working memory: {c.get('working_live', 0)} live item(s)",
         f"- Consolidation backlog: {'yes' if data.get('consolidation_backlog') else 'no'}",
+        _format_feed(data.get("feed") or {}),
         "- Focus:",
         _format_focus(focus),
         "",
@@ -720,8 +730,12 @@ async def engram_import(
         data = await backend().import_(content, format=format)
     except Exception as e:  # noqa: BLE001
         return _err(e)
-    return (f"Imported {data.get('sessions', 0)} session(s) / {data.get('episodes', 0)} episode(s); "
+    text = (f"Imported {data.get('sessions', 0)} session(s) / {data.get('episodes', 0)} episode(s); "
             f"extracted {data.get('facts_added', 0)} fact(s), {data.get('summaries', 0)} summary(ies).")
+    deferred = int(data.get("facts_deferred") or 0)
+    if deferred:
+        text += f"; {deferred} agent session(s) stored for close-time distillation"
+    return text
 
 
 @mcp.tool(name="engram_export", annotations=ToolAnnotations(title="Export memory data", **_READ))

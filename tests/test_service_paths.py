@@ -446,3 +446,125 @@ def test_service_remember_total_facts_counts_cold_tier(tmp_path):
     out = svc.remember("u", "Just saying hello.", scope="long")
     assert out["ok"] is True
     assert out["total_facts"] >= 5
+
+
+# ---------------------------------------------------------------------------------------------------
+# embedder_blind: the store-level audit finding for "recall returns the same four facts for every query".
+# Measured on the owner's store: HashingEmbedder scored 0.000 for every Chinese query/fact pair.
+# ---------------------------------------------------------------------------------------------------
+
+_ZH = ["我们决定用 multilingual 作为线上 embedder，因为中文区分度更好",
+       "线上机每小时被 quant cron 的任务压垮，Engram 是受害者",
+       "发布前必须过 LongMemEval A/B，不能只用中文语料验证",
+       "读路径的两个同构缺陷：辅助信号驱逐主信号",
+       "会话结论是记忆单元，逐轮抽取产出的是传记三元组",
+       "算法改动必须更新架构优化地图",
+       "工作台汇报只对实质性任务触发",
+       "双 Agent 协作靠落盘交接，不共享会话上下文",
+       "熔断线：两小时无交付即停下汇报",
+       "验收要用证据，不用自评",
+       "个人记忆路径和 benchmark 路径共用一套默认值是缝隙所在",
+       "记忆自己长：watch 定时喂入"]
+_EN = ["We decided to use the multilingual embedder for production because it ranks Chinese.",
+       "The production box is crushed hourly by a quant cron job; Engram is the victim.",
+       "Every algorithm change must pass a LongMemEval A/B before shipping.",
+       "Two isomorphic read-path defects: auxiliary signals evicting the primary signal.",
+       "Session conclusions are the memory unit; per-turn extraction yields biography triples.",
+       "Architecture changes must update the optimization map.",
+       "Report to the workbench only for substantial tasks.",
+       "The two agents collaborate through files on disk, not shared context.",
+       "Circuit breaker: two hours without a deliverable means stop and report.",
+       "Accept on evidence, never on self-assessment.",
+       "Personal and benchmark paths sharing one set of defaults is the seam.",
+       "The memory feeds itself: a scheduled watch tick."]
+
+
+def _seed(svc: MemoryService, user: str, texts: list[str]) -> None:
+    sessions = [{"session_id": f"{user}-{i}", "messages": [{"role": "user", "content": t}]}
+                for i, t in enumerate(texts)]
+    svc.import_(user, sessions=sessions, consolidate=False, summarize=False)
+
+
+def test_audit_embedder_blind_fires_on_hashing_non_ascii_store(tmp_path):
+    svc = MemoryService(data_dir=str(tmp_path), embedder_name="hashing", llm_name="")
+    _seed(svc, "zh", _ZH)
+    audit = svc.audit("zh")
+    rows = [f for f in audit["findings"] if f["kind"] == "embedder_blind"]
+    assert len(rows) == 1 and audit["by_kind"]["embedder_blind"] == 1, audit
+    row = rows[0]
+    assert row["exact"] is True and row["embedder"] == "HashingEmbedder" and row["model"] is None
+    # The rule counts letters, not punctuation: lines that lean on ASCII names ("multilingual",
+    # "quant cron", "LongMemEval A/B") come out roughly half-and-half and are rightly NOT called blind.
+    # Nine of twelve still are, which is the 20% share several times over.
+    assert row["checked"] >= 10 and row["blind"] == row["episodes_blind"] >= 8
+    assert row["ratio"] >= 0.2 and "fact_id" not in row
+    assert row["text"] == f"HashingEmbedder cannot rank {round(row['ratio'] * 100)}% of {row['checked']} memories"
+    assert row["migrate"] in row["action"] and "bge-small-zh" in row["action"]
+    assert audit["total_findings"] >= 1
+    # the agent sees the same verdict, with the command an operator can run
+    actions = svc.agent_status("zh")["recommended_next_actions"]
+    assert any("ENGRAM_EMBEDDER=multilingual ENGRAM_REEMBED_ON_MISMATCH=1" in a
+               and "HashingEmbedder" in a for a in actions), actions
+
+
+def test_audit_no_embedder_blind_on_english_store(tmp_path):
+    svc = MemoryService(data_dir=str(tmp_path), embedder_name="hashing", llm_name="")
+    _seed(svc, "en", _EN)
+    assert "embedder_blind" not in svc.audit("en")["by_kind"]
+    assert not any("cannot be ranked" in a for a in svc.agent_status("en")["recommended_next_actions"])
+    # and below the floor of 10 memories nothing fires: a 3-line store is not evidence of anything
+    _seed(svc, "tiny", _ZH[:3])
+    assert "embedder_blind" not in svc.audit("tiny")["by_kind"]
+
+
+def test_audit_no_embedder_blind_for_multilingual_embedder(tmp_path):
+    """The rule keys on the tokenizer, not on the corpus alone: a multilingual model ranks CJK fine, an
+    English-only sentence-transformer degrades (reported, but not as an exact verdict)."""
+    svc = MemoryService(data_dir=str(tmp_path), embedder_name="hashing", llm_name="")
+    _seed(svc, "zh", _ZH)
+
+    class SentenceTransformerEmbedder:  # duck-typed stand-in; the real one needs sentence-transformers
+        def __init__(self, model_name: str):
+            self.model_name = model_name
+
+    svc.embedder = SentenceTransformerEmbedder("sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2")
+    assert "embedder_blind" not in svc.audit("zh")["by_kind"]
+
+    svc.embedder = SentenceTransformerEmbedder("BAAI/bge-small-en-v1.5")
+    rows = [f for f in svc.audit("zh")["findings"] if f["kind"] == "embedder_blind"]
+    assert len(rows) == 1 and rows[0]["exact"] is False
+    assert rows[0]["model"] == "BAAI/bge-small-en-v1.5" and rows[0]["embedder"] == "SentenceTransformerEmbedder"
+
+    class LiteLLMEmbedder:  # any other embedder: never fires (we have no evidence about it)
+        model_name = "text-embedding-3-small"
+
+    svc.embedder = LiteLLMEmbedder()
+    assert "embedder_blind" not in svc.audit("zh")["by_kind"]
+
+
+def test_audit_no_embedder_blind_on_code_heavy_ascii_store(tmp_path):
+    """Punctuation is not a script. A store of JSON / SQL / shell facts is 100% [a-z0-9]-tokenizable —
+    the first version counted braces and pipes against the text and told the owner a third of their
+    memories were unrankable."""
+    svc = MemoryService(data_dir=str(tmp_path), embedder_name="hashing", llm_name="")
+    code = ['{"a": 1, "b": [2, 3], "c": {"d": null}}', "if (!ok) { return -1; }",
+            "SELECT * FROM t WHERE x = 1;", "ls -la | grep -v '^d' | wc -l",
+            "export FOO=bar && ./run.sh --flag=1", "def f(x): return (x + 1) * 2",
+            "curl -s http://127.0.0.1:8456/health | jq .", "git log --oneline -5 | head",
+            "npm run build && npm test -- --ci", "docker ps --format '{{.Names}}'",
+            "kubectl get pods -n default -o wide", "python3 -m pytest tests/ -q"]
+    _seed(svc, "code", code)
+    assert "embedder_blind" not in svc.audit("code")["by_kind"]
+
+
+def test_audit_embedder_blind_fires_on_two_large_chinese_sessions(tmp_path):
+    """The owner's real backfill: a couple of long transcripts, zero facts. Item count is 2, letter mass
+    is thousands — the verdict must come from the mass."""
+    svc = MemoryService(data_dir=str(tmp_path), embedder_name="hashing", llm_name="")
+    long_zh = ["，".join(_ZH) * 8, "。".join(reversed(_ZH)) * 8]
+    _seed(svc, "big", long_zh)
+    audit = svc.audit("big")
+    rows = [f for f in audit["findings"] if f["kind"] == "embedder_blind"]
+    assert len(rows) == 1, audit["by_kind"]
+    assert rows[0]["checked"] == 2 and rows[0]["dark_chars"] > 2000
+    assert rows[0]["ratio"] >= 0.9

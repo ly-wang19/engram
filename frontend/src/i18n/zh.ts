@@ -376,6 +376,9 @@ export const zh: Dict = {
     connectCodexSessions: 'Codex 会话',
     connectDetected: (n: number) => `检测到 ${n} 个`,
     connectNoneYet: '还没有',
+    connectFeedLabel: '最近喂入',
+    connectFedAt: (when: string, n: number) => `${when} · ${n} 个会话`,
+    connectNeverFed: '从未 —— 运行 engram-watch --install',
     connectSessionLabel: '测试 session id',
     connectStepInstall: '1. 安装 / 更新 Codex 记忆连接器',
     connectCopyCommand: '复制安装命令',
@@ -447,6 +450,7 @@ export const zh: Dict = {
       code_artifact: '是代码不是记忆',
       dangling_subject: '主语不明',
       slot_overflow: '同一个槽塞爆了',
+      embedder_blind: 'embedder 排不了序',
     },
     slotOverflowWhy: (n: number, label: string, predicate: string) =>
       `${n} 条事实都在声称${label || predicate}——只放一个值的槽不可能有 ${n} 个值，这是抽取碎片，不是记忆`,

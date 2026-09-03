@@ -215,7 +215,7 @@ function CodexSetupCard() {
             {t.settings.connectDescPost}
           </p>
 
-          <div className="grid gap-3 sm:grid-cols-2">
+          <div className="grid gap-3 sm:grid-cols-3">
             <StatusTile
               label={t.settings.connectApiLabel}
               value={health.data?.ready ? t.settings.connectReady : t.settings.connectChecking}
@@ -231,6 +231,17 @@ function CodexSetupCard() {
                     : t.settings.connectNoneYet
               }
               ok={hasCodexWrites}
+            />
+            {/* Green only when fed within the last 24 h: a stale feed is the failure mode this tile
+                exists to expose, so "fed once, months ago" must not read as healthy. */}
+            <StatusTile
+              label={t.settings.connectFeedLabel}
+              value={
+                status.data?.feed?.last_fed_at_h
+                  ? t.settings.connectFedAt(status.data.feed.last_fed_at_h, status.data.feed.sessions)
+                  : t.settings.connectNeverFed
+              }
+              ok={!!status.data?.feed?.last_fed_at && Date.now() / 1000 - status.data.feed.last_fed_at < 86400}
             />
           </div>
 

@@ -390,6 +390,9 @@ export const en = {
     connectCodexSessions: 'Codex sessions',
     connectDetected: (n: number) => `${n} detected`,
     connectNoneYet: 'None yet',
+    connectFeedLabel: 'Last fed',
+    connectFedAt: (when: string, n: number) => `${when} · ${n} session(s)`,
+    connectNeverFed: 'Never — run engram-watch --install',
     connectSessionLabel: 'Test session id',
     connectStepInstall: '1. Install / update Codex memory connector',
     connectCopyCommand: 'Copy install command',
@@ -464,6 +467,7 @@ export const en = {
       code_artifact: 'code, not memory',
       dangling_subject: 'no subject',
       slot_overflow: 'slot overflow',
+      embedder_blind: 'embedder cannot rank this',
     },
     // `label` is the backend's Chinese display name for the slot; the English console names the
     // predicate instead so the sentence stays in one language.
