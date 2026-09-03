@@ -140,6 +140,25 @@ flowchart TD
 | P1 | Temporal interval reasoning | temporal-reasoning 仍低于 full-context，需要更强的区间和 duration 证据 | 显式 start/end pair、invalid_at span、date arithmetic block |
 | P2 | Runtime profiles | 让用户选择 lite/standard/graph/consolidated，并用同一 harness 报三联表 | 在 `Config`/bench 层定义可测 profile，而不是手动组合开关 |
 
+## 本轮暴露的架构缝隙（2026-09-01，个人记忆路径）
+
+上表的重点区域全部来自 benchmark 路径。本轮把 owner 的真实数据（3108 个 agent 会话、16.5G）走了一遍，
+暴露的不是组件缺陷，而是**两条使用路径共用一套配置、一套兜底、一种类型**时的缝隙。每条都附可观察的触发信号：
+信号出现前不动，出现了再动。
+
+| 缝隙 | 证据 | 为什么现在不重构 | 动手信号 |
+| --- | --- | --- | --- |
+| **兜底会腐蚀而非降级**：无 LLM 时 `RuleExtractor` 在真实会话上 12 轮产 11 条垃圾（`The \| occupation \| nearly empty`）；`HashingEmbedder` 对中文区分度 0.000。两者都由同一个"无依赖→兜底"逻辑选中，都对 owner 的真实输入静默出错 | `results/embedder_zh_2026-09-01.md`；真实库 88 条事实 84 条 `occupation` 全部来自兜底期 | zero-setup 不变量是产品资产，兜底在 demo 的简单英文句子上是对的 | **已触发。** 修法不是删兜底，是给兜底加"这个输入我能不能处理"的门：agent 会话导入在无 LLM 时跳过抽取而不是污染；embedder 对非 ASCII 主导的语料拒绝用 hashing |
+| **结论穿着三元组的外衣**：`OUTCOME_PREDICATES` 在 outcomes.py 之外有 11 处特判（service 7、memory 3、graph_builder 1），procedural 层同一招又有 10 处。subject 是 session id 不是实体，object 是 400 字整句 | `grep -rn OUTCOME_PREDICATES engram/` | 这层外衣白拿了双时间轴、supersedes、provenance、检索，收益真实；CLAUDE.md §8 禁止为假想未来加抽象 | 第 4 种东西要穿这件外衣时，或结论需要三元组没有的行为（跨会话按语义去重、同一教训重现时 salience 强化）时，拆出独立类型。**不要**在第 12 处特判上继续加 |
+| **身份解析散落在每个调用点**：`resolver.resolve()` 在 service+memory 里 26 处独立调用，`user_id ==` 手写比较 15 处。本轮 `audit()` 用原始 handle、`clear_slot()` 用 canonical，两边看的是不相交的两批数据，计数守卫 3==3 放行后删错了 owner 亲手写的事实 | 对抗审查 `attack3.py`（已修，`tests/test_outcomes.py::…after_an_identity_link`） | 单点修复已落地并有回归测试 | **已触发一次，下一个按 user 读事实的功能必再踩。** 写入时统一盖 canonical，或提供唯一的 `facts_for(user)` 访问器让所有读取走同一条路，二选一 |
+| **System-2 的成本模型假设的是聊天流，不是批量导入**：逐轮抽取 12 轮 = 12 次 LLM 调用；3108 会话 × ~100 轮 ≈ 30 万次。outcomes 是 1 次/会话。`/v1/import` 默认 `consolidate=True`，watch 没有传这个开关 | 本轮实测 12 轮 10s | 逐轮抽取在有 LLM 时产出是**干净有用的**（`EKOS \| backend_framework \| FastAPI`），不能一刀切关掉 | watch 首次全量回灌前必须先定：逐轮抽取按会话数/轮数设上限，或对 `source=agent_session` 默认只跑 outcomes、逐轮抽取按需 |
+| **benchmark 配置和实际使用配置已分叉，而 Config 不知道**：跑分用 `--embedder bge-small` + 英文；线上默认 `hashing`；owner 需要 `multilingual`。已发布的 84.4 测的是一套没有真实用户在跑的组合 | 见"Runtime profiles P2"一行 | 已在路线图，只是优先级和理由变了 | **理由已变：**不是 lite/standard/graph 的选择题，而是"被测的组合必须是被用的组合"。profile 要绑 embedder + extractor + 语言，让 harness 能按 profile 报三联表 |
+| **控制台 12 页 = 12 张数据库视图**：按存储 schema 分页（Facts/Episodes/Graph/Timeline…），不按 owner 的问题分（"我决定过什么""还有什么没解决""里面有什么是错的"）。Journal 和 Health 是仅有的两个按问题组织的页，也是 owner 真正会打开的两个 | 本轮 grep：Journal 之前前端对 outcome 0 引用 | 先让 Journal 跑起来 | Journal 上线后看 owner 实际打开哪些页；连续两周没被打开的页并进按问题组织的页 |
+
+**这一轮真正改变的认识**：CLAUDE.md §2 说"缝隙在组件之间"。本轮证据说缝隙**不在组件之间，在两条使用路径之间**。
+组件本身组合得很好；组合不起来的是"benchmark-英文-聊天"和"个人-中文-agent 会话"走同一套默认值、同一套兜底、同一种类型。
+架构缺的不是新组件，是"我现在是哪一种记忆"这个概念——今天它没有。
+
 ## 验收分层规则
 
 小改动不默认跑完整 LongMemEval_S 500。按影响范围分层：
@@ -191,10 +210,17 @@ lossless episodes
   + reproducible harness
 ```
 
-下一阶段不要散打。按计划优先推进：
+下一阶段不要散打。两条路径各自三步，互不挤占：
 
+**benchmark 路径**（LongMemEval，英文，可复现日志验收）：
 1. Raw evidence fusion hardening。
 2. Chain-aware retrieval。
 3. Graph proximity / multi-hop retriever。
 
-每一步都必须留下可复现日志，不能只留下“感觉更好”。
+**个人记忆路径**（owner 的 agent 会话，中文，用 owner 自己的库验收）：
+1. 兜底加门：无 LLM 不抽取、非 ASCII 语料不用 hashing。
+2. 记忆自己长：watch 定时 + 批量导入的抽取成本上限。
+3. 身份解析收口到一个边界。
+
+每一步都必须留下可复现日志，不能只留下“感觉更好”。个人路径的“日志”是 owner 库上的前后对比
+（`results/embedder_zh_2026-09-01.md` 是第一份）。
