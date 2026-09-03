@@ -126,3 +126,8 @@
 - **本机 launchd 实装（用临时 venv 解释器，`.pth` 指向本检出，不动 owner 的 Framework python）**: `--install --label com.engram.watch.test --interval 1h --url http://127.0.0.1:9 --key test --python <venv>` → `plutil -lint: OK`、`launchctl print gui/501/com.engram.watch.test` exit 0、`~/.engram/watch.key` `-rw-------`、plist 中无密钥字面量；`--status` 打印 `loaded / last run: never / backlog 1908`；`--uninstall --purge` 删除 plist/key/lock/log；随后 `launchctl print` exit 113、`launchctl list | grep -i engram` 空、`ls ~/Library/LaunchAgents | grep -i engram` 空、`watch.key/watch.lock/watch_state.json` 均不存在。临时 venv 已删除。**没有任何定时任务遗留。**
 - **修了什么（小而明确）**: ① `--install --scheduler cron` 原来只打印引用 `~/.engram/watch.key` 的 cron 行却从不写 key 文件（第一个 tick 必 `cannot read --key-file`）：现在非 dry-run 时写 0600 key 文件，无 key 且无文件则拒绝 exit 1；新增 `tests/test_watch_install.py::test_cli_install_cron_writes_key_file_and_never_edits_crontab`；两份文档的"cron 只打印行"改为"并写 key 文件"。② 正向体检测试改名为 `test_audit_embedder_blind_fires_on_hashing_non_ascii_store`，使验收里的 `pytest -k embedder_blind` 真的选中它（原名不含该词，`-k` 只跑到两条否定测试）；架构优化地图里的引用同步改名。
 - **未修的观察（二期）**: uninstall 时若 RunAtLoad 的 tick 正在跑，`launchctl bootout` 返回后服务仍会短暂在 `launchctl print`/`list` 中出现（本机实测约 10 s 内消失）——紧跟其后的"exit 非零"验收有竞态；可在 `uninstall_launchd` 里轮询 `launchctl print` 直到消失。`--purge` 只删文件不删空的 `~/.engram/logs/` 目录。
+
+- **Agent**: Claude Code · **日期**: 2026-09-04 · **P0 收尾**
+- **做了什么**: 合并三视角验证的修复后自己复跑三道门；另修 `embedder_blind` 判定（分母只算字母、门槛改字符质量 200 字，代码/JSON 不再误报，两段长中文会话会报）与 `--purge` 残留空目录。全量 **557 passed / 1 skipped**；quickstart 零 key 退出 0；`launchctl list | grep engram` 空。
+- **当前状态**: P0 两件已交付并提交。**未安装任何定时任务**。
+- **下一步前提**: `engram-watch --install` 在本机会被干净环境预检拒绝，因为 editable install 指向 main 检出而 main 尚无 `connectors/watch`。合入 main 后命令即可用。
