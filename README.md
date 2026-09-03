@@ -118,7 +118,8 @@ service (`MemoryService`). In production, configured API keys map to stable isol
 the key text itself is used as a namespace only in explicitly enabled development open mode.
 The bundled console at `/ui` exposes the same product loop for humans: content-free session status,
 session-scoped writes with `scope=auto|long|working`, close-session, session report, paged memory
-management, safe export, and confirmed erase.
+management, safe export, and confirmed erase — plus a **Journal** of what each session concluded and a
+**Health** page that names extraction junk (down to "84 facts crammed into one slot") and clears it in one step.
 For the recommended lifecycle across Claude Code, Codex, Cursor, and custom agents, see
 [`docs/cross-agent-memory.md`](docs/cross-agent-memory.md) and the copy-paste adapter recipes in
 [`docs/agent-adapters.md`](docs/agent-adapters.md). A one-session lifecycle smoke test (local zero-server
@@ -252,6 +253,22 @@ mem.import_data(open("conversations.json").read(), user_id="me")          # in-p
 See [`examples/batch_import.py`](examples/batch_import.py) (zero-setup) and
 [`clients/typescript/`](clients/typescript/) for the SDK.
 
+**4. Feed it from your agent sessions** — the transcripts Claude Code and Codex already write to disk are
+the memory-worthy material. `engram-watch` ingests the ones that have gone quiet, closes each session so it
+gets distilled into conclusions, and remembers what it has seen, so re-running is cheap and idempotent:
+
+```bash
+engram-watch --dry-run                                  # what would be ingested, nothing stored
+engram-watch --once --url http://127.0.0.1:8000 --key me # one tick: newest quiet sessions, 25 per run
+engram-watch --install --url http://127.0.0.1:8000 --key me --interval 30m   # launchd / systemd / cron
+engram-watch --uninstall --purge                        # leaves ~/.engram exactly as it found it
+```
+
+By default a session costs one summary call and one conclusions call — per-turn fact extraction over a
+long transcript is opt-in (`--extract-facts`). `--install` refuses to register a job that would fail on
+its first tick (it imports `engram` in a clean environment first), stores the key in a `0600` file rather
+than the plist, and `--uninstall` waits until the scheduler has actually let go.
+
 ## How it works
 
 Engram is a **dual-process** memory system, modeled on the human System-1 / System-2 split: a fast write
@@ -260,6 +277,12 @@ path that never blocks on an LLM, and a slow consolidation path that does the he
 ```mermaid
 flowchart TB
     ADD([add messages]) --> S1
+    SESS([your agent sessions on disk<br/>Claude Code · Codex]) --> W
+    subgraph W [engram-watch · batch, idempotent, schedulable]
+        direction LR
+        Wa[parse transcript<br/>drop tool noise · redact secrets] --> Wb[import as episodes] --> Wc[close session →<br/>distil conclusions · 1 LLM call]
+    end
+    W --> TM
     subgraph S1 [SYSTEM-1 · hot write path · no LLM on critical path]
         direction LR
         S1a[append lossless Episode] --> S1b[identity resolution<br/>across sessions/devices] --> S1c[light embed + enqueue]
@@ -276,6 +299,7 @@ flowchart TB
         TMb[(Semantic<br/>bi-temporal graph)]
         TMc[(Profile /<br/>Identity)]
         TMd[(Procedural)]
+        TMe[(Session<br/>conclusions)]
     end
     TM --> R
     Q([search query]) --> R
@@ -287,8 +311,11 @@ flowchart TB
     Rf --> OUT([answer-ready context])
 ```
 
-**The write path (System-1)** appends a lossless episode, resolves identity across sessions/devices, embeds
-and enqueues — no LLM on the critical path. **The consolidation path (System-2)**
+There are two ways in. **The write path (System-1)** appends a lossless episode, resolves identity across
+sessions/devices, embeds and enqueues — no LLM on the critical path. **The session path (`engram-watch`)**
+reads the agent transcripts already on your disk, stores them, and at session close distils what was
+*decided, found, learned, and left open* in one LLM call per session — the unit of memory for working
+sessions is the conclusion, not the biographical triple. **The consolidation path (System-2)**
 runs asynchronously: it extracts atomic `(subject, predicate, object)` facts, builds a knowledge graph, and
 resolves contradictions. **The read path** decomposes the question, retrieves through four complementary
 channels in parallel, fuses positive evidence with RRF plus recency/salience priors (optional
@@ -305,8 +332,9 @@ provenance-tagged context. For the algorithm-level contracts, see
 | 3 | **Cheap conflict detection** — slot-match + embedding/NLI heuristics, escalate to an LLM **only** when ambiguous | Production-grade temporal correctness **without** an LLM call per fact — the cost win at scale. |
 | 4 | **Hybrid retrieval** — dense semantic + BM25 lexical + graph proximity fused as positive evidence, with recency/salience as priors | No single retriever wins everywhere. The *validated* finding: **facts + raw chunks beats either alone** — facts add conflict-resolved/temporal signal, chunks restore lost detail. |
 | 5 | **Dual-process split** — fast write, async consolidation | Keeps graph-building, dedup, and conflict resolution off the critical path; read-path latency is measured in the harness before we publish claims. |
-| 6 | **Pluggable everything** — LLM / embedder / vector store / graph store all sit behind interfaces with **zero-dep offline fallbacks** | `python scripts/check_zero_setup.py` runs with **no API keys, no services**; `pytest` covers the full unit suite when test dependencies are installed. Swap in BGE / LanceDB / Kuzu / any LLM via one config line. |
-| 7 | **The reproducible harness** — one neutral eval, official judge baked in, full-context baseline in every table, raw logs published | In a field where every vendor's number is contested, *being the scoreboard anyone can verify* is the real moat. |
+| 6 | **Pluggable everything, and fallbacks that refuse to corrupt** — LLM / embedder / vector store / graph store sit behind interfaces with zero-dep offline fallbacks; when a fallback cannot handle your data it says so instead of degrading silently | `python scripts/check_zero_setup.py` runs with **no API keys, no services**. Without an LLM, agent transcripts are stored but never rule-extracted (that produced junk on real sessions); the health check reports when the hashing embedder cannot tokenize what you stored (see [`results/embedder_zh_2026-09-01.md`](results/embedder_zh_2026-09-01.md)) and names the fix. Swap in BGE / LanceDB / Kuzu / any LLM via one config line. |
+| 7 | **Session conclusions** — a working session is distilled into decisions, findings, lessons and open questions, stored as ordinary bi-temporal facts | Per-turn extraction yields attributes ("works at X"); a session yields *what was concluded*. Both live in one store, so conclusions inherit supersession, provenance and retrieval for free, and the console's Journal reads like the notes you would have written by hand. |
+| 8 | **The reproducible harness** — one neutral eval, official judge baked in, full-context baseline in every table, raw logs published | In a field where every vendor's number is contested, *being the scoreboard anyone can verify* is the real moat. |
 
 The full data model and conflict-resolution rules live in [`engram/types.py`](engram/types.py) and
 [`engram/consolidate/`](engram/consolidate/).

@@ -21,18 +21,26 @@ on hard multi-session, multi-hop, and knowledge-update questions.
    - Append lossless episodes with event time and transaction time.
    - Resolve identity early enough that first-person facts land on the same subject across sessions.
    - Keep the critical write path deterministic and no-LLM by default.
+   - A second entry, `engram/connectors/watch.py`, batch-ingests the agent transcripts already on disk
+     (Claude Code, Codex): parse, drop tool noise, redact secrets, store as episodes, then close the
+     session so it is distilled. Idempotent by content fingerprint; schedulable (`--install`).
 
 2. Sleep-time consolidation plane
    - Extract atomic facts.
    - Build the bi-temporal graph.
    - Detect cheap conflicts first, then invalidate old facts non-destructively.
    - Score salience and let unreinforced incidental memories decay.
+   - At session close, distil the whole session into decision / finding / lesson / open_question facts
+     in one LLM call (`engram/consolidate/outcomes.py`). Per-turn extraction yields attributes; a
+     session yields conclusions. They are ordinary facts (subject = session id) so they inherit
+     supersession, provenance and retrieval, and they stay out of the entity graph.
 
 3. Typed memory plane
    - Episodic memory preserves raw detail.
    - Semantic memory stores fact and graph evidence.
    - Profile and identity memory gives stable user-level state.
    - Working memory stays session-scoped and never silently becomes durable.
+   - Session conclusions are the memory unit for working sessions, kept alongside attributes.
 
 4. Evidence retrieval plane
    - Understand the question shape before retrieval: lookup, current-state, temporal, aggregation,
@@ -72,6 +80,11 @@ For a query `q`, Engram assembles context in this order:
 - No hard-delete on contradiction. Superseded facts remain auditable.
 - No LLM dependency for zero-setup correctness. LLMs can improve extraction or judging, but the engine
   must still run deterministically offline.
+- No fallback that corrupts. A zero-dependency fallback may degrade, never silently produce wrong
+  memory: without an LLM, agent transcripts are stored but not rule-extracted; when the hashing
+  embedder cannot tokenize what a namespace holds, the audit says so and names the migration.
+- One store-level delete, three guards. `clear-slot` is the only hard-delete on the write side; it
+  requires the count the owner approved, touches live facts only, and never removes what the owner typed.
 - No facts-only QA. The default read path combines consolidated facts with raw session chunks.
 - No history amnesia. Previous-value and update questions surface the supersession chain, not just the
   current live slot head.
@@ -79,6 +92,13 @@ For a query `q`, Engram assembles context in this order:
   hit into a relevant fact.
 - No benchmark-only branches. Query planning uses evidence shape, not dataset labels.
 - No public claim without raw logs and validation.
+
+## Parameters That Carry Weight
+
+The fusion weights, thresholds and budgets the harness proved load-bearing are tabulated, with the
+algorithm each belongs to, in
+[`architecture-optimization-map.zh-CN.md` § 算法流程与承重参数](architecture-optimization-map.zh-CN.md).
+That table is the source of truth; this document states the contracts.
 
 ## Where To Improve Next
 
