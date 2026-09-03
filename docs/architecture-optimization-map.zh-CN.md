@@ -102,6 +102,19 @@ flowchart TD
   class BENCH eval
 ```
 
+## 算法流程与承重参数
+
+总览图画的是数据流；每个箱子里面怎么算，按代码归纳为五块。绘制版见「Engram 双路径架构图」artifact 图 2–6；本表是参数的事实源。
+
+| 算法 | 代码 | 流程要点 | 承重参数（`config.py`） |
+| --- | --- | --- | --- |
+| **search() 决策级联** | `memory.py::search()` | 固定顺序先命中先返回：① 多跳规划（≥2 谓词 + 已知锚点，LLM 只能从本用户真实谓词/实体表选链，无 LLM 走关键词表）→ ② supersedes 历史链问题 → ③ 规程类问题 → ④ 混合检索。空则冷层→规程→摘要→弃答。命中后做答案类型对齐（问 id/日期就要求 object 长得像），再过弃答判定 | `top_k=5` · `max_hops=2` · `abstain_threshold=0.45`（无非泛化属性词重叠 且 最高语义 < 0.45 才弃答；只匹配实体名不算） |
+| **五路信号融合** | `retrieve/hybrid.py` · `fusion.py` | 候选集三道过滤（live → 单值槽只留槽头 → 图排除区）；五路各自排名：sem（cosine × 类型倍率，仅真 embedder）、lex（BM25 + 日期词）、graph（≤2 跳、每跳 ×0.65、多路径累加、关系词加权）、rec（exp 衰减）、sal；加权 RRF 合并名次不合并分数 | `w_sem 1.0 · w_lex 0.6 · w_graph 0.8 · w_rec 0.3 · w_sal 0.25` · `rrf_k=60` · `recency_tau_days=45` · 类型倍率 1.25/1.15。**w_graph 勿降**：0.4 时 dev recall@15 +4.1 但全集 multi-session −23 |
+| **上下文装配** | `retrieve/evidence.py` · `memory.py::lean_context()` | `plan_evidence` 纯规则判证据形态（聚合/时间/时长/偏好/当前/历史/规程/多跳/精确/弃答敏感），据此定各层预算与子问题；层序 persona → working → L1 事实 → L2 摘要（排除已作 detail 的会话）→ detail 原文（provenance 提升合并，上限 max(1,k//2)）→ 聚合原始表 → 时间线 → 硬顶 | `n_facts 8/0` · `n_summaries 12/6/0` · `n_chunks 2/1/0` · `char_budget=60000` · `provenance_chunk_promotion` |
+| **冲突消解阶梯** | `consolidate/engine.py` · `conflict.py` | 抽取两阶段（raw_items 并发 4，facts_from 按时间序 → 身份注册可复现）；逐条按时间序 reconcile：① 同槽同宾语 dup → ② 用户权威 → ③ 偏好反转 → ④ 内容包含 → ⑤ 单值槽：精确槽 supersede；语义路径同主语异槽 cosine ≥ 阈值 supersede，模糊带才问 LLM。跳过：同 episode 共述、new 是 user 写的、old 更新。永不硬删，`supersedes` 指向被替换中最新的 | `sim_threshold=0.80` · `ambiguous_band=0.12` · 单值为默认（`MULTI_VALUED` 白名单累加） |
+| **遗忘与强化** | `consolidate/decay.py` · `engine.py::_decay_sweep` | 检索命中 top1 → `reinforce`（access_count++、重置时钟、salience += boost）；每次 consolidate 末尾 sweep：非 durable 且从未被访问的事实 `salience = max(0.3, exp(−rate·days))` | `salience_decay_per_day=0.02` · 地板 0.3 · durable 谓词（likes/works_at/lives_in/…）免疫 |
+| **会话结论蒸馏**（2026-09-01） | `consolidate/outcomes.py` | 窗口化头 35% + 尾 65%（结论在尾部）→ `<session>` 围栏防续写 → 1 次 LLM/会话 → 4 类 kind、15–400 字、前 120 字去重 → classify 敏感位 → 落成 Fact（subject=session_id） | `max_chars=24000` · `session_outcomes=True` · `ENGRAM_SESSION_OUTCOMES=0` 总闸 |
+
 ## 架构层与代码位置
 
 | 架构层 | 责任 | 主要代码 | 当前状态 |
