@@ -6,6 +6,7 @@ import type { AuditReport,
   Conflict,
   Focus,
   FactEdit,
+  FactSource,
   FactWrite,
   GraphData,
   Health,
@@ -86,6 +87,9 @@ export interface MemoriesQuery {
   status?: 'live' | 'superseded'
   q?: string
   include_sensitive?: boolean
+  // Server-side split of the two fact families: session conclusions vs. per-turn attributes. Keeping
+  // it on the server means facts_page.total already reports the filtered count.
+  kind?: 'outcomes' | 'attributes'
 }
 
 export interface RecallOptions {
@@ -159,14 +163,24 @@ export const api = {
       body: json({ subject: 'user', ...fact }),
     }),
 
+  // `source` comes back as 'user' after any edit — the caller needs it to confirm the correction will
+  // survive the next extraction pass rather than being silently overwritten.
   editFact: (id: string, patch: FactEdit) =>
-    request<{ ok: boolean; id: string; text: string }>(`/v1/facts/${id}`, {
+    request<{ ok: boolean; id: string; text: string; source: FactSource }>(`/v1/facts/${id}`, {
       method: 'PATCH',
       body: json(patch),
     }),
 
   deleteFact: (id: string) =>
     request<{ ok: boolean }>(`/v1/facts/${id}`, { method: 'DELETE' }),
+
+  // expect_count is what the owner was shown when they approved: the server refuses rather than erase
+  // more rows than that if the slot moved since the audit ran.
+  clearSlot: (subject: string, predicate: string, expect_count: number) =>
+    request<{ ok: boolean; deleted: number; found?: number; reason?: string }>(
+      '/v1/facts/clear-slot',
+      { method: 'POST', body: json({ subject, predicate, expect_count }) },
+    ),
 
   setFocus: (focus: Partial<Focus>) =>
     request<{ ok: boolean; focus: Focus }>('/v1/focus', { method: 'PUT', body: json(focus) }),

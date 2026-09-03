@@ -235,6 +235,7 @@ export class EngramClient {
     if (options.episodesLimit !== undefined) params.set('episodes_limit', String(options.episodesLimit))
     if (options.episodesOffset !== undefined) params.set('episodes_offset', String(options.episodesOffset))
     if (options.status !== undefined) params.set('status', options.status)
+    if (options.kind !== undefined) params.set('kind', options.kind)
     const query = options.query ?? options.q
     if (query !== undefined) params.set('q', query)
     if (options.includeSensitive !== undefined) {

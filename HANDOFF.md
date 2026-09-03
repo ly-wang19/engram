@@ -92,3 +92,42 @@
 - **共同验收**: 前端 build 过；端到端浏览器实测；用真实数据验证；pytest 绿；11 个页面回归不破。
 - **熔断**: 单功能超 2h 未跑通即停；不动检索算法；每功能独立提交。
 - **顺序**: F3(读) → F1(展示) → F2(写,风险最高放最后)。
+
+---
+
+- **Agent**: Claude Code（Fable，后端子代理）· **日期**: 2026-09-04（个人记忆路径第 1、2 步：兜底加门 + 记忆自己长）
+- **做了什么（后端，前端由并行代理负责）**:
+  - `Memory.import_messages` / `MemoryService.import_` / `ImportReq.consolidate` 改为 `Optional[bool] = None`：`source=agent_session` 的会话默认只存储+摘要，盖 `consolidated=True` + `metadata.extraction=outcomes_only`，永不进 RuleExtractor；只有 `consolidate=true` 且服务端有 LLM 才逐轮抽取。响应新增 `facts_deferred` / `deferred_reason`（`outcomes_only` | `no_llm` | null）。其他来源行为不变（`records` 回归护栏测试）。
+  - `MemoryService._embedder_blindness`：库级体检 `embedder_blind`（HashingEmbedder → `exact=true`；`-en-` 的 SentenceTransformerEmbedder → `exact=false`；其它 embedder 不报），`audit()` 与 `agent_status()` 共用；`stats()` 新增派生块 `feed`，`agent_status` 透传。
+  - MCP：`engram_import` 追加 "N agent session(s) stored for close-time distillation"；`engram_agent_status` 新增 "Last fed" 行。
+  - `connectors/watch.py` 重构：`run_once(args)`，`since` 只来自 `--since`（`last_run` 派生会把 `--limit` 没跑到的会话永久漏掉），`flock` 防重叠，服务器不可达退出 75 且状态不动，close 失败不标 seen（第 3 次才标），`--key-file` / `--url` 环境别名 / `--extract-facts` / `--every` / `--install` / `--uninstall` / `--status`。wire payload 带 `metadata.source=agent_session` + 会话级 `event_time`，默认不传 `consolidate`。
+  - 新增 `connectors/watch_install.py`：launchd plist / systemd 单元 / cron 行渲染 + 安装卸载，`home` 与 `run` 可注入；`pyproject` 新增控制台脚本 `engram-watch`。
+- **本机 launchd 实测（已全部卸载）**:
+  - 第一次实装：`--install --label com.engram.watch.test --interval 1h --url http://127.0.0.1:9 --key test` → `plutil -lint: ok`、`launchctl print gui/501/com.engram.watch.test` exit 0、`~/.engram/watch.key` 0600、plist 中无密钥。**但 RunAtLoad 的 tick 在日志里写下 `No module named engram.connectors.watch`**：本机 `engram-memory` 的 editable 安装指向主检出（还没有这个模块），shell 里能导入只是因为 cwd 在仓库里；launchd 从 `/` 以干净环境启动。
+  - 因此新增安装前置检查 `watch_install.preflight_import`（`env -i … python -c "import os; os.chdir('/'); import engram.connectors.watch"`，chdir 是因为 `-c` 会把 cwd 放进 sys.path）。修后在本机 `--install` 正确拒绝（exit 1，附 `pip install -e <repo>` 命令，什么都不写）；`--dry-run` 打印 `preflight: WOULD REFUSE — …`。
+  - 卸载证据：`--uninstall --label com.engram.watch.test --purge` → 删除 plist / key / log；`launchctl print` exit 113；`ls ~/Library/LaunchAgents | grep -i engram` 空；`launchctl list | grep -i engram` 空；`~/.engram/` 只剩 owner 原有的 `data/`、`personal-pilot/`（无 watch.key / watch.lock / watch_state.json / logs）。
+  - 独立复核（Fable，2026-09-04，本机端到端）：本地 server（`ENGRAM_OPEN=1 ENGRAM_LLM=deepseek`，端口 8479，数据在 /tmp）+ `watch --once --limit 2` → 13.1s 喂入 2 个会话、2 episode、**11 条结论、0 条非结论 fact**（`/v1/memories?kind=attributes` 为 0，`/v1/import` 返回 `facts_deferred=1, deferred_reason=outcomes_only`，close 时 `pending_consolidated=0`）；`stats.feed` / `agent_status.feed` 正确；真实中文数据上 audit 命中 `embedder_blind`（HashingEmbedder，12/13=92%）。
+  - 复核发现并修复一处卸载竞态：`--install` 后 RunAtLoad 的 tick 仍在跑时立刻 `--uninstall`，`launchctl bootout` 异步返回，`uninstall_launchd` 忽略其返回值就报「已卸载」，此时 `launchctl list` 仍显示该 job 的 PID、`launchctl print` exit 0（几秒后才自行消失）。修法：`uninstall_launchd` 在 bootout 后有界轮询 `launchctl print` 直到失败（`wait_s`=10s，`_sleep` 可注入），结果带 `unloaded`；CLI 在仍加载时打印提示并 exit 1。测试 Recorder 改为按 bootstrap/bootout 建模 print 的成败，新增 `test_uninstall_launchd_waits_for_an_in_flight_tick`。修后本机实测：安装→立刻卸载→`launchctl print` exit 113、`launchctl list | grep -i engram` 空。用 `--python` 指向 /tmp 下设置 PYTHONPATH 的包装脚本通过前置检查，未改动 owner 的 pip editable 安装；测试 job 已全部卸载。
+- **验收**: `pytest tests/` 553 passed / 1 skipped（所有 API key 与 ENGRAM_* 环境清空）；`examples/quickstart.py` exit 0；`grep -rn --include='*.py' … eval/` 对 `agent_session|embedder_blind|facts_deferred|deferred_reason|_embedder_blindness|watch_install|\bfeed\b|close_session` 零命中；ruff 仅剩 1 条基线已有的 `default_budget` 未用告警（不在本次 diff 内）。
+- **给 owner 的一句话**: 要让 `engram-watch --install` 在这台机器上过前置检查，先 `/Library/Frameworks/Python.framework/Versions/3.12/bin/python3 -m pip install -e <本分支检出>`（或合入 main 后重新 `pip install -e`），否则 launchd 每个 tick 都会 ModuleNotFoundError。
+- **二期清单**:
+  1. summarizer 对 30 万字级转录走 `_windowed`（今天先付一次失败调用再退回 400 字摘录）。
+  2. `_session_label` 8 位 uuid 碰撞（已知一对），拓宽到 12 位需要两阶段改名。
+  3. 服务端持久化的 per-user feed 日志（今天 `stats.feed` 是从 episode 派生的，无历史）。
+  4. Settings 卡片的 embedder 告警行（后端 `agent_status.recommended_next_actions` 已有文案，前端未展示）。
+  5. 有 LLM 后对已按 outcomes-only 导入的会话补跑逐轮抽取 / "重新 close 所有 0 结论会话" 的回灌工具。
+  6. `--status` 的 ETA 按 `--limit`×interval 粗算（本机 1909 会话 / 25 每 tick / 30 min ≈ 38 小时）；首次回灌想快就临时 `--every 5m --limit 100`。
+
+---
+
+- **Agent**: Claude Code（Fable，独立审查子代理）· **日期**: 2026-09-04（对上一条后端+前端交付的回归/不变量审查）
+- **审了什么（全部本机实跑，非自评）**: `pytest tests/`（清空所有 API key 与 `ENGRAM_*`）555 passed / 1 skipped（基线 528+1，新增 27，含本次审查加的 1 条）；`examples/quickstart.py` 无 key exit 0 且仍打印 `facts_added: 6`；`cd frontend && npm run build` 与 `npx tsc -b --noEmit` 均 exit 0，`git diff --name-only -- frontend/` 恰为 4 个文件；`grep -rn --include='*.py' --include='*.md' "agent_session|embedder_blind|facts_deferred|outcomes_only|close_session|import_messages" eval/` 零命中（`eval/bench.py` 走 `Memory.add`/`engine.consolidate`，不经 `import_messages`/`audit`/`stats`，门与体检对 harness 不可达）；本轮 diff 与新文件里无真实姓名/密钥/IP（仅 `pyproject` 原有 GitHub 主页 URL）；ruff 仅剩 2 条基线已有告警（`memory.py default_budget`、`test_service_paths.py orphan`），HEAD 版本同样命中。
+- **红绿验证**: (a) 把 `memory.py` 的门改回 `want_facts = True` → `test_agent_session_import_without_llm_defers_per_turn_extraction`、`..._reports_no_llm`、`test_server.py::..._outcomes_only_and_feed_stats` 三条转红；还原后绿。(b) 把 `watch.py` 的 `since` 改回 `state.get('last_run')` → `test_watcher_does_not_strand_sessions_older_than_last_run` 转红；还原后绿。
+- **本机 launchd 实装（用临时 venv 解释器，`.pth` 指向本检出，不动 owner 的 Framework python）**: `--install --label com.engram.watch.test --interval 1h --url http://127.0.0.1:9 --key test --python <venv>` → `plutil -lint: OK`、`launchctl print gui/501/com.engram.watch.test` exit 0、`~/.engram/watch.key` `-rw-------`、plist 中无密钥字面量；`--status` 打印 `loaded / last run: never / backlog 1908`；`--uninstall --purge` 删除 plist/key/lock/log；随后 `launchctl print` exit 113、`launchctl list | grep -i engram` 空、`ls ~/Library/LaunchAgents | grep -i engram` 空、`watch.key/watch.lock/watch_state.json` 均不存在。临时 venv 已删除。**没有任何定时任务遗留。**
+- **修了什么（小而明确）**: ① `--install --scheduler cron` 原来只打印引用 `~/.engram/watch.key` 的 cron 行却从不写 key 文件（第一个 tick 必 `cannot read --key-file`）：现在非 dry-run 时写 0600 key 文件，无 key 且无文件则拒绝 exit 1；新增 `tests/test_watch_install.py::test_cli_install_cron_writes_key_file_and_never_edits_crontab`；两份文档的"cron 只打印行"改为"并写 key 文件"。② 正向体检测试改名为 `test_audit_embedder_blind_fires_on_hashing_non_ascii_store`，使验收里的 `pytest -k embedder_blind` 真的选中它（原名不含该词，`-k` 只跑到两条否定测试）；架构优化地图里的引用同步改名。
+- **未修的观察（二期）**: uninstall 时若 RunAtLoad 的 tick 正在跑，`launchctl bootout` 返回后服务仍会短暂在 `launchctl print`/`list` 中出现（本机实测约 10 s 内消失）——紧跟其后的"exit 非零"验收有竞态；可在 `uninstall_launchd` 里轮询 `launchctl print` 直到消失。`--purge` 只删文件不删空的 `~/.engram/logs/` 目录。
+
+- **Agent**: Claude Code · **日期**: 2026-09-04 · **P0 收尾**
+- **做了什么**: 合并三视角验证的修复后自己复跑三道门；另修 `embedder_blind` 判定（分母只算字母、门槛改字符质量 200 字，代码/JSON 不再误报，两段长中文会话会报）与 `--purge` 残留空目录。全量 **557 passed / 1 skipped**；quickstart 零 key 退出 0；`launchctl list | grep engram` 空。
+- **当前状态**: P0 两件已交付并提交。**未安装任何定时任务**。
+- **下一步前提**: `engram-watch --install` 在本机会被干净环境预检拒绝，因为 editable install 指向 main 检出而 main 尚无 `connectors/watch`。合入 main 后命令即可用。

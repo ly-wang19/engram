@@ -27,6 +27,10 @@ from .util import fmt_date, fmt_datetime
 
 DEFAULT_DATA_DIR = os.path.expanduser("~/.engram/data")
 
+# _BASIC normalized fields that legitimately hold several values at once. The audit's slot_overflow
+# pre-pass ("a single-valued slot cannot hold N values") is only true of the others.
+_MULTI_VALUED_FIELDS = {"children", "language", "education"}
+
 # Frame the assembled memory for the answerer used by /v1/recall (the console's 问答 view).
 _ANSWER_SYSTEM = (
     "你是用户的记忆助手。只依据下面提供的【记忆】回答用户的问题,简洁、准确、口语化。"
@@ -133,6 +137,16 @@ class MemoryService:
         # default so the offline/zero-setup path stays deterministic (pure-rules conflict handling).
         if os.environ.get("ENGRAM_CONFLICT_DETECTION") == "1" and self.llm is not None:
             self.config.conflict_detection = True
+        # Operator kill switch. Session outcomes are the only default that spends an LLM call per session
+        # close, and a deployed server cannot control what its clients pass in the request body — so the
+        # cost ceiling has to be settable server-side, not per-request. Which means it cannot be only a
+        # DEFAULT: /v1/sessions/close takes an `outcomes` field, and this repo's own watcher
+        # (connectors/watch.py) posts `outcomes: True` on every session it imports, so a switch that only
+        # moved the default would leave the operator's cost ceiling off for the one caller that runs
+        # unattended. Keep the flag and enforce it in close_session as an override.
+        self._outcomes_forced_off = os.environ.get("ENGRAM_SESSION_OUTCOMES") == "0"
+        if self._outcomes_forced_off:
+            self.config.session_outcomes = False
         self._hot: "OrderedDict[str, Memory]" = OrderedDict()
         self._hot_versions: dict[str, tuple[int, int] | None] = {}
         self._locks: dict[str, threading.Lock] = {}
@@ -412,11 +426,13 @@ class MemoryService:
 
     @timed("import")
     def import_(self, user: str, sessions: Optional[list] = None, format: str = "auto",
-                data: Any = None, consolidate: bool = True, summarize: bool = True,
+                data: Any = None, consolidate: Optional[bool] = None, summarize: bool = True,
                 session_id: str = "imported", dedupe: bool = True) -> dict:
         """Bulk import: either pre-parsed `sessions` (list of ImportSession/dicts) OR raw `data` to parse
         with `format` (chatgpt/messages/records/jsonl/transcript/auto). One batched ingest + consolidation.
-        Idempotent by default: re-posting the same export skips already-ingested episodes (`skipped`)."""
+        Idempotent by default: re-posting the same export skips already-ingested episodes (`skipped`).
+        `consolidate=None` resolves inside Memory.import_messages: per-turn extraction for every source
+        except agent-session transcripts, which are stored for close-time distillation instead."""
         with self.write_lock(user):
             mem = self.get(user)
             if sessions is None:
@@ -516,6 +532,48 @@ class MemoryService:
             ok = mem.delete_fact(fact_id)
             self._save(user, mem)
             return {"ok": ok}
+
+    def clear_slot(self, user: str, subject: str, predicate: str, expect_count: int) -> dict:
+        """Hard-delete every fact on one (subject, predicate) slot.
+
+        The audit's slot_overflow finding tells the owner to clear the slot; without this the console is
+        a diagnosis with no cure — on a real store that meant 84 rows behind 84 separate confirm dialogs.
+        Erasure rather than invalidation is right here: a slot that holds 84 values never held a claim
+        that was true and later stopped being true, so there is no history worth preserving. That is the
+        same right-to-forget path `delete_fact` already models.
+
+        `expect_count` is a required optimistic-concurrency guard, not an option. The owner approves
+        deleting the N rows the audit showed them; if the store moved in between (a watcher run, another
+        session), refusing is the only safe answer — silently erasing more than was approved is exactly
+        the corruption CLAUDE.md §8 forbids. Making it optional would leave the unguarded call as the
+        API's default shape, which is the one shape this operation must not have.
+        """
+        with self.write_lock(user):
+            mem = self.get(user)
+            canonical = mem.resolver.resolve(user)
+            pred = predicate.strip().lower()
+            # The doomed set must be EXACTLY the set audit() grouped, or the count guard compares two
+            # different populations and passes while erasing the wrong rows:
+            #   * resolve BOTH sides of the identity check. Facts written before an identity link carry
+            #     the raw handle and facts written after carry the canonical one; comparing a stored
+            #     `user_id` against one spelling silently targets the other half of the same person.
+            #   * live facts only. audit() groups live facts, so `expect_count` is a live count; matching
+            #     superseded rows here would both break the guard permanently on any slot that has a
+            #     supersedes chain and, when the guard is omitted, hard-delete bi-temporal history the
+            #     owner was never shown (CLAUDE.md §3.1: invalidate, never erase, a superseded fact).
+            #   * skip source="user". A fact the owner typed is not extraction junk, and audit() leaves
+            #     it out of the group for the same reason.
+            doomed = [f for f in _all_facts(mem)
+                      if f.is_live() and f.source != "user"
+                      and mem.resolver.resolve(f.user_id) == canonical
+                      and f.subject == subject and f.predicate.strip().lower() == pred]
+            if len(doomed) != expect_count:
+                return {"ok": False, "deleted": 0, "found": len(doomed),
+                        "expected": expect_count, "reason": "slot changed since it was audited"}
+            for f in doomed:
+                mem.delete_fact(f.id)
+            self._save(user, mem)
+            return {"ok": True, "deleted": len(doomed), "subject": subject, "predicate": predicate}
 
     def set_focus(self, user: str, track: Optional[list[str]] = None,
                   mute: Optional[list[str]] = None) -> dict:
@@ -702,10 +760,25 @@ class MemoryService:
             # yields biographical triples, which a working session simply does not contain.
             outcome_facts = 0
             want = self.config.session_outcomes if outcomes is None else outcomes
+            if self._outcomes_forced_off:
+                want = False  # ENGRAM_SESSION_OUTCOMES=0 is the operator's ceiling; no request body lifts it
             if want and self.llm is not None and episodes:
-                from .consolidate.outcomes import extract_outcomes
+                from .consolidate.outcomes import (
+                    OUTCOME_PREDICATES, extract_outcomes, split_outcome_text,
+                )
 
+                # Closing the same session twice must not double the conclusions. extract_outcomes only
+                # dedupes within one call, and re-closing is the normal case: connectors/watch.py
+                # re-sends any transcript that grew and closes it again. Same 120-char key it uses.
+                seen_keys = {
+                    split_outcome_text(f.text)[0].lower()[:120]
+                    for f in _all_facts(mem)
+                    if f.is_live() and f.user_id == canonical
+                    and f.predicate.lower() in OUTCOME_PREDICATES and f.subject == session_id
+                }
                 for fact in extract_outcomes(self.llm, episodes, canonical, session_id=session_id):
+                    if split_outcome_text(fact.text)[0].lower()[:120] in seen_keys:
+                        continue
                     fact.embedding = mem.embedder.embed(fact.text)
                     mem.fact_store.upsert(fact.id, fact.embedding, fact)
                     mem.engine.graph_builder.add_fact(fact)
@@ -769,6 +842,12 @@ class MemoryService:
         ]
         if (stats.get("counts") or {}).get("pending_conflicts", 0):
             next_actions.append("Review pending conflicts before relying on disputed memories.")
+        blind = self._embedder_blindness(mem, canonical)
+        if blind:
+            next_actions.append(
+                f"{round(blind['ratio'] * 100)}% of this namespace's memories cannot be ranked by the "
+                f"configured embedder ({blind['embedder']}); recall will return the same items for "
+                f"unrelated queries. Ask the operator to run: {blind['migrate']}")
         return {
             "ok": True,
             "user": user,
@@ -783,6 +862,7 @@ class MemoryService:
             },
             "counts": stats.get("counts", {}),
             "consolidation_backlog": stats.get("consolidation_backlog", False),
+            "feed": stats.get("feed"),
             "storage": stats.get("storage"),
             "embedder": stats.get("embedder"),
             "llm_configured": stats.get("llm_configured"),
@@ -991,6 +1071,7 @@ class MemoryService:
         episodes_limit: Optional[int] = None,
         episodes_offset: int = 0,
         status: Optional[str] = None,
+        kind: Optional[str] = None,
         q: str = "",
         include_sensitive: bool = False,
     ) -> dict:
@@ -999,7 +1080,12 @@ class MemoryService:
         Default is share-safe: non-sensitive facts plus content-free counts, with profile/raw episodes
         omitted. With `include_sensitive=True`, this is the owner-visible inspection payload: profile,
         raw episodes + L2 summaries, and sensitive facts.
+
+        `kind` splits the fact set into the two things a reader actually browses separately: 'outcomes'
+        (what sessions concluded) vs 'attributes' (everything else). Unknown values are ignored rather
+        than rejected, like `status`.
         """
+        from .consolidate.outcomes import OUTCOME_PREDICATES, split_outcome_text
         from .localize import display_of  # localized rendering for Chinese-recorded facts
 
         mem = self.get(user)
@@ -1018,6 +1104,11 @@ class MemoryService:
                 "source": f.source, "supersedes": f.supersedes,
                 "category": getattr(f, "category", ""), "sensitive": getattr(f, "sensitive", False),
                 "salience": round(f.salience, 2), "provenance": f.provenance,
+                # An outcome's `text` is "statement （依据：why）" — one embedded string, because that is
+                # what recall matches. A reader wants the two apart, so split once here instead of
+                # asking every surface to re-parse the separator. Always present, "" for attributes.
+                "why": split_outcome_text(f.text)[1]
+                       if f.predicate.lower() in OUTCOME_PREDICATES else "",
             }
 
         def episode_view(ep) -> dict:
@@ -1041,6 +1132,12 @@ class MemoryService:
             filtered_facts = [f for f in filtered_facts if f.is_live()]
         elif status in {"superseded", "old", "history"}:
             filtered_facts = [f for f in filtered_facts if not f.is_live()]
+        # Facts only: episodes have no predicate, so `kind` never touches filtered_episodes.
+        kind_key = (kind or "").strip().lower()
+        if kind_key == "outcomes":
+            filtered_facts = [f for f in filtered_facts if f.predicate.lower() in OUTCOME_PREDICATES]
+        elif kind_key == "attributes":
+            filtered_facts = [f for f in filtered_facts if f.predicate.lower() not in OUTCOME_PREDICATES]
         if not include_sensitive:
             filtered_facts = [f for f in filtered_facts if not getattr(f, "sensitive", False)]
         if needle:
@@ -1075,6 +1172,10 @@ class MemoryService:
             "counts": {"episodes": len(episodes_all),
                        "facts_live": sum(1 for f in all_facts if f.is_live()),
                        "facts_superseded": sum(1 for f in all_facts if not f.is_live()),
+                       # Over the UNFILTERED set, like facts_live/facts_superseded: a count that shrank
+                       # with the current filter could not tell a caller whether outcomes exist at all.
+                       "facts_outcomes": sum(1 for f in all_facts
+                                             if f.is_live() and f.predicate.lower() in OUTCOME_PREDICATES),
                        "summaries": len(mem.summary_vec.values())},
             "facts": facts_payload,
             "episodes": episodes_payload,
@@ -1084,6 +1185,92 @@ class MemoryService:
                 "facts": facts_page["next_offset"],
                 "episodes": episodes_page["next_offset"],
             },
+        }
+
+    def _embedder_blindness(self, mem: Memory, canonical: str) -> Optional[dict]:
+        """One store-level finding when the configured embedder cannot rank what this namespace holds.
+
+        Measured on the owner's real store: HashingEmbedder scored 0.000 for every Chinese query/fact
+        pair and /v1/recall returned the identical four facts for three unrelated queries
+        (results/embedder_zh_2026-09-01.md). Nothing in the product said why. The cause is structural —
+        the hashing stemmer only emits [a-z0-9] tokens, so a CJK-dominated text hashes to (almost)
+        nothing and BM25 sees the same empty token stream — which makes it detectable without a model
+        call: count how much of the corpus is non-ASCII. Shared by audit() and agent_status() so the
+        console and the agent see the same verdict.
+        """
+        from .embed import HashingEmbedder
+
+        embedder = self.embedder
+        if isinstance(embedder, HashingEmbedder):
+            exact = True  # the blindness is a property of the tokenizer, not a heuristic
+        elif (embedder.__class__.__name__ == "SentenceTransformerEmbedder"
+              and "-en-" in str(getattr(embedder, "model_name", "") or "")):
+            exact = False  # an English-only model degrades on CJK rather than zeroing out
+        else:
+            return None
+
+        def split(text: str) -> tuple[int, int]:
+            """(rankable, dark) character counts. Rankable = ASCII alphanumerics, the only thing the
+            hashing stemmer's [a-z0-9]+ tokenizer keeps; dark = letters in any other script, which it
+            drops on the floor. Punctuation and whitespace are neither: a JSON blob or a shell line is
+            100% rankable even though most of its characters are braces and pipes — the first version
+            counted those against the text and called a store of code facts "33% unrankable"."""
+            rankable = dark = 0
+            for c in text:
+                if c.isascii():
+                    if c.isalnum():
+                        rankable += 1
+                elif c.isalpha():
+                    dark += 1
+            return rankable, dark
+
+        def blind(text: str) -> bool:
+            rankable, dark = split(text)
+            return (rankable + dark) > 0 and dark / (rankable + dark) >= 0.5
+
+        facts = [f for f in _all_facts(mem)
+                 if mem.resolver.resolve(f.user_id) == canonical and f.is_live()]
+        episodes = sorted((ep for ep in mem.episodes_doc.values() if ep.user_id == canonical),
+                          key=lambda ep: ep.ingested_at, reverse=True)[:2000]
+        facts_blind = sum(1 for f in facts if blind(f.text or ""))
+        episodes_blind = sum(1 for ep in episodes if blind(ep.content or ""))
+        checked = len(facts) + len(episodes)
+        total_blind = facts_blind + episodes_blind
+        # Gate on letter mass, not item count: a namespace holding two 120k-char Chinese transcripts is
+        # entirely unrankable and must not stay silent for being "only 2 memories". 200 letters is a
+        # paragraph — enough that a three-line store says nothing, little enough that a dozen one-line
+        # notes do. (A dozen English facts with one CJK name stays far under the 20% share either way.)
+        rankable_chars = dark_chars = 0
+        for text in [f.text or "" for f in facts] + [ep.content or "" for ep in episodes]:
+            r, d = split(text)
+            rankable_chars += r
+            dark_chars += d
+        if rankable_chars + dark_chars < 200:
+            return None
+        ratio = total_blind / checked if checked else 0.0
+        mass_ratio = dark_chars / (rankable_chars + dark_chars)
+        if ratio < 0.20 and mass_ratio < 0.20:
+            return None
+        ratio = max(ratio, mass_ratio)
+        name = embedder.__class__.__name__
+        pct = round(ratio * 100)
+        migrate = "ENGRAM_EMBEDDER=multilingual ENGRAM_REEMBED_ON_MISMATCH=1"
+        return {
+            "kind": "embedder_blind",
+            "text": f"{name} cannot rank {pct}% of {checked} memories",
+            "why": (f"{pct}% of what this namespace holds is written in a script {name} cannot "
+                    f"tokenize — it only indexes [a-z0-9] tokens, so those memories are invisible to both "
+                    f"the semantic and lexical channels and recall returns the same items for unrelated "
+                    f"queries"),
+            "action": (f"switch the server embedder and re-embed: {migrate} "
+                       f"(or bge-small-zh, 92MB, if memory is tight)"),
+            "embedder": name,
+            "model": getattr(embedder, "model_name", None),
+            "blind": total_blind, "checked": checked, "ratio": ratio,
+            "dark_chars": dark_chars, "rankable_chars": rankable_chars,
+            "facts_blind": facts_blind, "episodes_blind": episodes_blind,
+            "exact": exact, "recommended": "multilingual", "alternative": "bge-small-zh",
+            "migrate": migrate,
         }
 
     def audit(self, user: str, limit: int = 40) -> dict:
@@ -1097,8 +1284,15 @@ class MemoryService:
         """
         import re
 
+        from .consolidate.outcomes import OUTCOME_PREDICATES
+        from .consolidate.structured import _BASIC
+
         mem = self.get(user)
-        facts = [f for f in _all_facts(mem) if f.user_id == user and f.is_live()]
+        # Resolve both sides: an owner whose handles were linked has facts stamped with either spelling,
+        # and clear_slot() acts on exactly this set — the two must never disagree about who owns a fact.
+        canonical = mem.resolver.resolve(user)
+        facts = [f for f in _all_facts(mem)
+                 if mem.resolver.resolve(f.user_id) == canonical and f.is_live()]
         graph = mem.graph_data(user, include_sensitive=True)
         referenced = {e["source"] for e in graph.get("edges", [])} | {e["target"] for e in graph.get("edges", [])}
 
@@ -1115,7 +1309,57 @@ class MemoryService:
                 row["entity"] = entity
             findings.append(row)
 
+        # Pre-pass: what is wrong with a store holding 84 live `occupation` facts is not any one row —
+        # every row passes the per-fact rules — it is that a single-valued identity slot holds 84 values.
+        # Only _BASIC predicates qualify: `likes` with 20 values is a correct list, `occupation` with 3
+        # cannot be. Reported once per slot, and its facts skip the per-fact loop so one broken slot does
+        # not bury every other finding under 84 duplicate rows.
+        by_slot: dict[tuple[str, str], list] = {}
         for f in facts:
+            # A fact the owner typed is by definition not extraction output, so it cannot be the junk
+            # this rule names — and it is the most costly thing in the slot to lose to a bulk delete.
+            # clear_slot() applies the same exclusion: the two must describe the same population or the
+            # count guard compares one set while the delete runs on another.
+            if f.source == "user":
+                continue
+            by_slot.setdefault((f.subject, f.predicate), []).append(f)
+        overflowed: set[str] = set()
+        for (subject, predicate), group in by_slot.items():
+            if len(group) < 3 or predicate.lower() not in _BASIC:
+                continue
+            field, label = _BASIC[predicate.lower()]
+            # ...and only the SINGLE-valued ones. _BASIC also normalizes children / speaks /
+            # graduated_from, where three values is a person with three kids, three languages, three
+            # degrees — not extraction junk. Telling the owner "单值属性不可能有 3 个值" about those is
+            # false, and the finding carries a one-click irreversible delete.
+            if field in _MULTI_VALUED_FIELDS:
+                continue
+            findings.append({
+                "kind": "slot_overflow",
+                # Prose in the same language as every other rule's; the console composes its own
+                # localized sentence from count/predicate/label instead of rendering this one, because
+                # a one-click irreversible delete must be explained in the reader's language.
+                "why": f"{len(group)} facts all claim {label} ({predicate}) — a single-valued slot "
+                       f"cannot have {len(group)} values; these are extraction fragments, not memories",
+                "action": "look at the samples, then clear the slot",
+                "subject": subject, "predicate": predicate, "label": label, "count": len(group),
+                "samples": [{"fact_id": g.id, "text": g.text} for g in group[:5]],
+            })
+            overflowed.update(g.id for g in group)
+
+        # Store-level, not per-fact: when the embedder cannot rank the corpus, every per-fact finding
+        # is beside the point — the owner asked "why does recall return the same four facts" and the
+        # answer is the embedder, reported once with the migration command attached.
+        row = self._embedder_blindness(mem, canonical)
+        if row:
+            findings.append(row)
+
+        for f in facts:
+            # Outcome statements are 400-char sentences that routinely name a config path, so
+            # unreduced_claim and code_artifact would flag most session conclusions as junk. They are
+            # written whole by design; the per-fact rules exist to catch triples the extractor botched.
+            if f.predicate.lower() in OUTCOME_PREDICATES or f.id in overflowed:
+                continue
             obj, pred = f.object.strip(), f.predicate.strip()
             # A snake_case object is source text that was never turned into a value: "user interested in
             # kind_bar_fruit_nut_flavor" reads as machine output and matches no natural phrasing at recall.
@@ -1196,6 +1440,22 @@ class MemoryService:
             eid for r in user_relations for eid in (r.subject_id, r.object_id)
         }
         stale_relations = [r for r in user_relations if r.fact_id not in facts_by_id]
+        # Feed: is this memory being fed from the machine's agent sessions at all? Measured before this
+        # existed: across 1909 of the owner's own sessions, remember/recall/close_session were called
+        # zero times — an empty memory looks exactly like a healthy one unless something says when it
+        # was last fed. Derived from episode metadata; nothing persisted.
+        from .consolidate.outcomes import OUTCOME_PREDICATES
+
+        fed = [ep for ep in episodes if ep.metadata.get("source") == "agent_session"]
+        fed_sessions = {ep.session_id for ep in fed}
+        last_fed_at = max((ep.ingested_at for ep in fed), default=None)
+        feed = {
+            "last_fed_at": last_fed_at,
+            "last_fed_at_h": fmt_datetime(last_fed_at) if last_fed_at is not None else None,
+            "sessions": len(fed_sessions),
+            "conclusions": sum(1 for f in live_facts
+                               if f.predicate.lower() in OUTCOME_PREDICATES and f.subject in fed_sessions),
+        }
         return {
             "user": user,
             "counts": {
@@ -1234,6 +1494,7 @@ class MemoryService:
             "llm_configured": self.llm is not None,
             "answerer_configured": self.answerer is not None,
             "consolidation_backlog": bool(pending_episodes),
+            "feed": feed,
         }
 
     def export(self, user: str, include_sensitive: bool = False) -> dict:

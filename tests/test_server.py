@@ -857,3 +857,47 @@ def test_audit_finding_can_be_fixed_in_place(client):
     after = client.get("/v1/audit", headers=h).json()
     assert not any(f.get("fact_id") == fact_id for f in after["findings"])
     assert after["total_findings"] < before["total_findings"]
+
+
+def test_import_agent_sessions_defaults_to_outcomes_only_and_feed_stats(client):
+    """The watcher posts agent sessions with `metadata.source` and no `consolidate` key: the server must
+    store them for close-time distillation, never per-turn extract them (RuleExtractor turned 12 real
+    turns into 11 junk facts), and the stats must say when the memory was last fed."""
+    h = hdr("feed-ns")
+    transcript = [{"role": "user", "content": "The config file is nearly empty. This is now clear: EKOS "
+                                              "is deployed on an Ubuntu server."},
+                  {"role": "assistant", "content": "This confirms the deployment; next is nginx."}]
+    body = {"sessions": [
+        {"session_id": "claude-code:a", "event_time": 1_756_000_000.0,
+         "metadata": {"source": "agent_session"}, "messages": transcript},
+        {"session_id": "codex:b", "event_time": 1_756_000_100.0,
+         "metadata": {"source": "agent_session"}, "messages": transcript},
+        {"session_id": "plain", "messages": [{"role": "user", "content": "I live in Shenzhen and work "
+                                                                         "at Moonshot AI."}]},
+    ]}
+    r = client.post("/v1/import", json=body, headers=h)
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert data["episodes"] == 3
+    assert data["facts_deferred"] == 2 and data["deferred_reason"] == "outcomes_only", data
+    assert data["facts_added"] >= 1  # the plain session still went through the rule extractor
+
+    closed = client.post("/v1/sessions/close", json={"session_id": "claude-code:a"}, headers=h).json()
+    assert closed["pending_consolidated"] == 0 and closed["facts_added"] == 0, closed
+
+    feed = client.get("/v1/stats", headers=h).json()["feed"]
+    assert feed["sessions"] == 2 and feed["conclusions"] == 0
+    assert feed["last_fed_at"] is not None and feed["last_fed_at_h"], feed
+
+    status = client.get("/v1/agent/status", headers=h).json()
+    assert status["feed"]["last_fed_at"] is not None and status["feed"]["sessions"] == 2
+
+    # asking for facts with no LLM attached: the reason is named, nothing is extracted
+    r = client.post("/v1/import", json={"consolidate": True, "sessions": [
+        {"session_id": "codex:c", "metadata": {"source": "agent_session"}, "messages": transcript}]},
+        headers=h).json()
+    assert r["facts_deferred"] == 1 and r["deferred_reason"] == "no_llm", r
+
+    # a namespace nobody feeds says so
+    empty = client.get("/v1/stats", headers=hdr("never-fed")).json()["feed"]
+    assert empty == {"last_fed_at": None, "last_fed_at_h": None, "sessions": 0, "conclusions": 0}

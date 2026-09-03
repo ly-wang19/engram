@@ -1,9 +1,10 @@
 import { useState } from 'react'
-import { AlertTriangle, Check, Pencil, RefreshCw, ShieldCheck, Trash2 } from 'lucide-react'
+import { AlertTriangle, Check, Eraser, Pencil, RefreshCw, ShieldCheck, Trash2 } from 'lucide-react'
 
 import { Badge, Button, Card, CardTitle, EmptyState, ErrorState, PageHeader, Spinner } from '../components/ui'
+import { ConfirmDialog } from '../components/Modal'
 import { toast } from '../components/Toast'
-import { useAudit, useDeleteFact, useEditFact } from '../hooks/queries'
+import { useAudit, useClearSlot, useDeleteFact, useEditFact } from '../hooks/queries'
 import { useT } from '../i18n'
 import type { AuditFinding } from '../types'
 
@@ -19,6 +20,8 @@ export default function Health() {
   const { data, isLoading, isError, error, refetch, isFetching } = useAudit(60)
   const update = useEditFact()
   const del = useDeleteFact()
+  const clearSlot = useClearSlot()
+  const [confirmSlot, setConfirmSlot] = useState<AuditFinding | null>(null)
   const [editing, setEditing] = useState<string | null>(null)
   const [draft, setDraft] = useState('')
   const [done, setDone] = useState<Set<string>>(new Set())
@@ -65,6 +68,7 @@ export default function Health() {
     empty_value: 'violet',
     unreduced_claim: 'cyan',
     orphan_entity: undefined,
+    slot_overflow: 'user',     // a whole single-value slot drowning in extraction fragments
   }
 
   return (
@@ -132,11 +136,32 @@ export default function Health() {
                           </span>
                         )}
                       </div>
-                      <p className="mt-1 break-words text-sm text-slate-100">{f.text ?? f.entity}</p>
+                      {(f.text ?? f.entity) && (
+                        <p className="mt-1 break-words text-sm text-slate-100">{f.text ?? f.entity}</p>
+                      )}
                       {/* why it was flagged, then what to do — a finding you can't act on is noise */}
+                      {/* The backend writes why/action in one language for every rule. Fine for a
+                          hint, but slot_overflow carries a one-click irreversible delete, so its
+                          sentence is composed here from the structured fields instead. */}
                       <p className="mt-1 text-xs leading-relaxed text-ghost">
-                        {f.why} → <span className="text-slate-300">{f.action}</span>
+                        {f.kind === 'slot_overflow' && f.count
+                          ? t.health.slotOverflowWhy(f.count, f.label || '', f.predicate || '')
+                          : f.why}{' '}
+                        → <span className="text-slate-300">
+                          {f.kind === 'slot_overflow' ? t.health.slotOverflowAction : f.action}
+                        </span>
                       </p>
+                      {/* group findings (slot_overflow) carry no fact_id — samples are what makes
+                          "N facts in one slot" concrete enough to act on */}
+                      {!!f.samples?.length && (
+                        <ul className="mt-1.5 space-y-0.5">
+                          {f.samples.slice(0, 5).map((s) => (
+                            <li key={s.fact_id} className="break-words text-[11px] leading-relaxed text-ghost/80">
+                              {s.text}
+                            </li>
+                          ))}
+                        </ul>
+                      )}
                       {editing === f.fact_id && (
                         <div className="mt-2 flex flex-wrap items-center gap-2">
                           <input
@@ -158,6 +183,19 @@ export default function Health() {
                         </div>
                       )}
                     </div>
+                    {/* A group finding has no fact_id, so the per-row buttons above skip it — and its
+                        own action text ("clear this slot") had nothing behind it. 84 rows behind 84
+                        confirm dialogs is not a path a person walks. */}
+                    {!f.fact_id && f.kind === 'slot_overflow' && !!f.count && (
+                      <Button
+                        variant="ghost"
+                        className="shrink-0 text-brand-rose"
+                        onClick={() => setConfirmSlot(f)}
+                      >
+                        <Eraser className="mr-1.5 h-4 w-4" />
+                        {t.health.clearSlot(f.count)}
+                      </Button>
+                    )}
                     {f.fact_id && !isDone && editing !== f.fact_id && (
                       <div className="flex shrink-0 items-center gap-1">
                         <Button
@@ -183,6 +221,45 @@ export default function Health() {
           {data.truncated && <p className="mt-4 text-xs text-ghost">{t.health.truncated}</p>}
         </Card>
       )}
+
+      <ConfirmDialog
+        open={!!confirmSlot}
+        title={t.health.clearSlotTitle}
+        danger
+        confirmLabel={t.common.delete}
+        loading={clearSlot.isPending}
+        body={
+          <div className="space-y-3">
+            <p>{confirmSlot && t.health.clearSlotBody(confirmSlot.count ?? 0, confirmSlot.predicate ?? '')}</p>
+            {!!confirmSlot?.samples?.length && (
+              <ul className="space-y-1 rounded-lg border border-brand-rose/25 bg-brand-rose/10 px-3 py-2">
+                {confirmSlot.samples.slice(0, 5).map((sample) => (
+                  <li key={sample.fact_id} className="break-words text-xs text-brand-rose">
+                    {sample.text}
+                  </li>
+                ))}
+              </ul>
+            )}
+            <p className="text-xs text-ghost">{t.health.clearSlotIrreversible}</p>
+          </div>
+        }
+        onClose={() => setConfirmSlot(null)}
+        onConfirm={() => {
+          if (!confirmSlot?.subject || !confirmSlot.predicate || !confirmSlot.count) return
+          clearSlot.mutate(
+            { subject: confirmSlot.subject, predicate: confirmSlot.predicate, count: confirmSlot.count },
+            {
+              onSuccess: (res) => {
+                // The server refuses instead of erasing more than the owner approved; say which it was.
+                if (res.ok) toast.success(t.health.clearSlotDone(res.deleted))
+                else toast.error(t.health.clearSlotStale)
+                setConfirmSlot(null)
+              },
+              onError: (e) => toast.error((e as Error).message),
+            },
+          )
+        }}
+      />
     </div>
   )
 }

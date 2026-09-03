@@ -6,6 +6,7 @@ import { useAuth } from './store/auth'
 import { getT, useLang } from './i18n'
 import Login from './pages/Login'
 import Dashboard from './pages/Dashboard'
+import Journal from './pages/Journal'
 import Profile from './pages/Profile'
 import Ask from './pages/Ask'
 import Facts from './pages/Facts'
@@ -40,6 +41,7 @@ export default function App() {
     <Routes>
       <Route element={<Layout />}>
         <Route index element={<Dashboard />} />
+        <Route path="journal" element={<Journal />} />
         <Route path="profile" element={<Profile />} />
         <Route path="ask" element={<Ask />} />
         <Route path="facts" element={<Facts />} />

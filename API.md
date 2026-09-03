@@ -110,6 +110,12 @@ curl -f $B/ready
 而是补齐这个 session 的待整理 episode、生成缺失摘要、把知识更新反映到摘要层、清掉该 session 的
 临时 working memory，并保存到磁盘。
 
+配置了 LLM 时，关闭会话还会把这段会话蒸馏成结论事实（`decision` / `finding` / `lesson` /
+`open_question`，谓词即结论类型、主语是 session id），返回体里的 `outcomes` 是本次新增的结论条数；
+重复关闭同一个未变化的 session 不会重复写入。这是**每次关会话花一次 LLM 调用**的默认行为：
+请求体可传 `"outcomes": false` 单次关闭，运维要设成本上限则设 `ENGRAM_SESSION_OUTCOMES=0`
+（服务端强制关闭，请求体的 `outcomes: true` 也无法解除）。没有配置 LLM 时该分支不执行，`outcomes` 恒为 0。
+
 如需审计这一轮到底写入了哪些长期事实：
 `GET /v1/sessions/report?session_id=codex:super-memory:thread-123`
 
@@ -157,18 +163,20 @@ agent session。
 | GET | `/v1/sessions?limit=20&q=codex` | 跨 agent/app 会话索引：session id、时间、episode/fact/working 计数；不含正文 |
 | GET | `/v1/sessions/report?session_id=...` | 审计某个 session 写入了哪些长期事实；默认隐藏敏感事实正文 |
 | GET | `/v1/stats` | 内容无关统计：episode pending/consolidated、hot/cold facts、cold page-in/out、时间范围、敏感事实数量、pending conflicts、运行后端；适合监控 |
-| GET | `/v1/memories` | 默认安全视图：非敏感 facts + 数量；完整私有查看需 `include_sensitive=true` |
+| GET | `/v1/memories` | 默认安全视图：非敏感 facts + 数量；完整私有查看需 `include_sensitive=true`；`kind=outcomes` 只看会话结论、`kind=attributes` 只看属性事实（未知值忽略，与 `status` 同语义） |
 | GET | `/v1/profile/structured` | 结构化用户画像(基本信息/偏好/习惯) |
 | GET | `/v1/graph` | 默认安全关系图：排除敏感 fact 对应的边；完整私有图需 `include_sensitive=true` |
 | GET | `/v1/conflicts` | 待确认的疑似冲突(LLM 检测，需开 `ENGRAM_CONFLICT_DETECTION=1`) |
 | POST | `/v1/conflicts/{id}/resolve` | `{"keep":"newer\|older\|both"}` 让冲突由人确认 |
 | PATCH | `/v1/facts/{id}` | 改事实 `{"object":"...","sensitive":true}` |
 | DELETE | `/v1/facts/{id}` | 删一条 |
+| GET | `/v1/audit?limit=60` | 记忆体检：逐条列出值得修的事实（机器 token、空值、未归约断言、孤立实体等）以及按槽分组的 `slot_overflow`；只读，不改任何数据 |
+| POST | `/v1/facts/clear-slot` | **不可逆**：`{"subject":"user","predicate":"occupation","expect_count":84}` 硬删除该 `(subject, predicate)` 槽上的全部 live 事实。用于处理 `slot_overflow`；`expect_count` **必填**，是乐观并发校验（与体检时的条数不一致则整体拒绝、不删除任何行）——无保护的批量删除是这个端点唯一不该提供的形态，因此没有省略它的写法。已被 supersede 的历史事实、以及 `source="user"`（你亲手写过或就地改过的）事实都不在删除范围内 |
 | GET | `/v1/export?include_sensitive=false` | 安全结构化导出：仅非敏感 facts + graph；不含画像、摘要、原始对话 |
 | POST | `/v1/forget` | 需 `{"confirm":true}`；清空该 key 的全部记忆（不可逆） |
 
 ## 5. 控制台（可视化）
-浏览器开 **`<Base URL>/ui/`** → 输入你的 key → 看「画像 / 事实管理 / 时间线 / 关系图谱 / 记忆问答 / 冲突待确认」。
+浏览器开 **`<Base URL>/ui/`** → 输入你的 key → 看「画像 / 会话结论 / 事实管理 / 时间线 / 关系图谱 / 记忆问答 / 冲突待确认 / 记忆体检」。
 
 ---
 

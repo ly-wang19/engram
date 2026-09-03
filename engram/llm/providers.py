@@ -77,8 +77,10 @@ def make_llm(name: str, **overrides):
 
 
 def make_embedder(name: str = "hashing", **overrides):
-    """hashing (zero-dep offline) | bge-small | bge-m3 | bge-large | st:<model> (sentence-transformers)
-    | openai:<model> (LiteLLM)."""
+    """hashing (zero-dep offline) | bge-small | bge-m3 | bge-large | multilingual | bge-small-zh
+    | st:<model> (sentence-transformers) | openai:<model> (LiteLLM).
+
+    Pick `multilingual` for a memory holding non-English text; the bge-* presets are English-only."""
     n = name.strip()
     # The deterministic, dependency-free fallback — lets the server/MCP run with NO model download
     # (ENGRAM_EMBEDDER=hashing) and keeps tests offline. Not benchmark-grade; lexical overlap only.
@@ -92,6 +94,13 @@ def make_embedder(name: str = "hashing", **overrides):
         "bge-small": "BAAI/bge-small-en-v1.5",
         "bge-large": "BAAI/bge-large-en-v1.5",
         "bge-m3": "BAAI/bge-m3",
+        # The three above are English-only, which is a trap for a memory that stores a person's own
+        # notes: measured on 16 real Chinese memory documents, bge-small-en put the SAME unrelated
+        # document at rank 1 for all three queries (0/3), while multilingual got 3/3 with 2.5x the
+        # score spread. bge-small-zh scored 2/3. The benchmark path still passes --embedder bge-small
+        # explicitly (LongMemEval is English), so these presets do not move any published number.
+        "multilingual": "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+        "bge-small-zh": "BAAI/bge-small-zh-v1.5",
     }
     if n in presets or n.startswith("st:"):
         from ..embed import SentenceTransformerEmbedder

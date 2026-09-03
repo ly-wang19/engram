@@ -27,11 +27,17 @@ from typing import Optional
 
 from ..llm import LLM
 from ..types import Episode, Fact
+from .classify import classify
 from .llm_extractor import parse_json_facts
 
 # The four kinds become predicates. Chosen so a person reading the raw fact list can tell at a glance
 # what a row is claiming, and so retrieval can filter on kind without a schema change.
 OUTCOME_PREDICATES = ("decision", "finding", "lesson", "open_question")
+
+# The marker that says "this came out of a session distillation". It has to survive a user edit:
+# classify() re-derives category from content and would drop an edited conclusion into a generic
+# bucket, silently turning it back into an ordinary fact on every surface that groups by category.
+OUTCOME_CATEGORY = "会话结论"
 
 OUTCOME_SYSTEM = (
     "你在为一个长期记忆系统提炼「这次工作会话留下了什么」。目标读者是几周后重新遇到同类问题的同一个人。\n"
@@ -123,6 +129,13 @@ def extract_outcomes(llm: LLM, episodes: list[Episode], user_id: str,
             continue
         seen.add(key)
         why = " ".join(str(item.get("why", "")).split())[:300]
+        # A conclusion is prose the model wrote about a work session, so it can carry exactly the things
+        # classify() exists to keep out of a shared view (a credential, a diagnosis, a salary). Every
+        # other write path classifies; without this one an outcome is born sensitive=False and shows up
+        # in the share-safe `/v1/memories` and `/v1/export` views — and would only start being hidden
+        # after the owner edits it, because update_fact DOES classify. Category is forced back: the
+        # Journal, the audit skip-rule and `kind=outcomes` all key on it.
+        _, sensitive = classify(kind, statement, f"{statement} {why}")
         fact = Fact(
             subject=session_id or user_id,
             predicate=kind,
@@ -132,10 +145,28 @@ def extract_outcomes(llm: LLM, episodes: list[Episode], user_id: str,
             text=f"{statement} （依据：{why}）" if why else statement,
             display=statement,
             user_id=user_id,
-            category="会话结论",
+            category=OUTCOME_CATEGORY,
+            sensitive=sensitive,
             valid_at=valid_at,
             created_at=created_at,
             provenance=provenance,
         )
         out.append(fact)
     return out
+
+
+def split_outcome_text(text: str) -> tuple[str, str]:
+    """Recover (statement, why) from an outcome fact's `text`.
+
+    Lives here, ten lines under the format it inverts, because the two must never drift: the separator
+    is written in exactly one place above and read in exactly one place here. Callers need the halves
+    back because `text` is the embedded form (statement + evidence), while a reader wants the claim and
+    its evidence rendered apart — and an edit must rebuild the same shape rather than flatten it.
+    """
+    statement, sep, why = text.partition(" （依据：")
+    if not sep:
+        return text.strip(), ""
+    why = why.strip()
+    if why.endswith("）"):
+        why = why[:-1]
+    return statement.strip(), why.strip()

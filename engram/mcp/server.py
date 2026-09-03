@@ -107,6 +107,15 @@ def _err(e: Exception) -> str:
     return f"Error: {type(e).__name__}: {e}"
 
 
+def _format_feed(feed: dict) -> str:
+    """When the memory was last fed from this machine's agent sessions — the line that distinguishes an
+    empty memory from a healthy one."""
+    if not feed.get("last_fed_at_h"):
+        return "- Last fed: never — run engram-watch --install"
+    return (f"- Last fed: {feed.get('last_fed_at_h')} · {feed.get('sessions', 0)} session(s) · "
+            f"{feed.get('conclusions', 0)} conclusion(s)")
+
+
 def _format_focus(focus: dict) -> str:
     track = focus.get("track") or []
     mute = focus.get("mute") or []
@@ -256,7 +265,7 @@ async def engram_close_session(
     drains pending consolidation for this session, creates missing summaries, reflects knowledge
     updates into summaries, clears short-lived working memory, and persists the namespace.
 
-    Returns (json): {"ok","session_id","episodes","pending_consolidated","facts_added",
+    Returns (json): {"ok","session_id","episodes","pending_consolidated","facts_added","outcomes",
     "summaries","working_cleared",...}.
     """
     try:
@@ -269,13 +278,17 @@ async def engram_close_session(
         return _err(e)
     if response_format == ResponseFormat.JSON:
         return _json(data)
+    # Session outcomes are the part of a close a person would want to see happened; a silent count keeps
+    # the distillation invisible in the one place an agent reports back.
+    distilled = data.get("outcomes") or 0
     return (
         f"Closed session `{data.get('session_id', session_id)}`. "
         f"Processed {data.get('episodes', 0)} episode(s), "
         f"consolidated {data.get('pending_consolidated', 0)} pending episode(s), "
         f"added {data.get('facts_added', 0)} fact(s), "
         f"created {data.get('summaries', 0)} summary(ies), "
-        f"cleared {data.get('working_cleared', 0)} working item(s)."
+        f"cleared {data.get('working_cleared', 0)} working item(s)"
+        + (f", distilled {distilled} conclusion(s)." if distilled else ".")
     )
 
 
@@ -516,6 +529,7 @@ async def engram_agent_status(
         f"{c.get('summaries', 0)} summary(ies), {c.get('pending_conflicts', 0)} pending conflict(s)",
         f"- Overall working memory: {c.get('working_live', 0)} live item(s)",
         f"- Consolidation backlog: {'yes' if data.get('consolidation_backlog') else 'no'}",
+        _format_feed(data.get("feed") or {}),
         "- Focus:",
         _format_focus(focus),
         "",
@@ -558,7 +572,14 @@ async def engram_audit(limit: int = 40, response_format: ResponseFormat = Respon
         lines += ["", "## Details", ""]
         for f in findings:
             what = f.get("text") or f.get("entity") or ""
+            if not what and f.get("predicate"):
+                # A group finding (slot_overflow) describes a whole (subject, predicate) slot, not one
+                # row, so it carries no `text`. Without this the line renders as an empty bold and the
+                # agent is told to "clear this slot" without being told which slot.
+                what = f"{f.get('subject', '')} {f.get('predicate')} ×{f.get('count', 0)}".strip()
             lines.append(f"- **{what}** — {f.get('why', '')} → _{f.get('action', '')}_")
+            for sample in (f.get("samples") or [])[:3]:
+                lines.append(f"  - {sample.get('text', '')}")
     if data.get("truncated"):
         lines += ["", f"_(showing {len(findings)}; raise `limit` for more)_"]
     return "\n".join(lines)
@@ -709,8 +730,12 @@ async def engram_import(
         data = await backend().import_(content, format=format)
     except Exception as e:  # noqa: BLE001
         return _err(e)
-    return (f"Imported {data.get('sessions', 0)} session(s) / {data.get('episodes', 0)} episode(s); "
+    text = (f"Imported {data.get('sessions', 0)} session(s) / {data.get('episodes', 0)} episode(s); "
             f"extracted {data.get('facts_added', 0)} fact(s), {data.get('summaries', 0)} summary(ies).")
+    deferred = int(data.get("facts_deferred") or 0)
+    if deferred:
+        text += f"; {deferred} agent session(s) stored for close-time distillation"
+    return text
 
 
 @mcp.tool(name="engram_export", annotations=ToolAnnotations(title="Export memory data", **_READ))

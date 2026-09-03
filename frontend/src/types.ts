@@ -19,6 +19,9 @@ export interface MemoryFact {
   sensitive: boolean
   salience: number
   provenance: string[]
+  // Outcome facts embed their reasoning in `text` ("statement （依据：why）"); the server splits it
+  // back out here so a journal row can show the claim and its grounds on separate lines. '' otherwise.
+  why: string
 }
 
 export interface Conflict {
@@ -52,6 +55,7 @@ export interface MemoryCounts {
   facts_live: number
   facts_superseded: number
   summaries: number
+  facts_outcomes: number
 }
 
 export interface MemoryStatsCounts {
@@ -75,6 +79,15 @@ export interface MemoryStatsCounts {
   pending_conflicts: number
 }
 
+/** Derived by the server from agent-session episodes; tells the console whether the memory is
+ *  being fed by `engram-watch` at all (a memory nobody feeds stays empty). */
+export interface FeedStatus {
+  last_fed_at: number | null
+  last_fed_at_h: string | null
+  sessions: number
+  conclusions: number
+}
+
 export interface AgentStatus {
   ok: boolean
   user: string
@@ -92,6 +105,7 @@ export interface AgentStatus {
   storage: string
   embedder: string
   llm_configured: boolean
+  feed?: FeedStatus
   recommended_next_actions: string[]
   tools: {
     read_context: string
@@ -232,6 +246,7 @@ export interface CloseSessionResult {
   summaries: number
   reflected: number
   working_cleared: number
+  outcomes: number // conclusions newly distilled from this session (re-closing a session adds none)
 }
 
 export interface RecallResult {
@@ -326,7 +341,15 @@ export interface StructuredProfile {
 }
 
 export interface AuditFinding {
-  kind: 'machine_token' | 'empty_value' | 'unreduced_claim' | 'orphan_entity'
+  kind:
+    | 'machine_token'
+    | 'empty_value'
+    | 'unreduced_claim'
+    | 'orphan_entity'
+    | 'fragment'
+    | 'code_artifact'
+    | 'dangling_subject'
+    | 'slot_overflow'
   why: string
   action: string
   fact_id?: string
@@ -337,6 +360,11 @@ export interface AuditFinding {
   source?: FactSource
   valid_at_h?: string
   entity?: string
+  // slot_overflow is a group finding: one row for N facts crammed into a single-value slot, so it
+  // carries the size, the slot's human label and a few samples instead of one fact_id.
+  label?: string
+  count?: number
+  samples?: Array<{ fact_id: string; text: string }>
 }
 
 export interface AuditReport {

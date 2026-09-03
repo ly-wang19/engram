@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Database, FileText, History, MessagesSquare, Send, Sparkles } from 'lucide-react'
+import { Database, History, Lightbulb, MessagesSquare, Send, Sparkles } from 'lucide-react'
 
 import {
   Button,
@@ -12,15 +12,25 @@ import {
   Spinner,
   StatCard,
 } from '../components/ui'
-import { Badge } from '../components/ui'
 import { toast } from '../components/Toast'
 import { useMemories, useRemember, useStructuredProfile } from '../hooks/queries'
-import { splitStamp } from '../lib/format'
 import { useT } from '../i18n'
+import { groupOutcomes, SessionOutcomes } from './Journal'
 import type { StructuredProfile } from '../types'
 
 export default function Dashboard() {
   const { data, isLoading, isError, error } = useMemories({ facts_limit: 6, episodes_limit: 0, status: 'live' })
+  // The conclusions the owner actually reads. Separate query so the counts above stay unfiltered.
+  // include_sensitive matches counts.facts_outcomes (which ignores sensitivity) and the Journal: without
+  // it, editing a conclusion into something classify() calls sensitive drops it from this list while the
+  // count still reports it, and the card renders as a heading with nothing under it.
+  const outcomes = useMemories({
+    kind: 'outcomes',
+    facts_limit: 12,
+    episodes_limit: 0,
+    status: 'live',
+    include_sensitive: true,
+  })
   const profile = useStructuredProfile()
   const remember = useRemember()
   const t = useT()
@@ -45,7 +55,7 @@ export default function Dashboard() {
   if (!data) return null
 
   const c = data.counts
-  const recent = data.facts.filter((f) => f.status === 'live').slice(0, 6)
+  const groups = groupOutcomes(outcomes.data?.facts ?? []).slice(0, 2)
 
   return (
     <div className="space-y-6">
@@ -55,7 +65,7 @@ export default function Dashboard() {
         <StatCard label={t.dashboard.statLive} value={c.facts_live} icon={<Database className="h-5 w-5" />} accent="cyan" />
         <StatCard label={t.dashboard.statSuperseded} value={c.facts_superseded} icon={<History className="h-5 w-5" />} accent="violet" />
         <StatCard label={t.dashboard.statEpisodes} value={c.episodes} icon={<MessagesSquare className="h-5 w-5" />} accent="mint" />
-        <StatCard label={t.dashboard.statSummaries} value={c.summaries} icon={<FileText className="h-5 w-5" />} accent="amber" />
+        <StatCard label={t.dashboard.statOutcomes} value={c.facts_outcomes} icon={<Lightbulb className="h-5 w-5" />} accent="amber" />
       </div>
 
       <Card>
@@ -77,40 +87,36 @@ export default function Dashboard() {
         </div>
       </Card>
 
-      <div className="grid gap-6 lg:grid-cols-2">
-        <Card>
-          <CardTitle hint={t.dashboard.structuredHint}>{t.dashboard.personaTitle}</CardTitle>
-          {profile.data && !profile.isError ? (
-            <StructuredProfileMini data={profile.data} />
-          ) : (
-            <EmptyState title={t.dashboard.personaEmptyTitle} hint={t.dashboard.personaEmptyHint} icon={<Sparkles className="h-6 w-6" />} />
-          )}
-        </Card>
+      {/* The journal, not the fragment stream: a session's conclusions are what a person can read. */}
+      <Card>
+        <CardTitle hint={<Link to="/journal" className="text-brand-cyan hover:underline">{t.dashboard.conclusionsAll}</Link>}>
+          {t.dashboard.conclusionsTitle}
+        </CardTitle>
+        {/* The counter comes from the already-loaded main query, so the empty state never flashes
+            while the conclusions themselves are still in flight. */}
+        {c.facts_outcomes > 0 ? (
+          <div className="space-y-3">
+            {groups.map((g, i) => (
+              <SessionOutcomes key={`${g.session}-${i}`} group={g} className="!bg-white/[0.02] !p-4" />
+            ))}
+          </div>
+        ) : (
+          <EmptyState
+            title={t.dashboard.conclusionsEmptyTitle}
+            hint={t.dashboard.conclusionsEmptyHint}
+            icon={<Lightbulb className="h-6 w-6" />}
+          />
+        )}
+      </Card>
 
-        <Card>
-          <CardTitle hint={<Link to="/facts" className="text-brand-cyan hover:underline">{t.dashboard.recentAll}</Link>}>
-            {t.dashboard.recentTitle}
-          </CardTitle>
-          {recent.length ? (
-            <ul className="divide-y divide-line">
-              {recent.map((f) => {
-                const { date, time } = splitStamp(f.valid_at)
-                return (
-                <li key={f.id} className="flex items-baseline gap-2 py-2 text-sm">
-                  <time className="shrink-0 text-[11px] tabular-nums text-brand-cyan">
-                    {date}{time && <span className="ml-1 text-brand-cyan/55">{time}</span>}
-                  </time>
-                  <span className="flex-1 text-slate-200">{f.display || f.text}</span>
-                  {f.source === 'user' && <Badge tone="user">🔒</Badge>}
-                </li>
-                )
-              })}
-            </ul>
-          ) : (
-            <EmptyState title={t.dashboard.recentEmptyTitle} hint={t.dashboard.recentEmptyHint} />
-          )}
-        </Card>
-      </div>
+      <Card>
+        <CardTitle hint={t.dashboard.structuredHint}>{t.dashboard.personaTitle}</CardTitle>
+        {profile.data && !profile.isError ? (
+          <StructuredProfileMini data={profile.data} />
+        ) : (
+          <EmptyState title={t.dashboard.personaEmptyTitle} hint={t.dashboard.personaEmptyHint} icon={<Sparkles className="h-6 w-6" />} />
+        )}
+      </Card>
     </div>
   )
 }
