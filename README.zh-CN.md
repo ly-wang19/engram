@@ -73,6 +73,12 @@ Engram 是一个**双过程（dual-process）**记忆系统，仿照人脑的 Sy
 ```mermaid
 flowchart TB
     ADD([add 写入消息]) --> S1
+    SESS([你机器上已有的 agent 会话<br/>Claude Code · Codex]) --> W
+    subgraph W [engram-watch · 批量 · 幂等 · 可定时]
+        direction LR
+        Wa[解析会话记录<br/>剥工具噪声 · 脱敏密钥] --> Wb[导入为情节] --> Wc[结束会话 →<br/>蒸馏结论 · 1 次 LLM]
+    end
+    W --> TM
     subgraph S1 [System-1 · 热写入路径 · 不调 LLM]
         direction LR
         S1a[追加无损 Episode] --> S1b[身份解析<br/>跨会话/设备] --> S1c[轻量嵌入 + 入队]
@@ -89,6 +95,7 @@ flowchart TB
         TMb[(语义记忆<br/>双时间轴图谱)]
         TMc[(画像 /<br/>身份)]
         TMd[(程序性记忆)]
+        TMe[(会话结论)]
     end
     TM --> R
     Q([search 查询]) --> R
@@ -100,7 +107,9 @@ flowchart TB
     Rf --> OUT([可直接作答的上下文])
 ```
 
-**写入路径（System-1）**：追加一条无损情节、跨会话/设备解析身份、嵌入并入队 —— 关键路径上不调 LLM。
+有两条路进来。**写入路径（System-1）**：追加一条无损情节、跨会话/设备解析身份、嵌入并入队 —— 关键路径上不调 LLM。
+**会话路径（`engram-watch`）**：读取你磁盘上已有的 agent 会话记录，存下来，在会话结束时用一次 LLM 调用蒸馏出
+*决定了什么、发现了什么、学到了什么、还有什么没解决* —— 对工作会话来说，记忆的单元是结论，不是传记式三元组。
 **固化路径（System-2）**：异步运行，抽取原子的 `(主语, 谓语, 宾语)` 事实、构建知识图谱、
 解决矛盾。**读取路径**：分解问题、并行走四条互补通道检索，把正证据信号用 RRF 融合，并把时近/显著度作为先验（可选重排），做时点过滤、组装出带日期与溯源的上下文。算法层契约见
 [`docs/algorithm-architecture.md`](docs/algorithm-architecture.md)。
@@ -114,8 +123,9 @@ flowchart TB
 | 3 | **低成本冲突检测** —— 槽位匹配 + 嵌入/NLI 启发式，**仅在**模糊时才升级到 LLM | 拿到生产级的时间正确性，**却不必每个事实都调一次 LLM** —— 规模化下的成本优势。 |
 | 4 | **混合检索** —— 稠密语义 + BM25 词法 + 图邻近作为正证据融合，时近/显著度作为先验 | 没有单一检索器能赢遍所有场景。**已验证结论：事实 + 原始片段，强于任何单独一种** —— 事实补充冲突已解/时间信号，片段找回丢失的细节。 |
 | 5 | **双过程分工** —— 快写入、异步固化 | 建图、去重、冲突解决都在关键路径之外进行；读取延迟要进 harness 测量后才公开宣称。 |
-| 6 | **一切可插拔** —— LLM / 嵌入器 / 向量库 / 图库都在接口背后，**带零依赖离线兜底** | `python scripts/check_zero_setup.py` **不需要任何 API key、任何服务**即可跑；安装测试依赖后用 `pytest` 覆盖完整单元测试。一行配置即可换上 BGE / LanceDB / Kuzu / 任意 LLM。 |
-| 7 | **可复现的 harness** —— 一套中立评测、内置官方判分、每张表都带 full-context 基线、公开原始日志 | 在一个人人数字都被质疑的领域里，**成为那个谁都能验证的记分牌**才是真正的护城河。 |
+| 6 | **一切可插拔，且兜底宁可拒绝也不腐蚀** —— LLM / 嵌入器 / 向量库 / 图库都在接口背后，带零依赖离线兜底；兜底处理不了你的数据时会明说，而不是静默降级 | `python scripts/check_zero_setup.py` **不需要任何 API key、任何服务**即可跑。没有 LLM 时，agent 会话只存不做规则抽取（那在真实会话上产出的是垃圾）；体检页会报出哈希嵌入器切不动你存的文字（见 [`results/embedder_zh_2026-09-01.md`](results/embedder_zh_2026-09-01.md)）并给出修法。一行配置即可换上 BGE / LanceDB / Kuzu / 任意 LLM。 |
+| 7 | **会话结论** —— 一次工作会话被蒸馏成决定、发现、教训、待决，作为普通的双时间轴事实存下 | 逐轮抽取给的是属性（"在 X 工作"），一次会话给的是*得出了什么结论*。两者同库，结论白拿 supersedes、溯源和检索；控制台的「会话结论」页读起来就像你本来会手写的那份笔记。 |
+| 8 | **可复现的 harness** —— 一套中立评测、内置官方判分、每张表都带 full-context 基线、公开原始日志 | 在一个人人数字都被质疑的领域里，**成为那个谁都能验证的记分牌**才是真正的护城河。 |
 
 完整数据模型与冲突解决规则见 [`engram/types.py`](engram/types.py) 与 [`engram/consolidate/`](engram/consolidate/)。
 
@@ -148,7 +158,8 @@ Engram 自带完整**接入层**:HTTP API + MCP + JS/TS SDK + OpenAI 兼容,都�
 （`MemoryService`）。生产模式下，配置的 API key 映射到稳定、互相隔离的租户命名空间；只有显式开发开放
 模式才把 key 文本本身当作命名空间。
 内置控制台 `/ui` 也体现同一条产品闭环：不含正文的 session status、带 `scope=auto|long|working`
-的会话写入、结束会话、session report 审计、分页记忆管理、安全导出和显式确认清空。
+的会话写入、结束会话、session report 审计、分页记忆管理、安全导出和显式确认清空 —— 另加一页**会话结论**（每次会话得出了什么）
+和一页**记忆体检**（把抽取垃圾点名到"84 条塞在同一个槽里"，一步清掉）。
 跨 Claude Code / Codex / Cursor / 自研 agent 的推荐生命周期见
 [`docs/cross-agent-memory.md`](docs/cross-agent-memory.md) 与
 [`docs/agent-adapters.md`](docs/agent-adapters.md)；单会话生命周期自测（本地零服务或 HTTP，包含
@@ -256,6 +267,20 @@ liveness/排错，`GET /ready` 在鉴权或存储未就绪时返回 503；两者
 `ENGRAM_API_KEYS="tenant-a:<强随机密钥>"` 后运行 Uvicorn。`ENGRAM_OPEN=1` 仅用于显式本地开发。
 
 批量导入见 [`examples/batch_import.py`](examples/batch_import.py)，完整接口文档见 [`API.md`](API.md)。
+
+**4. 用你的 agent 会话喂它** —— Claude Code 和 Codex 已经写在磁盘上的会话记录，就是值得记住的东西。
+`engram-watch` 吃掉已经安静下来的会话，逐个结束以便蒸馏成结论，并记住自己看过哪些，所以重复跑既便宜又幂等：
+
+```bash
+engram-watch --dry-run                                  # 看会吃哪些，什么都不存
+engram-watch --once --url http://127.0.0.1:8000 --key me # 跑一次：最新的安静会话，每次 25 条
+engram-watch --install --url http://127.0.0.1:8000 --key me --interval 30m   # launchd / systemd / cron
+engram-watch --uninstall --purge                        # 把 ~/.engram 还原成安装前的样子
+```
+
+默认一次会话只花一次摘要调用和一次结论调用 —— 对整段长记录做逐轮事实抽取是显式开启的（`--extract-facts`）。
+`--install` 会先在干净环境里 import `engram`，第一个 tick 就会失败的任务拒绝注册；key 放在 `0600` 文件里而不是
+plist 里；`--uninstall` 会等调度器真正放手再报成功。
 
 ## 复现基准
 
