@@ -43,3 +43,10 @@ paper/*.out
 !results/
 results/*.tmp
 eval/locomo10.json  # LOCOMO dataset: download from snap-research/locomo, not vendored
+
+# Agent persona files kept next to the code but never part of it
+SOUL.md
+IDENTITY.md
+USER.md
+# Stale process-id files from scoreboard runs
+*.pid

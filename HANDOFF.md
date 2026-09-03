@@ -131,3 +131,8 @@
 - **做了什么**: 合并三视角验证的修复后自己复跑三道门；另修 `embedder_blind` 判定（分母只算字母、门槛改字符质量 200 字，代码/JSON 不再误报，两段长中文会话会报）与 `--purge` 残留空目录。全量 **557 passed / 1 skipped**；quickstart 零 key 退出 0；`launchctl list | grep engram` 空。
 - **当前状态**: P0 两件已交付并提交。**未安装任何定时任务**。
 - **下一步前提**: `engram-watch --install` 在本机会被干净环境预检拒绝，因为 editable install 指向 main 检出而 main 尚无 `connectors/watch`。合入 main 后命令即可用。
+
+- **Agent**: Claude Code · **日期**: 2026-09-04 · **主检出整理**
+- **做了什么**: 主检出从 `ed0e53a`（落后 78）fast-forward 到 `e8bfffe`。8/17 一批未提交改动原样存入本地分支 `wip/aug17-scoreboard`（未推）。其中只把 `RESULTS.md` 的 judge 端点说明合入（ARK 已下线 `deepseek-v3-2-251201`，复现命令改走 DeepSeek 官方 API）。
+- **留在 wip 分支未合入及原因**: `eval/bench.py` 的 `HyMemorySystem` / `OpenVikingSystem` / `EngramLeanIdentityAttrsSystem` 适配器（17 天未随 harness 演进，需重新跑通）；`config.identity_attribute_extraction` + `IDENTITY_ATTRIBUTE_CLAUSE`（默认关，**未过 LongMemEval A/B**，按 CLAUDE.md §4 测过再合）。
+- **二期**: 想启用 identity 抽取先 `--pin-extraction` 跑 500 题 A/B，看 single-session-user 类别；竞品适配器合入前先跑通一次 n=60 slice。
