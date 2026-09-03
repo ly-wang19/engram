@@ -29,43 +29,77 @@
 
 ## 总览图
 
+一套核心，两条写入路径，两个兜底坐在缝上。左路是原设计的对话流；右路是 2026-09-01 新增的 agent 会话路径。
+虚线是条件分支：只有在没有 LLM / 没有依赖时才走到兜底。跑分路径从不经过 `/v1/sessions/close`。
+可视化版本：见对话中发布的「Engram 双路径架构图」artifact；本文件是单一事实源。
+
 ```mermaid
 flowchart TD
-    U["用户/Agent/SDK"] --> AUTH["服务安全边界\nBearer key -> tenant_id\nrequest limits + readiness"]
-    AUTH --> NS["安全命名空间\nreadable prefix + SHA-256\nlegacy-safe fallback"]
-    NS --> S1["System-1 快写路径\nengram/memory.py add()\nengram/ingest/"]
-    S1 --> E["Episode 原始事件\nappend-only, event_time + ingested_at"]
-    E --> Q["异步 consolidation 队列"]
+  SRC_A["对话 / Agent 实时写入<br/>/v1/remember · engram_remember"]
+  SRC_B["本机 agent 会话记录<br/>~/.claude/projects · ~/.codex/sessions<br/>3108 文件 · 16.5G"]
 
-    Q --> S2["System-2 睡眠期整理\nengram/consolidate/"]
-    S2 --> EX["事实抽取\nextractor.py / llm_extractor.py"]
-    S2 --> CF["冲突检测与非破坏性失效\nconflict.py / engine.py"]
-    S2 --> GB["双时间轴图谱投影\ngraph_builder.py"]
-    S2 --> DS["派生记忆\nsummarizer.py / procedural/profile"]
+  S1["System-1 快写<br/>memory.py add() · <50ms · 无 LLM"]
+  Q["异步整理队列"]
+  EXT["逐轮抽取 · 每轮 1 次 LLM<br/>consolidate/llm_extractor.py"]
+  RULE["RuleExtractor 兜底<br/>真实会话 12 轮 → 11 条垃圾"]
 
-    EX --> TM["Typed Memory"]
-    CF --> TM
-    GB --> TM
-    DS --> TM
+  PARSE["connectors/agent_sessions<br/>剥 thinking / tool_use · 密钥脱敏"]
+  WATCH["connectors/watch<br/>静默 15 min 后批量 · 幂等 · 尚无定时"]
+  OUT["会话结论蒸馏 · 每会话 1 次 LLM<br/>consolidate/outcomes.py<br/>decision / finding / lesson / open_question"]
 
-    TM --> EP["证据规划\nengram/retrieve/evidence.py"]
-    EP --> HR["Hybrid Retrieval\nhybrid.py: semantic + BM25 + graph + recency + salience"]
-    EP --> GP["Multi-hop / Graph Paths\nplanner.py + graph traversal"]
-    EP --> RB["Raw Evidence Fusion\nprovenance chunks + summaries + detail episodes"]
-    EP --> AG["Aggregation Evidence\naggregate.py structured candidates"]
-    EP --> HI["History / Evolution Chains\ntemporal.py + supersedes chain"]
+  CF["冲突检测 → 非破坏性失效<br/>conflict.py · supersedes 链"]
+  GB["图谱投影<br/>graph_builder.py · 结论类谓词不建边"]
+  CLS["classify → 敏感位 / 分类<br/>结论现在也过这一关"]
 
-    HR --> CA["Context Assembly\nmemory.py lean_context()"]
-    GP --> CA
-    RB --> CA
-    AG --> CA
-    HI --> CA
+  CORE["Typed Memory · 双时间轴<br/>Episode · Fact(valid_at/invalid_at/supersedes/provenance)<br/>Entity · Relation · Summary · Working<br/>结论 = Fact 穿三元组外衣：subject=session_id"]
+  EMB["Embedder<br/>multilingual 3/3 · bge-small 0/3（中文）"]
+  HASH["HashingEmbedder 兜底<br/>中文区分度 0.000"]
 
-    CA --> ANS["Answerer / Judge\neval/bench.py + eval/longmemeval.py"]
-    CA --> SOUT["HTTP / MCP / SDK 响应\nno-store + security headers"]
-    ANS --> LOG["可复现实验日志\nresults/*.jsonl + results/*_experiments.md"]
-    LOG --> PLAN["下一轮优化选择"]
-    PLAN --> EP
+  RECALL["recall · 证据规划 → 混合检索<br/>dense + BM25 + graph + recency + salience → RRF → as-of → 弃答门"]
+  LIST["memories · kind=outcomes | attributes<br/>每条带 why（依据）"]
+  AUDIT["audit · 逐条规则 + slot_overflow（按槽报一次）<br/>→ clear-slot：expect_count 必填 · 只删 live · 不碰 source=user"]
+
+  CONSOLE["控制台<br/>总览（结论卡） · 会话结论 · 记忆体检 · 事实 · 图谱 · 时间线 …"]
+  MCP["MCP · HTTP · TS SDK<br/>Claude Code / Codex 共用一份记忆"]
+  BENCH["eval/bench.py · LongMemEval_S<br/>显式 --embedder bge-small · 英文<br/>84.4% vs 73.2% full-context"]
+
+  SRC_A --> S1
+  S1 -->|"append Episode"| CORE
+  S1 -.->|"enqueue"| Q
+  Q --> EXT
+  EXT -.->|"无 LLM 时"| RULE
+  EXT --> CF
+  RULE -.->|"污染"| CORE
+
+  SRC_B --> PARSE --> WATCH
+  WATCH -->|"POST /v1/import"| CORE
+  WATCH -->|"POST /v1/sessions/close"| OUT
+  OUT --> CLS --> CORE
+  CF --> GB --> CORE
+  CF --> CORE
+
+  CORE <-->|"embed / cosine"| EMB
+  EMB -.->|"无依赖时"| HASH
+
+  CORE --> RECALL
+  CORE --> LIST
+  CORE --> AUDIT
+  AUDIT -->|"硬删一个槽"| CORE
+
+  RECALL --> MCP
+  RECALL --> CONSOLE
+  LIST --> CONSOLE
+  AUDIT --> CONSOLE
+  RECALL -.-> BENCH
+
+  classDef core fill:#DFF3F8,stroke:#1B9FBE,color:#0F2A33
+  classDef new fill:#FBEFD8,stroke:#C9821A,color:#3A2A10
+  classDef hazard fill:#FBE3E7,stroke:#C4485A,color:#3F1A22
+  classDef eval fill:#ECEEF2,stroke:#6B6F7C,color:#2A2E38,stroke-dasharray:4 3
+  class CORE,EMB core
+  class SRC_B,PARSE,WATCH,OUT,CLS,LIST,AUDIT,CONSOLE new
+  class RULE,HASH hazard
+  class BENCH eval
 ```
 
 ## 架构层与代码位置
