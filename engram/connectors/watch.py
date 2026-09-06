@@ -51,6 +51,15 @@ DEFAULT_INTERVAL = "30m"
 # the tail attached. Wait until it has been idle for a while.
 QUIET_SECONDS = 15 * 60
 
+# One tick's worth of transcripts does not fit in one request. The server caps a body at 2 MiB by default
+# (DEFAULT_MAX_REQUEST_BYTES) and 25 real sessions serialize to ~18 MB, so the single bulk POST this used
+# to send was refused with 413 — and because the server closes the connection before reading the whole
+# body, urllib surfaces that as "Broken pipe", which the caller classified as a transport failure and
+# retried forever. Measured on this machine: 115 identical failures over two days, nothing ingested.
+# Chunking by BYTES (never by session count — sessions range from 2 KB to 2.5 MB) also buys failure
+# isolation: one rejected chunk no longer costs the other sessions their import.
+IMPORT_CHUNK_BYTES = 1_500_000  # under the server's 2 MiB default, with room for JSON overhead
+
 # A path whose close keeps failing (model outage, a transcript the distiller cannot digest) is retried
 # on later ticks, but not forever: after this many failures it is marked seen so one bad file cannot
 # occupy a slot of every tick's `--limit` from then on.
@@ -106,9 +115,17 @@ def _parse_since(value: str) -> Optional[float]:
         raise SystemExit(f"--since expects 7d / 12h / 30m or an epoch, got {value!r}")
 
 
+def _oversized_key(path: str, max_bytes: int) -> str:
+    try:
+        return f"{os.stat(path).st_size}:{max_bytes}"
+    except OSError:
+        return ""
+
+
 def pending_sessions(state: dict, since: Optional[float] = None,
                      quiet_seconds: int = QUIET_SECONDS,
-                     now: Optional[float] = None) -> list[str]:
+                     now: Optional[float] = None,
+                     max_bytes: int = IMPORT_CHUNK_BYTES) -> list[str]:
     """Transcripts worth ingesting: changed since we last saw them, and no longer being written to."""
     now = now if now is not None else time.time()
     seen = state.get("seen") or {}
@@ -122,8 +139,43 @@ def pending_sessions(state: dict, since: Optional[float] = None,
             continue  # still live; ingesting now would only force a re-ingest later
         if seen.get(path) == st.st_size:
             continue  # unchanged since the last run
+        # A transcript that cannot fit in one request is skipped rather than retried every tick — but the
+        # record is keyed on (size, limit), so growing the file or raising the server's cap re-queues it.
+        if (state.get("oversized") or {}).get(path) == f"{st.st_size}:{max_bytes}":
+            continue
         out.append(path)
     return out
+
+
+def _row_bytes(row: dict) -> int:
+    return len(json.dumps({"sessions": [row]}).encode("utf-8"))
+
+
+def chunk_rows(rows: list[dict], max_bytes: int = IMPORT_CHUNK_BYTES) -> tuple[list[list[dict]], list[dict]]:
+    """Split import rows into request-sized batches, and name the ones that cannot fit at all.
+
+    A session is the atom: its conclusions are distilled from the whole arc, so splitting one across two
+    requests would hand the extractor half a conversation. A session larger than the budget therefore
+    cannot be sent — it is returned separately so the caller can say so once instead of retrying it every
+    tick until the end of time.
+    """
+    batches: list[list[dict]] = []
+    oversized: list[dict] = []
+    current: list[dict] = []
+    used = 0
+    for row in rows:
+        size = _row_bytes(row)
+        if size > max_bytes:
+            oversized.append(row)
+            continue
+        if current and used + size > max_bytes:
+            batches.append(current)
+            current, used = [], 0
+        current.append(row)
+        used += size
+    if current:
+        batches.append(current)
+    return batches, oversized
 
 
 def _post(base_url: str, api_key: str, path: str, body: dict, timeout: int) -> dict:
@@ -140,7 +192,8 @@ def _post(base_url: str, api_key: str, path: str, body: dict, timeout: int) -> d
 
 
 def ingest(base_url: str, api_key: str, paths: list[str], timeout: int = 900,
-           outcomes: bool = True, extract_facts: bool = False) -> dict:
+           outcomes: bool = True, extract_facts: bool = False,
+           max_bytes: int = IMPORT_CHUNK_BYTES) -> dict:
     """Import the sessions, then close each one so it gets distilled.
 
     Importing alone only stores the transcript. The distillation — what was decided, found, learned —
@@ -176,13 +229,44 @@ def ingest(base_url: str, api_key: str, paths: list[str], timeout: int = 900,
         if s.event_time is not None:
             row["event_time"] = s.event_time
         rows.append(row)
-    payload: dict = {"sessions": rows}
-    if extract_facts:
-        payload["consolidate"] = True
-    result = _post(base_url, api_key, "/v1/import", payload, timeout)
+    batches, oversized_rows = chunk_rows(rows, max_bytes)
+    oversized = [r["session_id"] for r in oversized_rows]
+    sent_ids: set[str] = set()
+    first_error: Optional[BaseException] = None
+    result: dict = {"ok": True, "sessions": 0, "episodes": 0, "skipped": 0,
+                    "facts_deferred": 0, "batches": len(batches), "import_failed": 0}
+    for batch in batches:
+        payload: dict = {"sessions": batch}
+        if extract_facts:
+            payload["consolidate"] = True
+        try:
+            part = _post(base_url, api_key, "/v1/import", payload, timeout)
+        except (urllib.error.HTTPError, urllib.error.URLError, OSError) as exc:
+            # One rejected batch must not cost the others their import: the sessions in it are simply not
+            # marked seen, so the next tick retries exactly them. But a server that is DOWN fails every
+            # batch, and that is a transport problem the caller must see as such (exit 75, ledger
+            # untouched) rather than as "nothing imported today" — so the failure is re-raised below when
+            # no batch got through at all.
+            result["import_failed"] += len(batch)
+            result.setdefault("import_errors", []).append(f"{len(batch)} session(s): {exc}")
+            first_error = first_error or exc
+            continue
+        sent_ids.update(r["session_id"] for r in batch)
+        for key in ("sessions", "episodes", "skipped", "facts_deferred"):
+            result[key] = result.get(key, 0) + int(part.get(key) or 0)
+    if batches and not sent_ids and first_error is not None:
+        raise first_error  # nothing got through: let main classify it (transport -> 75, HTTP -> refusal)
+    if oversized:
+        result["oversized"] = oversized
     result.setdefault("outcomes", 0)
     result["closed_ok"], result["close_failed"] = [], []
-    result["sessions_by_path"] = by_path
+    # A path is only "done" when every session parsed out of it actually reached the server.
+    result["sessions_by_path"] = {
+        path: ids for path, ids in by_path.items() if ids and set(ids) <= sent_ids
+    }
+    result["oversized_by_path"] = {
+        path: ids for path, ids in by_path.items() if ids and set(ids) & set(oversized)
+    }
     if not outcomes:
         return result
 
@@ -190,6 +274,8 @@ def ingest(base_url: str, api_key: str, paths: list[str], timeout: int = 900,
     # single conversation's arc, and one session failing must not cost the others their conclusions.
     distilled = 0
     for s in sessions:
+        if s.session_id not in sent_ids:
+            continue  # never reached the server; nothing to close
         try:
             closed = _post(base_url, api_key, "/v1/sessions/close",
                            {"session_id": s.session_id, "outcomes": True}, timeout)
@@ -263,7 +349,8 @@ def run_once(args) -> dict:
     # previous tick did not reach (a `--limit 25` backfill of 3000 files would have "seen" 25 and
     # silently dropped the rest); the size ledger already makes re-scanning cheap.
     since = _parse_since(args.since) if args.since else None
-    paths = pending_sessions(state, since=since, quiet_seconds=args.quiet_seconds)
+    paths = pending_sessions(state, since=since, quiet_seconds=args.quiet_seconds,
+                             max_bytes=getattr(args, "max_bytes", IMPORT_CHUNK_BYTES))
     backlog = len(paths)
     if args.limit:
         paths = paths[:args.limit]
@@ -299,7 +386,8 @@ def run_once(args) -> dict:
     try:
         try:
             result = ingest(args.url, key, paths, outcomes=not args.no_outcomes,
-                            extract_facts=args.extract_facts)
+                            extract_facts=args.extract_facts,
+                            max_bytes=getattr(args, "max_bytes", IMPORT_CHUNK_BYTES))
         except urllib.error.HTTPError as exc:
             # The server answered — with a refusal. Not a transport problem, so not exit 75, but nothing
             # was stored either: leave the ledger alone and say what the server said.
@@ -319,9 +407,23 @@ def run_once(args) -> dict:
         failures = state.get("close_failures") or {}
         closed_ok = set(result.get("closed_ok") or [])
         by_path = result.get("sessions_by_path") or {p: [] for p in paths}
+        # Transcripts too large for one request: record (size, limit) so they stop occupying a slot every
+        # tick, and say so once with the knob that would let them in.
+        over_by_path = result.get("oversized_by_path") or {}
+        if over_by_path:
+            ledger = dict(state.get("oversized") or {})
+            for p in over_by_path:
+                ledger[p] = _oversized_key(p, getattr(args, "max_bytes", IMPORT_CHUNK_BYTES))
+            state["oversized"] = ledger
+            _log(f"{len(over_by_path)} transcript(s) exceed the {getattr(args, 'max_bytes', IMPORT_CHUNK_BYTES):,}-byte request budget and "
+                 f"were skipped; raise ENGRAM_MAX_REQUEST_BYTES on the server and --max-bytes here to include them")
         close_failed_paths = 0
         for p in paths:
+            if p in over_by_path:
+                continue  # skipped above; not seen, not a close failure
             ids = by_path.get(p, [])
+            if not ids:
+                continue  # its batch was rejected — retry exactly these next tick
             done = args.no_outcomes or all(sid in closed_ok for sid in ids)
             if not done:
                 # Not seen: the transcript is stored but not distilled, and the next tick must retry
@@ -526,6 +628,8 @@ def main(argv: Optional[list[str]] = None) -> int:
     ap.add_argument("--quiet-seconds", type=int, default=QUIET_SECONDS,
                     help="how long a transcript must be idle before it counts as finished")
     ap.add_argument("--state", default=DEFAULT_STATE)
+    ap.add_argument("--max-bytes", type=int, default=IMPORT_CHUNK_BYTES,
+                    help="per-request import budget; keep it under the server's ENGRAM_MAX_REQUEST_BYTES")
     ap.add_argument("--no-outcomes", action="store_true",
                     help="import transcripts only, skip distilling them into decisions/lessons")
     ap.add_argument("--extract-facts", action="store_true",
