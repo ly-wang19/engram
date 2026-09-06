@@ -494,3 +494,30 @@ def test_key_file_and_url_env_alias(tmp_path, monkeypatch):
     assert watch._resolve_key(_args(tmp_path, key="", key_file="")) == "from-env"
     assert watch._parse_duration("30m") == 1800 and watch._parse_duration("2h") == 7200
     assert watch._parse_duration("1d") == 86400
+
+
+def test_a_tick_larger_than_one_request_is_split_not_refused():
+    """25 real transcripts serialize to ~18 MB against a 2 MiB server cap. Sending them as one body was
+    refused with 413, and because the server closes the connection mid-body urllib raised "Broken pipe",
+    which the caller read as "server unreachable" and retried forever — 115 identical failures over two
+    days, nothing ingested."""
+    from engram.connectors import watch
+    rows = [{"session_id": f"s{i}", "messages": [{"role": "user", "content": "x" * 400_000}]}
+            for i in range(6)]
+    batches, oversized = watch.chunk_rows(rows, max_bytes=1_000_000)
+
+    assert not oversized
+    assert len(batches) > 1 and sum(len(b) for b in batches) == 6   # split, and nothing dropped
+    assert all(sum(watch._row_bytes(r) for r in b) <= 1_000_000 for b in batches)
+
+
+def test_a_session_too_large_to_send_is_named_not_retried_forever():
+    """A session is the atom — splitting one would hand the extractor half a conversation — so an
+    oversized transcript is reported instead of silently dropped or endlessly retried."""
+    from engram.connectors import watch
+    rows = [{"session_id": "small", "messages": [{"role": "user", "content": "hi there"}]},
+            {"session_id": "huge", "messages": [{"role": "user", "content": "x" * 3_000_000}]}]
+    batches, oversized = watch.chunk_rows(rows, max_bytes=1_000_000)
+
+    assert [r["session_id"] for r in oversized] == ["huge"]
+    assert [r["session_id"] for b in batches for r in b] == ["small"]

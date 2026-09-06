@@ -136,3 +136,10 @@
 - **做了什么**: 主检出从 `ed0e53a`（落后 78）fast-forward 到 `e8bfffe`。8/17 一批未提交改动原样存入本地分支 `wip/aug17-scoreboard`（未推）。其中只把 `RESULTS.md` 的 judge 端点说明合入（ARK 已下线 `deepseek-v3-2-251201`，复现命令改走 DeepSeek 官方 API）。
 - **留在 wip 分支未合入及原因**: `eval/bench.py` 的 `HyMemorySystem` / `OpenVikingSystem` / `EngramLeanIdentityAttrsSystem` 适配器（17 天未随 harness 演进，需重新跑通）；`config.identity_attribute_extraction` + `IDENTITY_ATTRIBUTE_CLAUSE`（默认关，**未过 LongMemEval A/B**，按 CLAUDE.md §4 测过再合）。
 - **二期**: 想启用 identity 抽取先 `--pin-extraction` 跑 500 题 A/B，看 single-session-user 类别；竞品适配器合入前先跑通一次 n=60 slice。
+
+- **Agent**: Claude Code · **日期**: 2026-09-06 · **watch 两天零喂入的根因与修复**
+- **现象**: `com.engram.watch` 自 09-04 起 115 次失败、0 次成功，日志一律 `server unreachable ... Broken pipe`，但服务 `/ready` 一直 200。
+- **根因**: `ingest()` 把一个 tick 的 25 个会话打包成**单个 18.5MB 请求**；服务端 `DEFAULT_MAX_REQUEST_BYTES = 2 MiB`，读完 body 前就 413 并断开连接，urllib 报成 `Errno 32 Broken pipe`，被 `except URLError/OSError` 判为传输故障 → 退出 75、什么都不标记 → 每 30 分钟原样重来。
+- **修复**: 按字节分批（`IMPORT_CHUNK_BYTES = 1.5MB`，`--max-bytes` 可调）；单批被拒只隔离该批，其余照常导入；**所有批都失败才冒泡**，保住"服务器真挂了 → 退出 75"的契约；单个超限会话按 `(size, limit)` 记账跳过，文件变大或上限提高会自动重排。
+- **验证**: 全量 pytest 绿；quickstart 零 key 退出 0；对活着的 pilot 实跑 `--once --limit 6` → 6 会话 / 32 条结论 / 1 个超限已点名。撤掉分批两个新测试变红。
+- **顺带修**: PR #26 里 `git checkout wip -- RESULTS.md` 用整份 8/17 旧文件覆盖了 main 版，删掉 72 行（含已发布的 `+5.6`、`84.4`），`test_results_integrity` 因此变红。已恢复 main 版并只补 judge 端点那一段。

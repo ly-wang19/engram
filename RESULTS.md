@@ -19,6 +19,16 @@ noisy full window, at a fraction of the tokens.
 | **Engram** (`engram_lean`) | **83.6%** | **9.6k** | 0 / 500 |
 | full-context baseline (same answerer + judge) | 73.2% | 79k | 0 / 500 |
 
+> [!NOTE]
+> **These numbers are pinned to the code that produced them** — commit `4a2aa0e` (2026-06-27), the
+> revision that committed `results/headline_500.jsonl`. The codebase has evolved substantially since
+> (graph retrieval, evidence planning, temporal chains, preference extraction, LLM query decomposition)
+> and has **not** been re-scored on the full 500; a 50-question spot-check on identical items scored the
+> same overall as this baseline but with a very different per-category profile (temporal-reasoning and
+> preference up, single-session recall down). Treat 83.6 / 73.2 as the measured result of *that*
+> revision, not a live property of `main`. A fresh full-500 run against a stable judge is planned once
+> the current read-path ablation settles which features stay on by default.
+
 **Engram `engram_lean` beats the full-context baseline by +10.4 points while using ~8× fewer tokens**
 (9.6k vs 79k) on this 500-question run. Both numbers are on the **official** LongMemEval judge prompts,
 with the **same answerer and judge applied to every system** in the harness; both `engram_lean` and
@@ -30,6 +40,46 @@ with the **same answerer and judge applied to every system** in the harness; bot
 > so its 83.4% is over 499 scored questions; the lean number is the one we headline.
 
 ---
+
+## Current-code measurement (2026-08-28, deepseek official judge)
+
+Current `main`, full 500 questions, **0 errors**, log committed and format-validated
+(`results/run500_v3_main_deepseekjudge.jsonl`):
+
+| System | Overall | Avg context tokens |
+|---|---:|---:|
+| **Engram** (`engram_lean`) | **84.4%** | **7.9k** |
+| full-context baseline (same answerer + judge) | 78.8% | 79.2k |
+
+**+5.6 points at ~10× fewer tokens**, winning 4 of 6 categories:
+
+| Category | Engram | full-context |
+|---|---:|---:|
+| single-session-assistant | 94.6% | 94.6% |
+| single-session-user | **91.4%** | 82.9% |
+| knowledge-update | 84.6% | **91.0%** |
+| temporal-reasoning | **83.5%** | 81.2% |
+| single-session-preference | **80.0%** | 50.0% |
+| multi-session | **78.2%** | 66.9% |
+
+**Context for the absolute number:** the LongMemEval authors report **~82.4%** for *oracle* GPT-4o —
+the gold sessions handed directly to the reader, i.e. what perfect retrieval buys you. Engram's 84.4%
+comes from a *retrieved* 7.9k slice, so the filtered context is doing slightly better than handing the
+model the right sessions outright. Take it as a sanity anchor, not a like-for-like comparison: different
+reader, different judge.
+
+**What we could not move.** A pre-registered goal of a **≥ +8** margin was not met in three separate
+500-question runs (+5.8, +4.0, +5.6). Three independent probes say the remaining gap is not in the
+retrieval layer: (1) on multi-session, `engram_lean` and `full_context` tie exactly, so the answer no
+longer depends on which context is supplied; (2) swapping in a stronger reasoning answerer
+(`gpt-5.6-sol`) *lost* 1.6 points on the same context while doubling latency; (3) we are already at the
+published oracle ceiling. Systems reporting 94%+ on this benchmark do not publish their backbone, judge,
+or question subset, so we do not treat those as comparable. We report the miss rather than restating it.
+
+**Cost note worth more than the points:** under a reasoning answerer, the full-context baseline became
+too expensive to finish (100 questions projected past 10 hours, aborted) while the 7.9k lean path
+completed 60 questions in 40 minutes. As readers get heavier, the 10× token gap turns from a cost
+saving into a feasibility difference.
 
 ## Per-category breakdown (`engram_lean`, full 500)
 
@@ -68,8 +118,15 @@ as a separate retrieval latency claim.
 
 ### Reproduce
 
+> [!IMPORTANT]
+> **The judge endpoint used for the headline run has since been retired by its provider.** As of
+> 2026-08-27, Volcano Ark reports `deepseek-v3-2-251201` — and every other `deepseek-*` model on that
+> platform — as `status: Shutdown`, and `doubao-seed-1-6-flash-250615` as `status: Retiring`. The
+> command below is kept **verbatim as the provenance of the published numbers**; it is what produced
+> them, and it will 404 today. To re-run now, see *Running it today* below.
+
 ```bash
-# headline number (needs model access for answerer + judge; see "Provider setup" below)
+# the exact command that produced the headline numbers (judge endpoint since retired -- see above)
 HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 python eval/bench.py \
     --data s --limit 500 \
     --systems engram_lean,full_context \
@@ -79,12 +136,40 @@ HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 python eval/bench.py \
     --embedder bge-small --reasoning --persona \
     --chunks 2 --topk 15 --extract-k 8 --summ-k 28 --n-summaries 28 \
     --out data/run.jsonl
+```
 
+```bash
 python eval/report.py data/run.jsonl     # prints the per-category table above
 python eval/validate_results.py --expected-rows 500 --require-complete \
     --system engram_lean --system full_context data/run.jsonl  # 500 = full LongMemEval_S
 ```
 
+
+#### Running it today
+
+Substitute a judge that is still served (`deepseek` is the DeepSeek official API; `univibe:gpt-5.5`
+also works). Everything else is unchanged:
+
+```bash
+HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 python eval/bench.py \
+    --data s --limit 500 \
+    --systems engram_lean,full_context \
+    --answerer volcano:doubao-seed-2-0-pro-260215 \
+    --judge deepseek \
+    --extractor volcano:doubao-seed-1-6-flash-250615 \
+    --embedder bge-small --reasoning --persona \
+    --chunks 2 --topk 15 --extract-k 8 --summ-k 28 --n-summaries 28 \
+    --out data/run.jsonl
+```
+
+**Read that result honestly.** Swapping the judge swaps the measuring stick, so the absolute score from
+this command is **not** directly comparable to the 83.6 / 73.2 published above — those numbers belong to
+the judge they were measured with, and we do not restate them under a different one. What remains valid
+is the comparison *within* your run: the harness applies your judge identically to every `--systems`
+entry, so `engram_lean` vs `full_context` is still apples-to-apples. That internal contrast — a small
+retrieved slice beating the full history at a fraction of the tokens — is the actual claim, and it is
+the part you can reproduce today. When we re-publish absolute numbers it will be against a stable judge,
+as a new run with its own committed log, not a silent re-baseline of these.
 The harness applies the **same answerer and judge to every `--systems` entry**, so any comparison *within*
 a run (e.g. `engram_lean` vs `full_context`) is apples-to-apples by construction. Raw per-question logs
 (prediction + gold + correctness + tokens + latency for every question) are written to the `--out` JSONL.
