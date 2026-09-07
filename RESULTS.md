@@ -247,3 +247,36 @@ These are the kind of bugs that silently inflate or deflate memory-benchmark num
 - The hardest categories — multi-session reasoning and single-session-preference — are the active roadmap,
   updated here with the same reproduce discipline. If a future number appears in this file, the command to
   reproduce it appears next to it.
+
+---
+
+## The other measurement: is the memory a *facility*? (`eval/facility.py`)
+
+Accuracy is one axis. A memory can score well on LongMemEval and still be a store nobody reads. That
+second question has its own in-repo instrument, run the same way and held to the same rule — a number
+we cannot reproduce does not exist:
+
+```bash
+python eval/facility.py --days 7 --url http://127.0.0.1:8766 --key-file ~/.engram/watch.key
+```
+
+It reads only local signal (agent transcripts, the watcher's state and log, and the server's
+**content-free** endpoints), uses no LLM, and reports a five-rung ladder in ~20 s:
+
+| Rung | Question | How it is decided |
+|---|---|---|
+| L0 exists | does memory hold conclusions? | `/v1/stats` + `/v1/memories?facts_limit=0` |
+| L1 connected | are finished sessions actually closed, and how fast? | a finished transcript counts as closed **only** when its session id appears in `GET /v1/sessions`; lag comes only from `fed`-terminated watcher-log blocks and the hook's own `lag_s` |
+| L2 read | is anyone calling `engram_recall`? | structural `tool_use` / `function_call` matching after stripping the `mcp__<server>__` prefix — never a substring scan, which over-counts prose mentions by ~74×; calls are de-duplicated by call id, because resuming a session writes a new transcript that replays the old `tool_use` blocks verbatim (measured here: 182 raw calls, 110 distinct) |
+| L3 useful | (i) do conclusions ever supersede each other? (ii) did a recall change the answer? | (i) is measured; the reach ceiling joins **both** result shapes — Claude's `tool_result` and Codex's `function_call_output` — since joining only one leaves the other agent's recalls stuck in the denominator (that bug read 26% where the truth was 100%); (ii) prints **NOT MEASURED** — it needs human labelling and ships no machine proxy and no LLM judge |
+| L4 depended on | would turning it off for a week hurt? | **not machine-measurable**; printed as such |
+
+Two properties are deliberate. **Counts and rates only:** no field in the output schema and no line in
+the table can hold a fact, a query, a session id, a project name or a file path — the harness reads
+personal transcripts, so it must be unable to quote them. And **`--assert-no-regress` distinguishes
+exit 1 (the facility regressed) from exit 2 (the instrument itself is broken)** — zero control-tool
+calls, an unreachable server, empty roots — with an always-on control row and a stale-matcher
+tripwire, because conflating the two is how a facility metric goes quietly dead while still printing
+zeros. Each run appends one line to `results/facility.jsonl`, so the trend is a `tail`, not a join.
+
+Numbers from this harness are per-machine and are not published here.

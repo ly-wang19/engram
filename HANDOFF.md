@@ -143,3 +143,11 @@
 - **修复**: 按字节分批（`IMPORT_CHUNK_BYTES = 1.5MB`，`--max-bytes` 可调）；单批被拒只隔离该批，其余照常导入；**所有批都失败才冒泡**，保住"服务器真挂了 → 退出 75"的契约；单个超限会话按 `(size, limit)` 记账跳过，文件变大或上限提高会自动重排。
 - **验证**: 全量 pytest 绿；quickstart 零 key 退出 0；对活着的 pilot 实跑 `--once --limit 6` → 6 会话 / 32 条结论 / 1 个超限已点名。撤掉分批两个新测试变红。
 - **顺带修**: PR #26 里 `git checkout wip -- RESULTS.md` 用整份 8/17 旧文件覆盖了 main 版，删掉 72 行（含已发布的 `+5.6`、`84.4`），`test_results_integrity` 因此变红。已恢复 main 版并只补 judge 端点那一段。
+
+- **Agent**: Claude Code · **日期**: 2026-09-07 · **设施指标仪表 + 会话收尾 hook**
+- **目标**: 把"被依赖"定成 L0–L4 五级可证伪目标，并做成一条命令能读的仪表（Bet D 用在自己身上）。
+- **第一次读数**（`python eval/facility.py --days 7`）：L0 达标（2949 条结论）；**L1 未达标**——覆盖率 77.4%（Claude Code 66.7% / Codex 80.3%），但**滞后 p50 = 3.2 天**，目标 60 秒；仪表自己判定 `watch=False hook=True`，即定时器结构上到不了 60 秒，只有 hook 能。L2 未达标（7 天窗口 33 次调用，对照组 Bash 29816 次）。L3 未达标且**0% supersession 是设计后果**（结论以 `subject=session_id` 为键，两条永不争同一槽），不是调参问题。
+- **纠正了一个我一直报错的数字**：MCP 工具在会话记录里叫 `mcp__engram__engram_recall`，我此前一直 grep `engram_recall`，因此把「从未被调用」当成结论。真实全历史 171 次 / 19 个会话（162 次在其他项目，9 次自测）。仪表现在强制打印对照工具计数，且有测试锁住前缀剥离（去掉即报 0）。
+- **仪表也自动发现**：写入端（watcher → 127.0.0.1:8766）与读取端（MCP → 42.193.220.197:8456）**是两个不同的记忆**，报告顶部标 `DIFFERENT MEMORY`。
+- **hook**: `engram-watch --install-hook`（SessionEnd 槽），dry-run/backup/uninstall 齐备；审查修掉两个真缺陷（安装会把 settings.json 权限从 0600 放宽到 0644；符号链接的 settings.json 会被替换成普通文件）。**未在本机安装任何东西**，真实 `~/.claude/settings.json` sha256 全程未变。
+- **二期**: lag 百分位的取样偏差（"文件未再增长"这道闸系统性排除了最活跃的记录）；`--roots` 不影响 backlog 计算。

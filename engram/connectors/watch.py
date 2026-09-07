@@ -14,6 +14,8 @@ to use — and the one nobody has to remember to *run*, which is what the schedu
     engram-watch --status                     # is the job loaded, when did it last feed, what's the backlog
     engram-watch --uninstall [--purge]        # remove the job (+ key file, state, lock, log)
     engram-watch --every 30m                  # or keep one foreground loop instead of a scheduler
+    engram-watch --install-hook [--dry-run]   # also close each Claude Code session the moment it ends
+    engram-watch --uninstall-hook             # (SessionEnd hook; see connectors/session_hook.py)
 
 State lives in a small JSON file next to the data dir, so re-running is cheap and idempotent: a session
 already ingested at its current size is skipped, and a session that grew since last time is re-sent (the
@@ -40,9 +42,14 @@ import urllib.error
 from datetime import datetime, timezone
 from typing import Optional
 
+from . import hook_install
 from .agent_sessions import find_sessions, load_sessions
 
 DEFAULT_STATE = os.path.expanduser("~/.engram/watch_state.json")
+# The SessionEnd hook's side of the handshake: it appends here, this module folds it into `seen`.
+# Two files rather than one because a hook write into watch_state.json landing mid-tick would be
+# silently erased by the tick's own save (see load_claims).
+DEFAULT_CLAIMS = os.path.expanduser("~/.engram/hook_claims.jsonl")
 DEFAULT_URL = "http://127.0.0.1:8000"
 DEFAULT_LIMIT = 25
 DEFAULT_INTERVAL = "30m"
@@ -70,6 +77,9 @@ EXIT_USAGE = 1
 EXIT_UNREACHABLE = 75  # EX_TEMPFAIL: nothing was marked seen, the next tick simply retries
 
 _sleep = time.sleep  # injectable for the --every loop tests
+
+# Read once, so `--install-hook` can distinguish "the caller passed --url" from "argparse filled it in".
+_URL_DEFAULT = os.environ.get("ENGRAM_URL") or os.environ.get("ENGRAM_API_URL") or DEFAULT_URL
 
 
 def _load_state(path: str) -> dict:
@@ -115,6 +125,67 @@ def _parse_since(value: str) -> Optional[float]:
         raise SystemExit(f"--since expects 7d / 12h / 30m or an epoch, got {value!r}")
 
 
+def load_claims(path: str, target: Optional[str] = None) -> dict[str, int]:
+    """Transcripts the SessionEnd hook has already fed, and at what size.
+
+    Read side of the hook<->watcher handshake (connectors/session_hook.py). The hook cannot write
+    `watch_state.json`: run_once read-modify-writes it under watch.lock, so a hook write landing between
+    a tick's load and its save would be erased with no error anywhere. It appends one JSON line per fed
+    transcript instead, and until a tick folds them in, a claim counts exactly as a `seen` entry.
+
+    `target` drops claims made against a different server+namespace, the same reason run_once wipes
+    `seen` on a target change: the old target's memory of these files says nothing about the new one's.
+    """
+    out: dict[str, int] = {}
+    try:
+        with open(path, encoding="utf-8") as fh:
+            lines = fh.read().splitlines()
+    except OSError:
+        return out
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            row = json.loads(line)
+        except ValueError:
+            continue  # a hook appending while we read leaves a truncated last line; skip it, don't fail
+        if not isinstance(row, dict) or not isinstance(row.get("path"), str):
+            continue
+        if target and row.get("target") and row.get("target") != target:
+            continue
+        try:
+            out[row["path"]] = int(row.get("size") or 0)
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+def fold_claims(state: dict, path: str, target: Optional[str] = None) -> int:
+    """Move the hook's claims into `seen`. MUST be called while holding watch.lock.
+
+    Rotate-then-merge rather than read-then-truncate: a hook appending between our read and our unlink
+    would otherwise lose its claim silently. A hook holding an fd across the rotate still can, and that
+    is the deliberate side of the trade — the cost is one re-ingest, which /v1/import's content
+    fingerprints and the server's conclusion dedup absorb, whereas the other trade's cost is a permanent
+    hole in the ledger.
+    """
+    merging = path + ".merging"
+    try:
+        os.replace(path, merging)
+    except OSError:
+        return 0
+    claims = load_claims(merging, target=target)
+    seen = state.get("seen") or {}
+    seen.update(claims)
+    state["seen"] = seen
+    try:
+        os.unlink(merging)
+    except OSError:
+        pass
+    return len(claims)
+
+
 def _oversized_key(path: str, max_bytes: int) -> str:
     try:
         return f"{os.stat(path).st_size}:{max_bytes}"
@@ -125,10 +196,12 @@ def _oversized_key(path: str, max_bytes: int) -> str:
 def pending_sessions(state: dict, since: Optional[float] = None,
                      quiet_seconds: int = QUIET_SECONDS,
                      now: Optional[float] = None,
-                     max_bytes: int = IMPORT_CHUNK_BYTES) -> list[str]:
+                     max_bytes: int = IMPORT_CHUNK_BYTES,
+                     claims: Optional[dict[str, int]] = None) -> list[str]:
     """Transcripts worth ingesting: changed since we last saw them, and no longer being written to."""
     now = now if now is not None else time.time()
     seen = state.get("seen") or {}
+    claimed = claims or {}
     out = []
     for path in find_sessions(since=since):
         try:
@@ -137,8 +210,8 @@ def pending_sessions(state: dict, since: Optional[float] = None,
             continue
         if now - st.st_mtime < quiet_seconds:
             continue  # still live; ingesting now would only force a re-ingest later
-        if seen.get(path) == st.st_size:
-            continue  # unchanged since the last run
+        if seen.get(path) == st.st_size or claimed.get(path) == st.st_size:
+            continue  # unchanged since the last run, or already fed by the SessionEnd hook
         # A transcript that cannot fit in one request is skipped rather than retried every tick — but the
         # record is keyed on (size, limit), so growing the file or raising the server's cap re-queues it.
         if (state.get("oversized") or {}).get(path) == f"{st.st_size}:{max_bytes}":
@@ -349,17 +422,32 @@ def run_once(args) -> dict:
     # previous tick did not reach (a `--limit 25` backfill of 3000 files would have "seen" 25 and
     # silently dropped the rest); the size ledger already makes re-scanning cheap.
     since = _parse_since(args.since) if args.since else None
+    claims_path = getattr(args, "claims", DEFAULT_CLAIMS)
     paths = pending_sessions(state, since=since, quiet_seconds=args.quiet_seconds,
-                             max_bytes=getattr(args, "max_bytes", IMPORT_CHUNK_BYTES))
+                             max_bytes=getattr(args, "max_bytes", IMPORT_CHUNK_BYTES),
+                             claims=load_claims(claims_path, target=target))
     backlog = len(paths)
     if args.limit:
         paths = paths[:args.limit]
+    lock_path = os.path.join(os.path.dirname(args.state) or ".", "watch.lock")
 
     if not paths:
         _log(f"nothing new to ingest (backlog {backlog})")
         if not args.dry_run:
-            state.update({"last_run": time.time(), "target": target})
-            _save_state(args.state, state)
+            # Still take the lock: someone has to fold the hook's claims into `seen`, and a tick with
+            # nothing to ingest is exactly when that is free. Without this the claims file would only
+            # ever be drained on a busy tick, and would grow on a machine the hook keeps up with.
+            lock = _lock(lock_path)
+            if lock is None:
+                return {"exit": EXIT_OK, "skipped": "locked"}
+            try:
+                folded = fold_claims(state, claims_path, target=target)
+                state.update({"last_run": time.time(), "target": target})
+                _save_state(args.state, state)
+            finally:
+                lock.close()
+            if folded:
+                _log(f"folded {folded} hook claim(s) into the ledger")
         return {"exit": EXIT_OK, "sessions": 0, "backlog": backlog}
 
     seen_before = state.get("seen") or {}
@@ -376,7 +464,6 @@ def run_once(args) -> dict:
         print(f"\n[dry-run] would send {len(sessions)} session(s), {turns} turn(s) — nothing was stored")
         return {"exit": EXIT_OK, "sessions": len(sessions), "dry_run": True, "backlog": backlog}
 
-    lock_path = os.path.join(os.path.dirname(args.state) or ".", "watch.lock")
     lock = _lock(lock_path)
     if lock is None:
         _log("already running, skipping")
@@ -384,6 +471,9 @@ def run_once(args) -> dict:
 
     started = time.time()
     try:
+        # Under the lock, before anything reads `seen`: a transcript the hook already fed must not be
+        # re-closed here just because it was still claimed-but-not-folded when we listed the backlog.
+        fold_claims(state, claims_path, target=target)
         try:
             result = ingest(args.url, key, paths, outcomes=not args.no_outcomes,
                             extract_facts=args.extract_facts,
@@ -573,6 +663,140 @@ def _uninstall(args) -> int:
     return EXIT_OK
 
 
+# --- session-close hook management ------------------------------------------------------------------
+
+def _hook_settings(args) -> tuple[str, str, str, str, str]:
+    """(settings path, python, url, key file, where the target came from) for the hook installer."""
+    from . import hook_install as hi
+
+    # `--url` carries a default, so "did the caller pass it?" is only answerable by comparing against
+    # that default — and it has to be answerable, because an unpassed --url must fall through to the
+    # installed watcher job rather than to $ENGRAM_URL or 127.0.0.1:8000.
+    explicit_url = args.url if args.url != _URL_DEFAULT else ""
+    url, key_file, source = hi.resolve_target(explicit_url, args.key_file)
+    return os.path.expanduser(args.settings), args.python or sys.executable, url, key_file, source
+
+
+def _hook_target(url: str, key_file: str, state_path: str) -> tuple[str, str]:
+    """(target hash, how it compares to the watcher's ledger). Content-free: a hash and a verdict."""
+    try:
+        with open(key_file, encoding="utf-8") as fh:
+            key = fh.read().strip()
+    except OSError:
+        return "?", f"cannot read the key file {key_file} — the hook would refuse at runtime"
+    if not key:
+        return "?", f"the key file {key_file} is empty — the hook would refuse at runtime"
+    target = _target(url, key)
+    installed = _load_state(state_path).get("target")
+    if not installed:
+        return target, "the watcher has no target yet (it has never run)"
+    if installed == target:
+        return target, "matches watch_state.json"
+    return target, f"DOES NOT MATCH watch_state.json ({installed}) — the hook would refuse at runtime"
+
+
+def _install_hook(args) -> int:
+    from . import hook_install as hi
+    from . import watch_install as wi
+
+    settings, python, url, key_file, source = _hook_settings(args)
+    log = os.path.expanduser(args.hook_log)
+    if not url:
+        print(f"no server to feed: {source}. Pass --url (and --key-file), or install the watcher first "
+              f"with `engram-watch --install --key <api-key>`.")
+        return EXIT_USAGE
+    try:
+        command = hi.render_command(python, url, key_file, log, args.deadline)
+    except hi.RefuseError as exc:
+        print(f"refusing to build the hook command: {exc}")
+        return EXIT_USAGE
+
+    target, verdict = _hook_target(url, key_file, args.state)
+    # The hook module, not the watcher's: `python -m engram.connectors.session_hook` is what the
+    # settings command actually runs, and a stale editable install can have one without the other.
+    problem = wi.preflight_import(python, module="engram.connectors.session_hook")
+    print(f"settings    : {settings}")
+    print(f"interpreter : {python}")
+    print(f"url         : {url}  (from {source})")
+    print(f"key file    : {key_file}")
+    print(f"target      : {target} — {verdict}")
+    print(f"hook log    : {log}")
+    print(f"preflight   : {'ok' if not problem else 'WOULD REFUSE — ' + problem}")
+
+    try:
+        data, indent, raw = hi.load_settings(settings)
+        after = hi.dumps(hi.install(data, command), indent)
+    except hi.RefuseError as exc:
+        print(f"\nrefusing to edit {settings}: {exc}")
+        print(f"\nadd this to hooks.{hi.SLOT} by hand instead:")
+        print(json.dumps(hi.entry_for(command), indent=2))
+        return EXIT_USAGE
+
+    print(f"\n{hi.diff(raw, after, settings) or '(no change: this entry is already installed)'}")
+    if args.dry_run:
+        print("[dry-run] nothing was written; no backup was made")
+        return EXIT_OK
+    if problem:
+        print(f"refusing to install: {problem}")
+        return EXIT_USAGE
+    if raw == after:
+        print("already installed; nothing to do")
+        return EXIT_OK
+    saved = hi.backup(settings)
+    hi.write(settings, after)
+    print(f"installed the {hi.SLOT} hook" + (f"; backup at {saved}" if saved else ""))
+    print("next: engram-watch --status")
+    return EXIT_OK
+
+
+def _uninstall_hook(args) -> int:
+    from . import hook_install as hi
+
+    settings = os.path.expanduser(args.settings)
+    try:
+        data, indent, raw = hi.load_settings(settings)
+        stripped, removed = hi.uninstall(data)
+    except hi.RefuseError as exc:
+        print(f"refusing to edit {settings}: {exc}")
+        print(f"remove the hooks.{hi.SLOT} entry whose command contains "
+              f"`{hi.HOOK_MODULE}` by hand instead")
+        return EXIT_USAGE
+    if not removed:
+        print(f"no Engram entry in {settings}; nothing to remove")
+        return EXIT_OK
+    after = hi.dumps(stripped, indent)
+    print(hi.diff(raw, after, settings))
+    if args.dry_run:
+        print("[dry-run] nothing was written; no backup was made")
+        return EXIT_OK
+    saved = hi.backup(settings)
+    hi.write(settings, after)
+    print(f"removed {removed} Engram entry/entries" + (f"; backup at {saved}" if saved else ""))
+    return EXIT_OK
+
+
+def _hook_status(args) -> None:
+    """The hook's own line in `--status`: installed or not, and how far behind the claims file is."""
+    from . import hook_install as hi
+
+    settings = os.path.expanduser(args.settings)
+    try:
+        data, _indent, _raw = hi.load_settings(settings)
+        command = hi.find_command(data)
+    except hi.RefuseError as exc:
+        print(f"hook        : cannot read {settings} — {exc}")
+        return
+    if not command:
+        print(f"hook        : not installed in {settings} "
+              f"(add it with `engram-watch --install-hook`, or --dry-run first)")
+    else:
+        url, _key = hi._from_argv(command.split())
+        print(f"hook        : SessionEnd installed in {settings} → {url or 'unknown url'}")
+    claims_path = getattr(args, "claims", DEFAULT_CLAIMS)
+    pending = len(load_claims(claims_path))
+    print(f"hook claims : {pending} pending fold at {claims_path}")
+
+
 def _status(args) -> int:
     from . import watch_install as wi
 
@@ -612,14 +836,14 @@ def _status(args) -> int:
     eta = ticks * interval_s
     print(f"backlog     : {backlog} session(s) → {ticks} tick(s) at {limit}/tick, "
           f"~{eta // 3600}h{(eta % 3600) // 60:02d}m at one tick every {interval_s}s")
+    _hook_status(args)
     return EXIT_OK
 
 
 def main(argv: Optional[list[str]] = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--url", default=os.environ.get("ENGRAM_URL") or os.environ.get("ENGRAM_API_URL")
-                    or DEFAULT_URL)
+    ap.add_argument("--url", default=_URL_DEFAULT)
     ap.add_argument("--key", default="", help="API key; precedence --key > --key-file > ENGRAM_API_KEY")
     ap.add_argument("--key-file", default="", help="read the API key from this file")
     ap.add_argument("--since", default="", help="7d / 12h / 30m; default = every unseen transcript")
@@ -628,6 +852,8 @@ def main(argv: Optional[list[str]] = None) -> int:
     ap.add_argument("--quiet-seconds", type=int, default=QUIET_SECONDS,
                     help="how long a transcript must be idle before it counts as finished")
     ap.add_argument("--state", default=DEFAULT_STATE)
+    ap.add_argument("--claims", default=DEFAULT_CLAIMS,
+                    help="where the SessionEnd hook records the transcripts it fed")
     ap.add_argument("--max-bytes", type=int, default=IMPORT_CHUNK_BYTES,
                     help="per-request import budget; keep it under the server's ENGRAM_MAX_REQUEST_BYTES")
     ap.add_argument("--no-outcomes", action="store_true",
@@ -650,17 +876,36 @@ def main(argv: Optional[list[str]] = None) -> int:
     sched.add_argument("--log", default="", help="log file (default ~/.engram/logs/watch.log)")
     sched.add_argument("--purge", action="store_true",
                        help="with --uninstall: also remove the key file, state, lock and log")
+    hook = ap.add_argument_group(
+        "session-close hook (Claude Code)",
+        "Close each session the moment it ends instead of at the next tick. The scheduler above is the "
+        "floor for everything else; this is the only way to get lag under a minute.")
+    hook.add_argument("--install-hook", action="store_true",
+                      help="add the SessionEnd entry to ~/.claude/settings.json (use --dry-run first)")
+    hook.add_argument("--uninstall-hook", action="store_true", help="remove that entry")
+    hook.add_argument("--settings", default=hook_install.DEFAULT_SETTINGS,
+                      help="which settings file to edit (default ~/.claude/settings.json)")
+    hook.add_argument("--hook-log", default=hook_install.DEFAULT_HOOK_LOG,
+                      help="where the hook appends its counts-only log")
+    hook.add_argument("--deadline", type=int, default=hook_install.DEFAULT_DEADLINE_S,
+                      help="hard bound on one hook run; missing it just leaves the file to the watcher")
     args = ap.parse_args(argv)
 
-    modes = [m for m in ("install", "uninstall", "status") if getattr(args, m)]
+    modes = [m for m in ("install", "uninstall", "status", "install_hook", "uninstall_hook")
+             if getattr(args, m)]
     if args.every:
         modes.append("every")
     if len(modes) > 1:
-        ap.error("--install / --uninstall / --status / --every are mutually exclusive")
+        ap.error("--install / --uninstall / --status / --install-hook / --uninstall-hook / --every "
+                 "are mutually exclusive")
     if args.install:
         return _install(args)
     if args.uninstall:
         return _uninstall(args)
+    if args.install_hook:
+        return _install_hook(args)
+    if args.uninstall_hook:
+        return _uninstall_hook(args)
     if args.status:
         return _status(args)
     if args.every:
