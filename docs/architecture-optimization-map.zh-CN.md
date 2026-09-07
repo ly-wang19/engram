@@ -1,6 +1,6 @@
 # Engram 架构优化地图
 
-最后更新：2026-09-01
+最后更新：2026-09-07
 
 用途：这是给项目负责人和后续 AI/人类贡献者看的本地中文驾驶舱。它回答四个问题：
 
@@ -44,7 +44,8 @@ flowchart TD
   RULE["RuleExtractor 兜底<br/>真实会话 12 轮 → 11 条垃圾"]
 
   PARSE["connectors/agent_sessions<br/>剥 thinking / tool_use · 密钥脱敏"]
-  WATCH["connectors/watch<br/>静默 15 min 后批量 · 幂等 · 尚无定时"]
+  WATCH["connectors/watch<br/>静默 15 min 后批量 · launchd/systemd 每 30 min 一 tick · 幂等"]
+  HOOK["connectors/session_hook<br/>Claude Code SessionEnd 即时喂<br/>1 次 /v1/import + 1 次 close · 目标不符即拒绝"]
   OUT["会话结论蒸馏 · 每会话 1 次 LLM<br/>consolidate/outcomes.py<br/>decision / finding / lesson / open_question"]
 
   CF["冲突检测 → 非破坏性失效<br/>conflict.py · supersedes 链"]
@@ -72,6 +73,9 @@ flowchart TD
   RULE -.->|"污染"| CORE
 
   SRC_B --> PARSE --> WATCH
+  SRC_B --> HOOK
+  HOOK -->|"复用 watch.ingest"| WATCH
+  HOOK -.->|"hook_claims.jsonl（唯一含路径的文件，0600）"| WATCH
   WATCH -->|"POST /v1/import"| CORE
   WATCH -->|"POST /v1/sessions/close"| OUT
   OUT --> CLS --> CORE
@@ -97,7 +101,7 @@ flowchart TD
   classDef hazard fill:#FBE3E7,stroke:#C4485A,color:#3F1A22
   classDef eval fill:#ECEEF2,stroke:#6B6F7C,color:#2A2E38,stroke-dasharray:4 3
   class CORE,EMB core
-  class SRC_B,PARSE,WATCH,OUT,CLS,LIST,AUDIT,CONSOLE new
+  class SRC_B,PARSE,WATCH,HOOK,OUT,CLS,LIST,AUDIT,CONSOLE new
   class RULE,HASH hazard
   class BENCH eval
 ```
@@ -128,12 +132,16 @@ flowchart TD
 | Raw evidence fusion | 把源会话、summary、fact provenance 合成可读上下文 | `memory.py::lean_context`, `_provenance_detail_chunks`, `_aggregation_block` | 已证明 facts-only 不够，当前持续强化 hybrid |
 | Aggregation evidence | 为 count/sum/page/hour/money 问题生成结构化候选表 | `engram/retrieve/aggregate.py` | 近期重点优化区，已连续合并 3 个小改动 |
 | Evaluation harness | 用统一 answerer/judge/full-context baseline 验收 | `eval/bench.py`, `eval/ablate_features.py`, `eval/longmemeval.py` | 所有算法改动必须有日志和测试 |
+| Facility 度量（设施性） | 不测准确率，测「这套记忆有没有人真的在用」：L0 存在 / L1 接通 / L2 被读 / L3 有用 / L4 被依赖 | `eval/facility.py`, `results/facility.jsonl` | 只读本机信号（transcripts、`watch_state.json`、`watch.log`、`hook.log`、`/v1/stats` 等 content-free 端点），无 LLM，只出计数与比率 |
 | 商业交付与安全边界 | 鉴权、租户路径、请求边界、健康检查、容器、发布门禁 | `engram/server/app.py`, `engram/service.py`, `Dockerfile`, `deploy/`, `scripts/check_release.py` | 0.1.0 单节点自托管，默认失败关闭；不改变算法主链 |
 
 ## 已落地优化台账
 
 | 日期 | 优化点 | 架构位置 | 解决的问题 | 验收证据 |
 | --- | --- | --- | --- | --- |
+| 2026-09-07 | `facility_metric`（L0–L4 设施性度量口径） | Evaluation harness 新增一条与 benchmark 并列的度量线（`eval/facility.py`），不触碰检索、打分或读路径 | 准确率这条线已经有 harness 兜底（84.4% vs 73.2%），但「记忆是不是一个有人依赖的设施」此前完全没有仪表：记忆在飞快变满（本机 2911 条结论 / 552 episodes / 495 个已喂会话），却没有任何数字回答它有没有被读过、读到的是不是空的、写入延迟是多少。本次把 owner 的五级目标阶梯变成一条 15–22 秒、无 LLM、只出计数与比率的命令。四个刻意的口径决定：① **closed 只认服务端**——`watch_state.json["seen"]` 会在 3 次 close 失败后记下「放弃」，把它当证据会把失败读成成功，因此唯一证据是 `GET /v1/sessions` 里出现 `_session_label(path)`；② **lag 只认 `fed` 结尾的 watch.log 区块**——日志里有 158 个区块头但只有 35 次真正 `fed`（另有 122 次 `server unreachable`），按区块头计会给从未落库的会话报延迟；③ **工具调用按结构匹配、不按子串**——名字先剥 `mcp__<server>__` 前缀再判 `engram_` 开头，且必须是 `tool_use` / `function_call` 块；本机 4531 行文本提到过 `engram_*`，子串匹配会把 61 次真实调用夸大 74 倍。字节预过滤集里 `"tool_result"` 是独立必需项——`"tool_use_id"` 不含 `"tool_use"`（少一个引号），漏掉它会让 recall reach 静默变 0 而其余数字全部正常；④ **exit 1（设施退化）与 exit 2（仪表本身坏了）分开**，并常驻打印 control 行（本机 exec 47047 / Bash 29561 / exec_command 17011，137 个工具名）——control 为 0 只可能是匹配器瞎了，不可能是事实。隐私上，输出 schema 与表格里没有任何字段能装下事实文本、查询、session id、项目名或文件路径；`/v1/memories` 一律带 `facts_limit=0`（任何正值会返回事实原文）。本次**只度量、不修**：读写目标不一致、L3 结论层不去重、Codex 无 session_end 事件三项均如实上报，不由度量脚本顺手改掉 —— 一个会修复自己所测对象的指标，对两边都不可信 | `tests/test_facility.py` 19 项（全部合成 fixture，不碰 owner 真实语料；含 74 倍子串膨胀、`mcp__` 前缀、缺 `"tool_result"` 预过滤时 reach 塌成 0、dry-run/unreachable 区块不计延迟、文件长大后不进延迟样本、放弃型 `seen` 条目算 ledger-done 但不算 closed、golden 输出不含任何 fixture 路径/事实/session id、control=0 → exit 2、coverage 掉 >5pp → exit 1）+ 全量 `pytest tests/` 614 passed / 1 skipped + `examples/quickstart.py` 无 key 通过；本机首跑日志 `results/facility.jsonl`。复现：`python eval/facility.py --days 7 --url http://127.0.0.1:8766 --key-file ~/.engram/watch.key` |
+| 2026-09-07 | 会话结束即喂：Claude Code `SessionEnd` hook + hook↔watcher 交接 | 写路径新增第二个触发点（`connectors/session_hook.py`）/ settings.json 安装器（`connectors/hook_install.py`）/ 调度层扩展（`connectors/watch.py` 的 `load_claims`、`fold_claims`、`--install-hook` / `--uninstall-hook` / `--status` hook 段） | ① 写入侧的结构性延迟：watcher = 静默 900s + tick 1800s，下限就是 15–45 min，本机实测 p50 78.7h（backlog 深于单 tick `--limit`）。hook 在会话结束后数秒内喂完同一个文件，成本仍是**每会话 1 次 LLM**（1 次 `/v1/import` + 1 次 `/v1/sessions/close`），不是每轮；② 两个写入者会互相踩：hook **不写** `watch_state.json`（`run_once` 在 `watch.lock` 下读-改-写，hook 的写会被 tick 的旧值静默覆盖），改为 `O_APPEND` 追加 `~/.engram/hook_claims.jsonl`，watcher 在自己已经持有的锁内 `fold_claims` 折算进 `seen`；③ 喂错服务器：`~/.claude.json` 的 MCP `engram` 指向公开 demo，hook 的 url/key 只从**已安装的 watcher job**解析并字面写进 settings.json 命令串，运行时再用 `_target` 与 `watch_state.json` 比对，不符即 `refused:` 退出；④ 不能碰 owner 的 settings.json：安装器先做「能否原样复现」的往返断言，不能复现就打印条目让人手贴并非零退出，能复现才先备份 `settings.json.engram-bak-<ISO8601>` 再 temp-file + `os.replace`；卸载只按命令串里的 `engram.connectors.session_hook` 认自己那一片叶子；写回时**保留原权限位并跟随 symlink**（owner 的真实文件是 0600 且 settings.json 允许带 token 的 `env` 段，按 umask 重写会把它悄悄放宽成 0644；`~/.claude/settings.json` 常是 dotfiles 仓库的软链，`os.replace` 会把软链换成普通文件——安装报成功、被版本管理的那份从未收到条目、下次 checkout 又把 hook 拿走） | `tests/test_session_hook.py`（33 项，含 4 组 settings fixture 的 `uninstall(install(x)) == x` 往返、第三方 `SessionEnd` 条目存活、目标不符零调用、`skipped (seen)` 幂等、`sk-` 密钥端到端脱敏、`test_hook_close_is_visible_to_harness` 与 harness 共用 `_session_label` 的耦合测试）；复现：`engram-watch --install-hook --dry-run --settings ~/.claude/settings.json` |
+| 2026-09-07 | `facility_metric` 复核修正：Codex 结果 join + 重放去重 | 只动 `eval/facility.py` 的统计口径，不触碰检索、写路径或服务端 | 独立复核用「另一种算法重算同一个数」的方式攻击 harness 自己的输出，抓到两个会让指标说谎的口径缺陷：① **recall reach 把 Codex 的调用算进分母却永远算不进分子**——结果 join 只认 Claude 的 `tool_result` 块，Codex 的结果是自己的 `function_call_output` payload 行（按 `call_id` 关联），而 `"function_call_output"` 并不包含 `"function_call"` 这串字节（少一个引号），所以调用被计数、结果永远读不到。本机 `--all` 因此打印 `13/50 = 26%`，看上去像「四次召回三次落空」；把 Codex 的 `function_call_output` / `custom_tool_call_output` 一并 join、并剥掉 Codex 给 MCP 结果加的 `Wall time: N seconds\nOutput:\n` 前缀（不剥就会让每条 Codex 召回只靠前缀长度过关、空召回哨兵句永远命中不到）之后，真值是 `42/42 = 100%`。错的方向最坏：它把「记忆答得出来」误报成「记忆答不出来」；② **恢复会话的重放被当成新的读**——`--resume` 会另写一个 transcript 文件，把整段历史连同 `tool_use` 块和它们的 id 一起重放，逐文件累加就把同一次调用数了多遍。本机全语料 182 次原始 engram 调用其实只有 110 次不同调用；`--all` 的 L2 因此打印 154，真值 94（虚高 64%）。按 call id 去重（两端 call id 都是每次调用唯一，本机 182 次调用无一缺 id）后与独立重算逐位一致。虚高落在 L2 —— 恰好是 owner 想做大的那一级，指标不能替它注水；③ 顺带把 `drain ETA` 改成 `>=`：它按每 tick 满额 25 个新会话算，而 watch.log 自己记录的净排空是 39 个 tick 从 2064 降到 1596（约 12/tick），原来的写法是一个被自家日志证伪的数 | `tests/test_facility.py` 新增 3 项（Codex `function_call_output` 能 join 到 reach、带 `Wall time` 前缀的空召回不算 reached、重放文件不重复计数且换 id 后仍计两次）；全量 `pytest tests/` 614 passed / 1 skipped；本机复核：`--all` L2 154→94、reach 26%→100%，两项均与独立脚本重算结果逐位相同。复现：`python eval/facility.py --all --url http://127.0.0.1:8766 --key-file ~/.engram/watch.key --no-out` |
 | 2026-09-04 | `agent_session` 导入门 + `embedder_blind` 体检 + `engram-watch --install` 调度 | System-1 批量导入（`Memory.import_messages`）/ 服务层体检与状态（`MemoryService._embedder_blindness`、`stats.feed`）/ 连接器调度（`connectors/watch.py`、`connectors/watch_install.py`） | ① 无 LLM 时 `RuleExtractor` 把真实会话 12 轮抽成 11 条垃圾、owner 库 88 条事实 84 条 `occupation`：`source=agent_session` 的会话默认只存储+摘要并盖 `consolidated=True/extraction=outcomes_only`，逐轮抽取需 `consolidate=true` 且服务端有 LLM；② `HashingEmbedder` 对中文区分度 0.000 而产品不说：非 ASCII 占比 ≥20% 的库在 `/v1/audit` 出一条 `embedder_blind`（附迁移命令），`agent_status` 同步给 agent；③ 记忆没人喂（1909 个会话 0 次调用）：`engram-watch --install` 装 launchd/systemd 定时 tick，`stats.feed` 说明上次喂入时间；④ 首次回灌 3108×100 轮 ≈ 30 万次逐轮调用：watch 默认不传 `consolidate`，每会话只在 close 时 1 次 outcomes 调用 | `tests/test_agent_sessions.py::test_agent_session_import_without_llm_defers_per_turn_extraction`、`::test_records_import_still_rule_extracts`、`tests/test_service_paths.py::test_audit_embedder_blind_fires_on_hashing_non_ascii_store`、`tests/test_watch_install.py`、`tests/test_server.py::test_import_agent_sessions_defaults_to_outcomes_only_and_feed_stats`；本机 launchd 实装/卸载记录见 `HANDOFF.md` 2026-09-04 |
 | 2026-06-30 | `explicit_preference_extraction` | System-2 facts 抽取 / Profile memory | 补齐 `I prefer/avoid/love/enjoy...` 等显式偏好事实 | `results/preference_extraction_experiments.md`, `results/preference_extraction_lme_s_context30.jsonl` |
 | 2026-06-30 | `preference_object_filter` | System-2 facts 抽取 / Profile precision | 过滤 `it/these ideas/those suggestions` 等弱偏好对象，减少画像污染 | `results/preference_object_filter_experiments.md`, `results/preference_object_filter_lme_s_context30.jsonl` |
@@ -267,7 +275,7 @@ lossless episodes
 
 **个人记忆路径**（owner 的 agent 会话，中文，用 owner 自己的库验收）：
 1. ~~兜底加门：无 LLM 不抽取、非 ASCII 语料不用 hashing。~~ **已完成（2026-09-04）**：agent 会话导入默认 outcomes-only；`GET /v1/audit` 报 `embedder_blind` 并给 `ENGRAM_EMBEDDER=multilingual ENGRAM_REEMBED_ON_MISMATCH=1`。
-2. ~~记忆自己长：watch 定时 + 批量导入的抽取成本上限。~~ **已完成（2026-09-04）**：`engram-watch --install --key <key>`（launchd / systemd；cron 只打印行并写 key 文件）、`engram-watch --status`、`engram-watch --uninstall --purge`；watch 默认不传 `consolidate`，每会话 1 次 close-time 调用。注意安装前置检查：目标解释器必须能在干净环境 `import engram.connectors.watch`（本机 editable 安装指向主检出，尚无此模块，安装会拒绝并给出 `pip install -e` 命令）。
+2. ~~记忆自己长：watch 定时 + 批量导入的抽取成本上限。~~ **已完成（2026-09-04；2026-09-07 补齐延迟）**：会话结束即喂由 `engram-watch --install-hook` 装的 Claude Code `SessionEnd` hook 承担，把「会话结束 → 结论进库」从 15–45 min 的结构性下限压到秒级；Codex 侧 `~/.codex/hooks.json` 没有 session_end 槽（占本机 2073 个完成会话的 80.2%），因此**「≥90% 已闭合」目前只对 Claude Code 可声称**，这是一个具名的未决项，不能四舍五入掉。旧结论：**（2026-09-04）**：`engram-watch --install --key <key>`（launchd / systemd；cron 只打印行并写 key 文件）、`engram-watch --status`、`engram-watch --uninstall --purge`；watch 默认不传 `consolidate`，每会话 1 次 close-time 调用。注意安装前置检查：目标解释器必须能在干净环境 `import engram.connectors.watch`（本机 editable 安装指向主检出，尚无此模块，安装会拒绝并给出 `pip install -e` 命令）。
 3. 身份解析收口到一个边界。
 
 每一步都必须留下可复现日志，不能只留下“感觉更好”。个人路径的“日志”是 owner 库上的前后对比

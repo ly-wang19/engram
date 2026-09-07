@@ -35,7 +35,11 @@ UNLOAD_WAIT_S = 10.0
 # even when the installed package lacks the module (that is exactly how the first real install got a
 # green preflight and a job logging ModuleNotFoundError). Leave the repo before importing: launchd and
 # systemd start the job from `/`.
-PREFLIGHT_CODE = f"import os; os.chdir('/'); import {MODULE}"
+def _preflight_code(module: str) -> str:
+    return f"import os; os.chdir('/'); import {module}"
+
+
+PREFLIGHT_CODE = _preflight_code(MODULE)
 
 
 class InstallError(Exception):
@@ -72,9 +76,10 @@ def write_key_file(path: str, key: str) -> None:
     os.chmod(path, 0o600)
 
 
-def preflight_import(python: str, *, home: Optional[str] = None, run: Runner = _run) -> Optional[str]:
-    """Can `python` import the watcher with the environment a scheduler gives it? Returns the error text,
-    or None when it can.
+def preflight_import(python: str, *, module: str = MODULE, home: Optional[str] = None,
+                     run: Runner = _run) -> Optional[str]:
+    """Can `python` import `module` with the environment a scheduler (or a hook) gives it? Returns the
+    error text, or None when it can.
 
     Found on the first real install: the plist loaded, `launchctl print` said running, and the tick
     logged `No module named engram.connectors.watch` — the shell had the repo on sys.path via cwd, the
@@ -83,11 +88,11 @@ def preflight_import(python: str, *, home: Optional[str] = None, run: Runner = _
     scheduler's environment (no PYTHONPATH, no venv activation, cwd `/`), not the caller's."""
     p = paths_for(home)
     res = run(["env", "-i", f"HOME={p['home']}", "PATH=/usr/bin:/bin:/usr/sbin:/sbin",
-               python, "-c", PREFLIGHT_CODE])
+               python, "-c", _preflight_code(module)])
     if res.returncode == 0:
         return None
     detail = (res.stderr or res.stdout or "").strip().splitlines()
-    return (f"{python} cannot import {MODULE} in a clean environment "
+    return (f"{python} cannot import {module} in a clean environment "
             f"({detail[-1] if detail else 'no output'}). launchd/systemd run without your shell's "
             f"PYTHONPATH or cwd, so the package must be installed into that interpreter: "
             f"`{python} -m pip install -e <repo>` (or pass --python <interpreter that has it>)")
