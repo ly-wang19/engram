@@ -151,3 +151,9 @@
 - **仪表也自动发现**：写入端（watcher → 127.0.0.1:8766）与读取端（MCP → 42.193.220.197:8456）**是两个不同的记忆**，报告顶部标 `DIFFERENT MEMORY`。
 - **hook**: `engram-watch --install-hook`（SessionEnd 槽），dry-run/backup/uninstall 齐备；审查修掉两个真缺陷（安装会把 settings.json 权限从 0600 放宽到 0644；符号链接的 settings.json 会被替换成普通文件）。**未在本机安装任何东西**，真实 `~/.claude/settings.json` sha256 全程未变。
 - **二期**: lag 百分位的取样偏差（"文件未再增长"这道闸系统性排除了最活跃的记录）；`--roots` 不影响 backlog 计算。
+
+- **Agent**: Claude Code · **日期**: 2026-09-08 · **决定：中立记分板不发布**
+- **背景**: 8/17 跑过同 answerer/judge 的 60 题对比（`results/scoreboard_{mem0,hy}_n60.jsonl`，主检出未跟踪）：Engram 76.7%/78.3% vs mem0 20.3% / Hy-Memory 23.3%。
+- **owner 判断**: "差这么多不想放了"。日志证实是对的——mem0 上下文中位 205 token（Engram 8151）、Hy-Memory 754 token 且延迟中位 1247s；**两者各 43/60 弃答**。适配器按 `topk` 取几条原子记忆，再套 Engram 自己的弃答型作答提示：对手拿到薄片 + 鼓励弃答的提示，这是系统性障碍不是能力差距。发出去会被复现打脸，自毁 Bet D。
+- **发布前提（写死）**: 每个竞品适配器先在**对方自己的 benchmark** 上复现出对方自报数字的量级；复现不出即视为我们的适配器 bug。在此之前这些日志只是内部诊断，**任何 agent 不得把它们写进 README / RESULTS / 官网**。
+- **不变**: 追总分的路径仍是压缩层那 9.4 分（`COMPARISON.md` §4）与全量 LOCOMO；不靠对比对手。
