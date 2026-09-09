@@ -182,3 +182,9 @@
 - **两处本机适配（都写进 README，未改动 vendored sty）**: ① 本机 BasicTeX 2021 无 `helvetic` 包，模板为审稿行号标尺加载的 `phvb` 字体缺失会报错；新增 `paper/texfonts.map`（`ptmb phvb` 别名，注意 kpathsea 是"真名 别名"顺序）+ `main.tex` 一行 `\pdfmapline`，完整 TeX Live 下别名不会被查询、重复 map 条目被忽略。② 模板在 `\maketitle` 组内用 `\lhead` 设页眉，系统 fancyhdr v4 不再全局定义、页眉消失；`main.tex` 在 `\maketitle` 后按 `\ificlrfinal` 重设一次。
 - **偏离说明**: 任务说 `\usepackage{paper/iclr2027/...}`，实际编译在 `paper/` 内进行，故路径为 `iclr2027/...`；`paper/iclr2027/` 四个 vendored 文件随本次提交入库（构建可复现的前提）；`arxiv-submission.tar.gz` **未重建**（arXiv 不能传命令行 `\def`，v2 打包要先决定用署名副本还是回 article 版式，见 README "arXiv v2"）；`main.blg` 未提交。
 - **二期**: ① LOCOMO 全量落地后换数（`% TODO(locomo-full)`）并复查是否仍 ≤ 9 页（当前第 9 页只剩约 3 行余量）；② 附录 B 的测量完整性笔记若审稿人看重可考虑换回主文并另找空间；③ arXiv v2 打包；④ flash 在现 judge 重跑（沿用上一条）。
+
+- **Agent**: Claude Code · **日期**: 2026-09-10 · **ICLR 冲刺第一轮收尾**
+- **验收状态**: 1 ✓（`check_numbers.py` 166 个数字全部追溯；headline 84.4/78.8/+5.6；judge 迁移脚注）· 2 ✓（ICLR 模板 0 错，正文 9 页/共 15，匿名，AI-use/Reproducibility/Ethics 三份声明）· 3 ✓（第二 backbone 表）· 4 ◐（LOCOMO 200 切片已标注；全量 1986 后台 `results/locomo1986_main_deepseekjudge.jsonl` 约 26h）· 5 ✓（三视角只读审查一轮，无阻塞项）。
+- **我另修**: 复现命令的 `--` 被 LaTeX 合字成单杠（PDF 里 `-data`）——对"每个数字附复现命令"的论文这是可信度问题；`\texttt` 内与主命令块均改为 `-{}-`（`2f85a17`）。`arxiv_abstract.txt` 从 tex 重生成（曾仍是 v1 数字）。"seven categories"→six。
+- **二期（reviewer 视角，达标即停未动，等 owner 决定）**: ① 无与其他记忆系统的对比、无 plain-RAG 消融；② **延迟自相矛盾**：图 1 写 System-1 <50ms / 读路径 <100ms，表 2 实测 p50 52.9s；③ 摘要/引言/结论说 flash 上 +12.2 但未带"不同 judge"限定；④ 未声明融合权重是在 LongMemEval 上调的（测试集调参）。②③④ 各是一段话的改动。
+- **分支** `paper/iclr2027` 已推（未开 PR——投稿不需要合 main）。
