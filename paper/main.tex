@@ -71,11 +71,15 @@ knowledge graph, and resolves contradictions \emph{without} an LLM call per fact
 deleting, so every fact retains provenance and a supersession chain. A hybrid read path fuses dense, lexical,
 graph, and recency/salience signals, applies a point-in-time (``as-of'') temporal filter, and assembles a
 compact, provenance-tagged context. On the full 500-question \textsc{LongMemEval}\textsubscript{S} benchmark,
-graded by the \emph{official} category-specific judge, \engram{}'s lean configuration---which answers from a
-$\sim$9.6k-token retrieved slice, never the full history---scores \textbf{83.6\%} versus \textbf{73.2\%} for
-the full-context baseline ($+10.4$ points, McNemar exact $p<10^{-6}$) while using \textbf{$\sim$8$\times$
-fewer tokens} (9.6k vs.\ 79k), with 0 of 500 questions errored under both systems. We find the gain is load-bearing on the read path being
-\emph{hybrid}: a facts-only path loses recall, while facts plus retrieved raw chunks recover detail. Beyond
+graded with the \emph{official} category-specific judge prompts, \engram{}'s lean configuration---which
+answers from a $\sim$7.9k-token retrieved slice, never the full history---scores \textbf{84.4\%} versus
+\textbf{78.8\%} for the full-context baseline ($+5.6$ points, McNemar exact $p=0.009$) while using
+\textbf{10$\times$ fewer tokens} (7.9k vs.\ 79k), with 0 of 500 questions errored under both systems. The
+advantage grows for a weaker reader: with a small answerer the same slice wins by $+12.2$ points. On a
+200-item slice of LOCOMO, whose $\sim$16k-token histories leave little for retrieval to remove, the two
+tie overall while the lean path wins the adversarial and multi-hop categories. We find the gain is
+load-bearing on the read path being \emph{hybrid}: a facts-only path loses recall, while facts plus
+retrieved raw chunks recover detail. Beyond
 the system, we contribute a single neutral, in-repo evaluation harness with the official judge baked in, the
 full-context baseline in every table, and the raw per-question logs published---and we document the
 measurement-integrity pitfalls (truncation, home-grown judges, full-history ``leaks'') that silently distort
@@ -97,7 +101,7 @@ than full-context, but \emph{not more accurate}. Beating full-context \emph{on a
 retrieved slice that outperforms the noisy full window---is the harder and more valuable target, because it
 turns memory from a cost optimization into a quality improvement. Second, \textbf{reproducibility}: memory
 benchmarks are reported on inconsistent harnesses with different ingestion, answer prompts, and judges, so a
-single system can appear at 58\%, 66\%, or 92\% depending on the source, and different papers give
+single system can appear tens of points apart depending on the source, and different papers give
 contradictory orderings. In a field where every number is contested, a neutral harness anyone can re-run is
 itself a contribution.
 
@@ -112,17 +116,29 @@ fusion, salience decay, and asynchronous consolidation, and build in the seams b
   conflict resolution: a contradicted fact is \emph{invalidated} (with a \texttt{supersedes} chain and full
   provenance), never overwritten, and the common case is resolved with \emph{no} LLM call.
   \item \textbf{The empirical result that a lean retrieved context beats full-context on accuracy}
-  (\S\ref{sec:results}): $+10.4$ points (83.6\% vs.\ 73.2\%) at $\sim$8$\times$ fewer tokens on the full
-  500-question \textsc{LongMemEval}\textsubscript{S} under the official judge---i.e.\ removing distractors
-  \emph{raises} accuracy---together with the finding that a \emph{hybrid} facts-plus-chunks read path is
+  (\S\ref{sec:results}): $+5.6$ points (84.4\% vs.\ 78.8\%) at 10$\times$ fewer tokens on the full
+  500-question \textsc{LongMemEval}\textsubscript{S} under the official judge prompts\footnote{\label{fn:judge}%
+  The arXiv~v1 of this paper reported 83.6\% vs.\ 73.2\% ($+10.4$) at 9.6k vs.\ 79k tokens on the same % arxiv-v1
+  500 questions. That run was graded by a DeepSeek-V3.2 judge served through a third-party endpoint that % arxiv-v1
+  has since been retired (the model id now returns \texttt{NotFound}), so it can no longer be re-run. % arxiv-v1
+  Every number in this version comes from a fresh full-set run of the current code with the judge moved % arxiv-v1
+  to DeepSeek's official API (\S\ref{sec:setup}). The judge is what moved the absolute scores: the % arxiv-v1
+  unchanged full-context baseline scored 73.2\% and 76.0\% in two full-set runs under the retired judge % arxiv-v1
+  and 77.6\%, 77.4\% and 78.8\% in three runs under the current one, while \lean{} moved % arxiv-v1
+  83.6\%\,$\rightarrow$\,84.4\%; the gap therefore narrowed from $+10.4$ to $+5.6$. The reproduce % arxiv-v1
+  command in \S\ref{sec:setup} targets the current judge; both logs stay committed.}---i.e.\ removing % arxiv-v1
+  distractors \emph{raises} accuracy---and the margin widens to $+12.2$ for a small answerer
+  (\S\ref{sec:backbones}), together with the finding that a \emph{hybrid} facts-plus-chunks read path is
   load-bearing (facts alone lose recall).
   \item \textbf{A neutral, reproducible harness} (\S\ref{sec:setup}): one in-repo pipeline with the official
   judge baked in, the full-context baseline in every table, the same answerer and judge applied to every
   system by construction, and the raw per-question logs published. We additionally document the
   measurement-integrity pitfalls we found and fixed.
-  \item \textbf{A per-category analysis} (\S\ref{sec:results}) isolating where bi-temporal modeling pays off
-  (knowledge-update 87.5\%, temporal 81.1\%) and where headroom remains (multi-session aggregation,
-  preference).
+  \item \textbf{A per-category and cross-backbone analysis} (\S\ref{sec:results}) isolating where the lean
+  slice wins (multi-session $+11.3$, single-session-preference $+30.0$, single-session-user $+8.6$) and
+  where it loses (knowledge-update $-6.4$), plus a second benchmark---a labelled 200-item LOCOMO
+  slice (\S\ref{sec:locomo})---that gives independent evidence for the abstention gate and the multi-hop
+  planner and exposes a date-granularity limitation of fact extraction.
 \end{enumerate}
 
 \engram{} is dual-licensed (AGPL-3.0 plus a commercial license), self-hostable, and runs end-to-end with zero
@@ -158,8 +174,9 @@ cheaper.
 across categories (single/multi-session, knowledge-update, temporal reasoning, preference, and abstention),
 with category-specific judge prompts. LOCOMO~\citep{maharana2024locomo} evaluates very long-term
 conversational memory, and more recent benchmarks extend the setting to multimodal histories
-(Mem-Gallery~\citep{bei2026memgallery}). We report on \textsc{LongMemEval}\textsubscript{S} here and treat
-LOCOMO and additional backbones as immediate future work (\S\ref{sec:limitations}).
+(Mem-Gallery~\citep{bei2026memgallery}). We report on \textsc{LongMemEval}\textsubscript{S} with two answerer
+backbones and on a 200-item LOCOMO slice (\S\ref{sec:locomo}); the full LOCOMO set is in progress
+(\S\ref{sec:limitations}).
 
 \paragraph{Retrieval.}
 \engram{}'s read path builds on dense retrieval~\citep{karpukhin2020dpr} with modern dense sentence
@@ -391,13 +408,16 @@ temporal off-by-one tolerance, knowledge-update old-information tolerance, prefe
 
 \paragraph{Models.}
 Embedder: \texttt{BAAI/bge-small-en-v1.5} (local, no API key). System-2 fact extractor:
-\texttt{doubao-seed-1.6-flash}. Answerer: \texttt{doubao-seed-2.0-pro}. Judge: \texttt{DeepSeek-V3.2}, a
-strict standard judge. Models are addressed as \texttt{provider:model} and resolved via LiteLLM, so any
-OpenAI-compatible endpoint (OpenAI, DeepSeek, a local model) can be substituted and the same commands run.
+\texttt{doubao-seed-1.6-flash}. Answerer: \texttt{doubao-seed-2.0-pro} for the headline, and the small
+\texttt{doubao-seed-1.6-flash} as a second backbone (\S\ref{sec:backbones}). Judge: DeepSeek's official API
+(\texttt{deepseek-chat}, which served DeepSeek-V4-Flash at the time of the runs), prompted with the official
+LongMemEval judge prompts; footnote~\ref{fn:judge} explains why this differs from the arXiv~v1 judge. Models
+are addressed as \texttt{provider:model} and resolved via LiteLLM, so any OpenAI-compatible endpoint (OpenAI,
+DeepSeek, a local model) can be substituted and the same commands run.
 
 \paragraph{Systems.}
 \lean{} (our headline) retrieves a small hybrid slice---conflict-resolved bi-temporal facts $+$ the most
-relevant raw session chunks $+$ session summaries---and answers from \emph{that alone} ($\sim$9.6k tokens),
+relevant raw session chunks $+$ session summaries---and answers from \emph{that alone} ($\sim$7.9k tokens),
 never the full history. \full{} is the baseline: stuff the entire haystack into the prompt ($\sim$79k tokens).
 The harness applies the \emph{same answerer and judge to every system}, so any within-run comparison is
 apples-to-apples by construction.
@@ -423,16 +443,21 @@ $w_{\text{sem}}$ & $w_{\text{lex}}$ & $w_{\text{graph}}$ & $w_{\text{rec}}$ & $w
 \end{table}
 
 \paragraph{Reproduce.}
-The headline run is a single command (raw per-question logs are committed to the repository):
+The headline run is a single command (raw per-question logs are committed to the repository as
+\texttt{results/run500\_v3\_main\_deepseekjudge.jsonl}):
 \begin{quote}\small\ttfamily
 python eval/bench.py --data s --limit 500 \textbackslash\\
 \hspace*{2em}--systems engram\_lean,full\_context \textbackslash\\
-\hspace*{2em}--answerer volcano:doubao-seed-2-0-pro \textbackslash\\
-\hspace*{2em}--judge volcano:deepseek-v3-2 --extractor volcano:doubao-seed-1-6-flash \textbackslash\\
+\hspace*{2em}--answerer volcano:doubao-seed-2-0-pro-260215 \textbackslash\\
+\hspace*{2em}--judge deepseek --extractor volcano:doubao-seed-1-6-flash-250615 \textbackslash\\
 \hspace*{2em}--embedder bge-small --reasoning --persona \textbackslash\\
 \hspace*{2em}--chunks 2 --topk 15 --extract-k 8 --summ-k 28 --n-summaries 28
 \end{quote}
-\texttt{python eval/report.py <run.jsonl>} recomputes every table below from the logs.
+The second backbone substitutes \texttt{--answerer volcano:doubao-seed-1-6-flash-250615}; the LOCOMO slice
+substitutes \texttt{--data locomo --limit 200} (\texttt{eval/locomo.py} converts the public LOCOMO release
+into the harness's item format). \texttt{python eval/report.py <run.jsonl>} recomputes every table below
+from a log, and \texttt{python paper/check\_numbers.py} asserts that every number in this paper's main text
+equals a value recomputed from the committed logs.
 
 \paragraph{Measurement-integrity notes.}
 We document the bugs that silently inflate or deflate memory-benchmark numbers, because they are the reason
@@ -440,44 +465,49 @@ cross-source numbers disagree:
 \begin{enumerate}
   \item \textbf{Lean, not full-history (the honest test).} An earlier headline prepended facts \emph{above the
   entire history}; because that system \emph{contains} full-context, it cannot really lose to it and does not
-  validate the retrieval thesis. The headline is now \lean{}, which answers from a $\sim$9.6k-token retrieved
+  validate the retrieval thesis. The headline is now \lean{}, which answers from a $\sim$7.9k-token retrieved
   slice.
   \item \textbf{Full-context truncation.} The baseline was once capped below the haystack size, feeding it
   only the oldest sessions; this \emph{deflated the baseline}. Fixed so it receives the whole haystack. (Any
-  ``full-context only scores 30\%'' claim predates this fix.)
+  much lower full-context figure from before this fix is a truncation artifact.)
   \item \textbf{Official judge, not a home-grown one.} A generic ``same info?'' judge was \emph{stricter} than
   the official LongMemEval judge and made scores non-comparable; we use the official prompts verbatim.
   \item \textbf{Abstention} questions are graded by the official \emph{unanswerable} judge.
   \item \textbf{Reliability.} The LLM client uses exponential-backoff retry with transient/permanent error
   classification; the headline run completed with \textbf{0 errored questions} of 500 under both systems.
+  \item \textbf{Judge endpoint drift.} The judge behind our arXiv~v1 numbers was a third-party endpoint that
+  was retired underneath the documented command, and nothing in the repository noticed until the command
+  failed; the absolute scores moved when we re-ran under a judge we can still reach
+  (footnote~\ref{fn:judge}). A reproducible harness must name its judge beside every number and keep every
+  log it cites committed, which is what we now do.
 \end{enumerate}
 
 \section{Results}
 \label{sec:results}
 
 \paragraph{Headline.}
-Table~\ref{tab:headline} and Figure~\ref{fig:acctokens} report the full 500-question result. \engram{}'s lean configuration beats the
-full-context baseline by \textbf{$+10.4$ points} (83.6\% vs.\ 73.2\%) while using \textbf{$\sim$8$\times$
-fewer tokens} (9.6k vs.\ 79k), with 0 of 500 errored under both. The filtered slice is not merely cheaper---it
-is \emph{more accurate} than the full window, consistent with the distractor mechanism of \citet{liu2024lost}.
-And because the retrieved slice is bounded, \engram{}'s cost stays flat as history grows, whereas
-full-context cannot. The margin is statistically decisive: across the 500 paired questions \lean{} is correct
-on 81 that the baseline misses versus 29 the other way (McNemar's exact test, $p<10^{-6}$), and a paired
-bootstrap puts the 95\% CI of the gain at $[+6.4,+14.4]$ points. All statistics are recomputed from the
-committed logs by \texttt{paper/compute\_stats.py}.
+Table~\ref{tab:headline} and Figure~\ref{fig:acctokens} report the full 500-question result. \engram{}'s lean
+configuration beats the full-context baseline by \textbf{$+5.6$ points} (84.4\% vs.\ 78.8\%) while using
+\textbf{10$\times$ fewer tokens} (7.9k vs.\ 79k), with 0 of 500 errored under both. The filtered slice is not
+merely cheaper---it is \emph{more accurate} than the full window, consistent with the distractor mechanism
+of \citet{liu2024lost}. The margin is statistically significant but not large: across the 500 paired
+questions \lean{} is correct on 68 that the baseline misses versus 40 the other way (McNemar's exact test,
+$p=0.009$), and a paired bootstrap puts the 95\% CI of the gain at $+1.6$ to $+9.6$ points. All statistics
+are recomputed from the committed log by \texttt{paper/compute\_stats.py}.
 
 \begin{table}[h]
 \centering
-\caption{\textsc{LongMemEval}\textsubscript{S}, 500 questions, official judge. Same answerer
-(\texttt{doubao-seed-2.0-pro}) and judge (\texttt{DeepSeek-V3.2}) applied to both systems. Accuracy is shown
-with a Wilson 95\% confidence interval; the paired difference is significant (McNemar exact $p<10^{-6}$).}
+\caption{\textsc{LongMemEval}\textsubscript{S}, 500 questions, official judge prompts. Same answerer
+(\texttt{doubao-seed-2.0-pro}) and judge (\texttt{deepseek-chat}) applied to both systems. Accuracy is shown
+with a Wilson 95\% confidence interval; the paired difference is significant (McNemar exact $p=0.009$).
+Latency is end-to-end wall-clock per question including the remote answerer call, p50\,/\,p95.}
 \label{tab:headline}
-\begin{tabular}{lcrr}
+\begin{tabular}{lcrrr}
 \toprule
-System & Overall acc.\ (95\% CI) & Avg.\ context tokens & Errors \\
+System & Overall acc.\ (95\% CI) & Avg.\ context tokens & Latency p50\,/\,p95 & Errors \\
 \midrule
-\textbf{\engram{}} (\lean{}) & \textbf{83.6\%} \,[80.1,\,86.6] & \textbf{9.6k} & 0 / 500 \\
-full-context baseline        & 73.2\% \,[69.2,\,76.9]          & 79k           & 0 / 500 \\
+\textbf{\engram{}} (\lean{}) & \textbf{84.4\%} \,[81.0,\,87.3] & \textbf{7.9k} & 52.9\,s\,/\,118.7\,s & 0 / 500 \\
+full-context baseline        & 78.8\% \,[75.0,\,82.2]          & 79.2k         & 14.6\,s\,/\,59.2\,s  & 0 / 500 \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -485,45 +515,70 @@ full-context baseline        & 73.2\% \,[69.2,\,76.9]          & 79k           &
 \begin{figure}[t]
 \centering
 \includegraphics[width=0.72\textwidth]{fig_acc_tokens.pdf}
-\caption{Accuracy vs.\ average context tokens on LongMemEval\textsubscript{S} (500 questions, official judge).
-\lean{} (star) sits up and to the left of the full-context baseline (square)---\textbf{$+10.4$ points at
-$\sim$8$\times$ fewer tokens}. The \texttt{engram\_full} variant (open circle) prepends the same facts above
-the \emph{whole} history and lands at 83.4\%: the structured facts carry the accuracy, while the full history
-adds tokens, not correctness.}
+\caption{Accuracy vs.\ average context tokens on LongMemEval\textsubscript{S} (500 questions, official judge
+prompts) for two answerer backbones. For each backbone \lean{} (star) sits up and to the left of the
+full-context baseline (square): \textbf{$+5.6$ points at 10$\times$ fewer tokens} for
+\texttt{doubao-seed-2.0-pro}, and $+12.2$ points at 11$\times$ fewer tokens for the small
+\texttt{doubao-seed-1.6-flash} (Table~\ref{tab:backbones})---the weaker the reader, the more it needs the
+precise slice.}
 \label{fig:acctokens}
 \end{figure}
 
-\paragraph{Lean retrieval matches full-history accuracy at 1/8 the cost.}
-For reference, in the same 500-question run a non-lean variant that prepends the conflict-resolved facts
-\emph{above the full history} (\texttt{engram\_full}, $\sim$79k tokens) scores 83.4\% (416/499; one question
-errored under this variant, versus none for \lean{} and full-context). A paired McNemar test against \lean{}'s
-83.6\% finds \emph{no} difference ($p=0.91$): the structured facts contribute essentially all of the accuracy
-gain, while the full history adds tokens, not correctness. We therefore headline the lean number.
-
 \paragraph{Per-category.}
-Figure~\ref{fig:percat} breaks \lean{} down by category. Bi-temporal modeling pays off where it should:
-\emph{knowledge-update} (most-recent-wins via invalidation) reaches 87.5\% and \emph{temporal-reasoning}
-(date-stamped context $+$ as-of filtering) 81.1\%. \emph{Abstention} reaches 86.7\% under the official
-unanswerable judge---the system declines when memory lacks the answer rather than hallucinating. The headroom
-is concentrated in \emph{multi-session} aggregation (counting/aggregating across many sessions, 79.3\%) and
-\emph{single-session-preference} (73.3\%, a category that is hard field-wide).
+Table~\ref{tab:percat} and Figure~\ref{fig:percat} break both systems down by category. The lean slice wins
+four of the six categories and ties one. The margins are largest where the full window has the most to
+distract from: \emph{single-session-preference} ($+30.0$; a category that is hard field-wide, and where the
+baseline reaches only 50.0\%), \emph{multi-session} aggregation ($+11.3$; counting and aggregating across
+many sessions, where the baseline mostly abstains) and \emph{single-session-user} ($+8.6$).
+\emph{Temporal-reasoning} (date-stamped context $+$ as-of filtering) is a modest $+2.3$. The one loss is
+\emph{knowledge-update} ($-6.4$): the baseline sees every version of a changed value in order and applies
+``most recent wins'' itself, whereas the lean slice depends on consolidation having attached the update to
+the right slot. Of the eight knowledge-update questions the slice loses and the baseline gets, seven end in
+a superseded value or an abstention---consistent with the update not reaching the slice, a consolidation
+miss rather than a reading error (\S\ref{sec:limitations}). The 30 \emph{abstention} items, graded by the
+official \emph{unanswerable} judge and counted inside their host categories above, come out at 90.0\% for
+\lean{} vs.\ 93.3\% for the baseline: the abstention gate declines correctly on most of them, at a small
+cost against a baseline that, as the error analysis below shows, abstains often anyway.
+
+\begin{table}[h]
+\centering\small
+\caption{Per-category accuracy on \textsc{LongMemEval}\textsubscript{S} (500 questions; the run of
+Table~\ref{tab:headline}). $\Delta$ is \lean{} minus full-context. The 30 unanswerable (abstention) items are
+counted inside their host categories; broken out, they score 90.0\% (\lean{}) vs.\ 93.3\% (full-context).}
+\label{tab:percat}
+\begin{tabular}{lrrrr}
+\toprule
+Category & \lean{} & full-context & $\Delta$ & $n$ \\
+\midrule
+multi-session             & \textbf{78.2\%} & 66.9\%          & $+11.3$ & 133 \\
+temporal-reasoning        & \textbf{83.5\%} & 81.2\%          & $+2.3$  & 133 \\
+knowledge-update          & 84.6\%          & \textbf{91.0\%} & $-6.4$  & 78 \\
+single-session-user       & \textbf{91.4\%} & 82.9\%          & $+8.6$  & 70 \\
+single-session-assistant  & 94.6\%          & 94.6\%          & $+0.0$  & 56 \\
+single-session-preference & \textbf{80.0\%} & 50.0\%          & $+30.0$ & 30 \\
+\midrule
+overall                   & \textbf{84.4\%} & 78.8\%          & $+5.6$  & 500 \\
+\bottomrule
+\end{tabular}
+\end{table}
 
 \begin{figure}[t]
 \centering
 \includegraphics[width=0.82\textwidth]{fig_percat.pdf}
-\caption{Per-category accuracy of \lean{} on the full 500-question set (with per-category $n$; dashed line is
-the 83.6\% overall). The two categories where bi-temporal modelling is decisive---\emph{knowledge-update} and
-\emph{temporal-reasoning}---are highlighted. Headroom concentrates in \emph{multi-session} aggregation and
-\emph{single-session-preference} (hard field-wide).}
+\caption{Per-category accuracy of \lean{} and the full-context baseline on the full 500-question set (with
+per-category $n$; the dashed line is the 84.4\% lean overall). The two bi-temporal
+categories---\emph{knowledge-update} and \emph{temporal-reasoning}---are highlighted: temporal-reasoning is a
+small win, knowledge-update the one loss. The largest margins are in \emph{single-session-preference} and
+\emph{multi-session} aggregation.}
 \label{fig:percat}
 \end{figure}
 
 \paragraph{Error analysis: full-context is ``lost in the middle.''}
-The two systems fail differently. Of the full-context baseline's 134 errors, \textbf{52\% (70) are
+The two systems fail differently. Of the full-context baseline's 106 errors, \textbf{57\% (60) are
 abstentions}---it answers ``I don't know'' even though, by construction, the evidence lies somewhere in its
-$\sim$79k-token window; it simply fails to locate it. On the 81 questions where \lean{} is correct and
-full-context is wrong, full-context abstains on 53\% (43) and returns a \emph{wrong} value on the other 38.
-\lean{}, answering from a $\sim$9.6k-token slice, abstains on only 60/500---and 30 of those are the
+$\sim$79k-token window; it simply fails to locate it. On the 68 questions where \lean{} is correct and
+full-context is wrong, full-context abstains on 59\% (40) and returns a \emph{wrong} value on the other 28.
+\lean{}, answering from a $\sim$7.9k-token slice, abstains on 60/500---and 27 of those are among the 30
 genuinely unanswerable items. This is the ``lost in the middle'' effect~\citep{liu2024lost} made
 quantitative: past a point, more context is \emph{not} more accuracy if the model cannot find the relevant
 span (counts recomputed from the committed logs by \texttt{paper/compute\_stats.py}).
@@ -538,9 +593,99 @@ facts-only QA. We report this as a design observation; a controlled facts-only a
 500-question set under the same judge is reported as future work (\S\ref{sec:limitations}), not claimed here.
 
 \paragraph{Efficiency.}
-The retrieved context averages $\sim$9.6k tokens, $\sim$8$\times$ leaner than the $\sim$79k full-context
-baseline, and the lean read path is what keeps cost flat as history grows. Retrieval itself is sub-second; the
-$\sim$60s p50 end-to-end latency is dominated by the answerer model's generation call, not by \engram{}.
+The retrieved context averages $\sim$7.9k tokens, 10$\times$ leaner than the $\sim$79k full-context
+baseline; the saving is in prompt tokens, the quantity that grows with history. End-to-end latency per
+question is \emph{higher} for \lean{} (p50 52.9\,s vs.\ 14.6\,s, Table~\ref{tab:headline}). The harness
+records wall-clock per question including the remote answerer call and does not instrument retrieval
+separately, so we report the latency as measured and make no retrieval-latency claim from these logs.
+
+\subsection{A second answerer backbone: the weaker the reader, the more it needs the slice}
+\label{sec:backbones}
+
+Memory quality should not depend on one model's ability to read our structures, so the same 500 questions
+were also run with the answerer swapped for the small \texttt{doubao-seed-1.6-flash}, everything else
+unchanged (Table~\ref{tab:backbones}). That run was made in June on the revision of that date and graded by
+the judge that has since been retired (footnote~\ref{fn:judge}), so the table names the code revision and
+judge per row and we include the June run of the pro answerer as its within-judge sibling; every row is a
+within-run, same-judge comparison, which is the claim we make. The lean slice wins under every backbone and
+judge, and the margin is \emph{largest for the weakest reader}: $+12.2$ points (65.2\% vs.\ 53.0\%) for the
+small answerer, against $+3.0$ for the pro answerer under the same judge and code, and $+5.6$ on the current
+code, at a $\sim$10--11$\times$ token ratio throughout. With the small answerer the lean advantage holds in
+five of six categories (multi-session $+16.5$, temporal-reasoning $+15.8$, single-session-user $+12.9$,
+single-session-preference $+10.0$, knowledge-update $+9.0$), the exception being single-session-assistant
+($-1.8$), which is near ceiling for both. The reading is simple: a strong model can partly compensate for a
+noisy window by searching it; a weak one cannot, so removing distractors is worth more to it. That is the
+regime that matters for cheap and local deployments.
+
+\begin{table}[h]
+\centering\small
+\caption{Answerer backbones on the same 500 questions, extractor and harness. Gap $=$ \lean{} $-$
+full-context; token ratio $=$ full-context tokens / lean tokens. Each row is a within-run comparison under
+one judge; rows differ in code revision and judge as marked, so compare gaps, not levels, across rows.
+Logs: \texttt{results/run500\_v3\_main\_deepseekjudge.jsonl}, \texttt{results/headline\_500.jsonl},
+\texttt{results/bb\_flash.jsonl}.}
+\label{tab:backbones}
+\begin{tabular}{llrrrr}
+\toprule
+Answerer & Code / judge & \lean{} & full-context & Gap & Token ratio \\
+\midrule
+\texttt{doubao-seed-2.0-pro}   & current / \texttt{deepseek-chat}    & \textbf{84.4\%} & 78.8\% & $+5.6$  & 10.0$\times$ \\
+\texttt{doubao-seed-2.0-pro}   & June 2026 / retired ARK judge & \textbf{79.0\%} & 76.0\% & $+3.0$  & 10.9$\times$ \\
+\texttt{doubao-seed-1.6-flash} & June 2026 / retired ARK judge & \textbf{65.2\%} & 53.0\% & $+12.2$ & 10.9$\times$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{A second benchmark: a 200-item LOCOMO slice}
+\label{sec:locomo}
+
+% TODO(locomo-full): the full 1986-item LOCOMO run (results/locomo1986_main_deepseekjudge.jsonl) is in
+% flight. When it lands: repoint LOCOMO_SLICE in compute_stats.py, replace the numbers in this subsection
+% and in the abstract/related-work mentions, and drop the "slice" labels.
+LOCOMO~\citep{maharana2024locomo} is a different regime: ten long multi-session conversations whose full
+text is only $\sim$16k tokens, a fraction of a \textsc{LongMemEval}\textsubscript{S} haystack. We converted
+its QA pairs into the harness's item format so that the \emph{same} answerer, extractor and judge apply
+(its adversarial questions map onto the unanswerable judge), and report the \textbf{first 200 of its 1,986
+items}---a slice, labelled as such; the full run is in progress. Table~\ref{tab:locomo} gives the result.
+Overall the two systems tie (88.0\% vs.\ 89.0\%, $-1.0$; 0 errors under both) at 3.4k vs.\ 16.2k tokens
+($\sim$5$\times$). That the margin shrinks to zero here is the expected behaviour, not a regression: with a
+16k-token history there is little for retrieval to remove and the full-context reader is not yet lost. The
+lean advantage is a function of how much distracting history there is---clear on the $\sim$79k-token
+\textsc{LongMemEval} windows, nil on 16k---and we expect it to grow, not shrink, with history length.
+
+The per-category split carries the information. Two of \engram{}'s design bets get independent evidence:
+\emph{adversarial} (the answer is not in the conversation) is 100.0\% vs.\ 91.1\% ($+8.9$, $n=45$)---the
+abstention gate declines correctly on every item, where the full-context reader answers some---and
+\emph{multi-hop} is 78.6\% vs.\ 71.4\% ($+7.1$, $n=28$), the category the multi-hop query planner targets
+and one \textsc{LongMemEval} has no separate label for. Single-hop is within noise ($-3.6$, $n=83$). The
+clear loss is \emph{temporal-reasoning} ($-16.2$, $n=37$), and its failures are not retrieval misses but
+\emph{date-granularity} errors: gold answers such as ``the week before 9 June 2023'' or ``the first weekend
+of August'' come back as a single collapsed timestamp, off by weeks or a month, because fact extraction
+reduces a relative time expression to one point on the axis while the full-context reader still sees the
+original phrasing. This is a limitation of the current extractor that \textsc{LongMemEval}'s more regular
+date annotations did not expose---the concrete value of a second benchmark---and it is the next target for
+the bi-temporal model (\S\ref{sec:limitations}).
+
+\begin{table}[h]
+\centering\small
+\caption{LOCOMO, first 200 of 1,986 items (a slice; the full run is in progress). Same answerer, extractor
+and judge as Table~\ref{tab:headline}; log \texttt{results/locomo200\_main\_deepseekjudge.jsonl}, 0 errors.}
+\label{tab:locomo}
+\begin{tabular}{lrrrr}
+\toprule
+Category & \lean{} & full-context & $\Delta$ & $n$ \\
+\midrule
+single-hop         & 90.4\%           & \textbf{94.0\%} & $-3.6$  & 83 \\
+adversarial        & \textbf{100.0\%} & 91.1\%          & $+8.9$  & 45 \\
+temporal-reasoning & 78.4\%           & \textbf{94.6\%} & $-16.2$ & 37 \\
+multi-hop          & \textbf{78.6\%}  & 71.4\%          & $+7.1$  & 28 \\
+open-domain        & \textbf{71.4\%}  & 57.1\%          & $+14.3$ & 7 \\
+\midrule
+overall            & 88.0\%           & \textbf{89.0\%} & $-1.0$  & 200 \\
+avg.\ context tokens & 3.4k           & 16.2k           &         & \\
+\bottomrule
+\end{tabular}
+\end{table}
 
 \section{Discussion and Limitations}
 \label{sec:limitations}
@@ -549,27 +694,37 @@ We report the result openly rather than as a leaderboard ``win,'' precisely beca
 cross-harness numbers are not comparable. The honest scope of the present evidence:
 
 \begin{itemize}
-  \item \textbf{One benchmark, one answerer backbone.} The headline is \textsc{LongMemEval}\textsubscript{S}
-  with a single answerer model. The evaluation discipline we advocate requires multiple backbones (a small
-  open model \emph{and} a frontier model) and multiple benchmarks; extending to LOCOMO~\citep{maharana2024locomo}
-  and a second backbone is immediate next work, so that memory quality is shown not to depend on one model's
-  ability to read our structures.
-  \item \textbf{Small samples mislead.} During development an 18-item slice once read 83\% when the full-set
-  truth was $\sim$58\%; we therefore report \emph{only} full-500 numbers, and every number in this paper is a
-  full-set number with committed logs.
+  \item \textbf{Two backbones from one family; one full benchmark plus a slice.} The headline is
+  \textsc{LongMemEval}\textsubscript{S} with a mid-size and a small answerer from the same model family, and
+  the small-answerer run predates the judge migration (\S\ref{sec:backbones}). A frontier-class answerer, a
+  re-run of the small answerer under the current judge, and the full 1,986-item LOCOMO set (in progress)
+  are the immediate next steps, so that memory quality is shown not to depend on one model's ability to
+  read our structures.
+  \item \textbf{Where the slice loses.} Knowledge-update on \textsc{LongMemEval} ($-6.4$) and
+  temporal-reasoning on LOCOMO ($-16.2$) are the two categories where the full-context reader beats the
+  lean slice, and both point at consolidation rather than retrieval: an update the extractor misses leaves a
+  stale value in the slice, and a relative time expression collapsed to one timestamp loses the granularity
+  the question needs. Fixing extraction, not adding context, is the lever.
+  \item \textbf{Small samples mislead.} During development, small slices repeatedly read far above the
+  full-set truth; we therefore report \emph{only} full-set numbers on \textsc{LongMemEval}, and label the
+  LOCOMO result as a slice.
   \item \textbf{Open categories.} Multi-session aggregation and preference are where headroom remains; the
   multi-hop query planner and tuned bi-temporal conflict resolution are the levers we expect to move them.
-  \item \textbf{Single run; no controlled component ablation yet.} We report one full-set run per system and
-  do not yet quantify run-to-run variance from answerer stochasticity, nor a controlled full-set ablation of
-  the read path's components (notably the facts-only vs.\ hybrid comparison of \S\ref{sec:results}, which we
-  state as an observation). Repeated-run variance and a component ablation are immediate next work.
+  \item \textbf{Single run per configuration; no controlled component ablation yet.} We report one full-set
+  run per system and backbone and do not quantify run-to-run variance from answerer stochasticity; the
+  paired bootstrap interval ($+1.6$ to $+9.6$) is the honest statement of uncertainty for the headline gap,
+  and the full-context baseline's spread across full-set runs under one judge (footnote~\ref{fn:judge})
+  suggests that noise band is real. Nor do we report a controlled full-set ablation of the read path's
+  components (notably the facts-only vs.\ hybrid comparison of \S\ref{sec:results}, which we state as an
+  observation). Both are immediate next work.
 \end{itemize}
 
 \section{Conclusion}
 
 \engram{} shows that a precisely retrieved, bi-temporal, hybrid context can beat the full-context baseline
-\emph{on accuracy}---$+10.4$ points at $\sim$8$\times$ fewer tokens on the full \textsc{LongMemEval}\textsubscript{S}
-under the official judge---turning long-term memory from a cost optimization into a quality improvement. Equally,
+\emph{on accuracy}---$+5.6$ points at 10$\times$ fewer tokens on the full \textsc{LongMemEval}\textsubscript{S}
+under the official judge prompts, and $+12.2$ for a small answerer---turning long-term memory from a cost
+optimization into a quality improvement. Equally,
 we contribute the neutral, reproducible harness that makes such a claim checkable: the official judge baked in,
 the full-context baseline in every table, documented measurement-integrity pitfalls, and the raw logs published.
 In a field where every number is contested, the trustworthy scoreboard is itself the result. The system, the
@@ -592,7 +747,9 @@ gate (decline when memory lacks the answer) are first-class rather than optional
 \section*{Reproducibility Statement}
 
 Every number in this paper is produced by the in-repo harness and backed by committed per-question logs
-(prediction, gold, correctness, tokens, and latency for all 500 questions). The end-to-end loop and unit
+(prediction, gold, correctness, tokens, and latency for every question of every run cited: both answerer
+backbones on \textsc{LongMemEval}\textsubscript{S} and the LOCOMO slice), and \texttt{paper/check\_numbers.py}
+asserts that every number in the main text equals a value recomputed from those logs. The end-to-end loop and unit
 tests run with no API keys and no external services via deterministic offline fallbacks; the benchmark
 numbers require an OpenAI-compatible model endpoint for the answerer, extractor, and judge, all configurable.
 The exact command, model identifiers, embedder, and hyper-parameters are in \S\ref{sec:setup}; raw logs and
@@ -709,14 +866,15 @@ information but not the asked information).
 \section{Qualitative Examples}
 \label{app:examples}
 
-Table~\ref{tab:qual} shows representative cases drawn from the committed 500-question logs where \lean{}
-answers correctly and the full-context baseline does not. Two failure modes recur. \textbf{(i) Lost in the
+Table~\ref{tab:qual} shows representative cases drawn from the committed headline log
+(\texttt{results/run500\_v3\_main\_deepseekjudge.jsonl}) where \lean{} answers correctly and the
+full-context baseline does not. Two failure modes recur. \textbf{(i) Lost in the
 middle}~\citep{liu2024lost}: the evidence \emph{is} present in full-context's $\sim$79k-token window, yet
-it returns ``I don't know,'' while the lean $\sim$9.6k-token slice surfaces it. \textbf{(ii) Stale values
-on knowledge-update}: full-context returns an incorrect, non-current value (``30 dozen,'' ``26 minutes and
-30 seconds'') while the lean bi-temporal slice---most-recent-wins---returns the current one. These are
-illustrative, not cherry-picked headline numbers; all 500 per-question records (prediction, gold,
-correctness) are in the repository.
+it returns ``I don't know,'' while the lean $\sim$7.9k-token slice surfaces it. \textbf{(ii) Wrong value
+from a noisy window}: full-context returns a value that is present in the history but is not the one the
+question asks for (a stale count, the wrong duration, a neighbouring figure) while the lean slice returns
+the current one. These are illustrative, not cherry-picked headline numbers; all per-question records
+(prediction, gold, correctness) are in the repository.
 
 \begin{table}[h]
 \centering
@@ -728,10 +886,10 @@ and full-context is wrong (ID = the benchmark's question id; predictions verbati
 \toprule
 ID & Category & Gold & \engram{} (\lean{}) & full-context \\
 \midrule
-\texttt{ed4ddc30} & knowledge-update & 20 & 20 dozen & \emph{30 dozen} \\
-\texttt{e66b632c} & knowledge-update & 27 minutes and 45 seconds & 27 minutes 45 seconds & \emph{26 minutes and 30 seconds} \\
+\texttt{69fee5aa} & knowledge-update & 38 & 38 & \emph{37} \\
+\texttt{ba61f0b9} & knowledge-update & 6 & 6 & \emph{5} \\
 \texttt{0db4c65d} & temporal-reasoning & 18 days & 18 days & \emph{6 days} \\
-\texttt{099778bb} & multi-session & 20\% & 20\% & \emph{I don't know} \\
+\texttt{d851d5ba} & multi-session & \$3,750 & \$3750 & \emph{\$8750} \\
 \texttt{2311e44b} & multi-session & 190 & 190 pages & \emph{I don't know} \\
 \texttt{8ebdbe50} & single-session-user & Data Science & Data Science certification & \emph{I don't know} \\
 \bottomrule

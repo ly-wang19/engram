@@ -4,12 +4,19 @@ Source for the preprint *"Less Context, More Accuracy: A Bi-Temporal Memory Engi
 Where a Lean Retrieved Context Beats the Full History."*
 
 Every number in the paper is grounded in the committed logs in [`../RESULTS.md`](../RESULTS.md) and
-[`../results/`](../results/) — nothing is invented. The four figures:
+[`../results/`](../results/) — nothing is invented, and `python3 check_numbers.py` asserts it: every
+percentage, gap, token figure, ratio and latency in the main text must equal a value recomputed from the
+named log. Headline (ICLR 2027 revision): `engram_lean` **84.4%** vs full-context **78.8%** (+5.6) at
+7.9k vs 79k tokens, `results/run500_v3_main_deepseekjudge.jsonl`, DeepSeek official-API judge. The arXiv v1
+figures (83.6 / 73.2 / +10.4) were graded by a since-retired endpoint and survive only in the
+judge-migration footnote. The four figures:
 
 1. **Architecture** (TikZ, inline) — the dual-process write/consolidate/read pipeline.
 2. **Bi-temporal timeline** (TikZ, inline) — non-destructive invalidation + `supersedes` + as-of queries.
-3. **Accuracy vs. tokens** (`figs/fig_acc_tokens.pdf`) — the headline: +10.4 pts at ~8× fewer tokens.
-4. **Per-category bars** (`figs/fig_percat.pdf`) — engram_lean by category, bi-temporal categories highlighted.
+3. **Accuracy vs. tokens** (`figs/fig_acc_tokens.pdf`) — the headline for two answerer backbones: +5.6 pts
+   at 10× fewer tokens (doubao-seed-2.0-pro), +12.2 at 11× (doubao-seed-1.6-flash).
+4. **Per-category bars** (`figs/fig_percat.pdf`) — engram_lean vs full-context by category, bi-temporal
+   categories highlighted.
 
 ## Files
 
@@ -18,9 +25,11 @@ Every number in the paper is grounded in the committed logs in [`../RESULTS.md`]
 | `main.tex` | the paper source (self-contained; no conference `.sty` needed) |
 | `references.bib` | bibliography |
 | `main.bbl` | **generated** bibliography — arXiv needs this in the upload (arXiv does not run BibTeX) |
-| `figs/make_figs.py` | regenerates the two **data** figures (matplotlib → vector PDF) |
+| `figs/make_figs.py` | regenerates the two **data** figures (matplotlib → vector PDF) by reading the logs through `compute_stats.py` |
+| `check_numbers.py` | **the number gate**: parses `main.tex` and fails if any number in the main text does not trace to a committed log (run before every commit of the paper) |
 | `figs/fig_*.pdf` | the two generated data figures (the TikZ diagrams are inline in `main.tex`) |
-| `compute_stats.py` | recomputes significance tests, confidence intervals, and committed multi-backbone summaries from result logs (no model calls) |
+| `compute_stats.py` | recomputes every paper number (headline, Wilson/McNemar/bootstrap, per-category, error analysis, backbone table, LOCOMO slice) from result logs (no model calls) |
+| `iclr2027/` | vendored ICLR 2027 style files for the conference build |
 | `main.pdf` | the compiled **14-page** PDF (incl. appendix: prompts + qualitative examples) |
 | `arxiv_abstract.txt` | the abstract as plain text, ready to paste into the arXiv metadata form |
 | `arxiv-submission.tar.gz` | **the ready-to-upload bundle** (`main.tex` + `references.bib` + `main.bbl` + `figs/*.pdf`) |
@@ -31,6 +40,7 @@ Every number in the paper is grounded in the committed logs in [`../RESULTS.md`]
 export PATH="/Library/TeX/texbin:$PATH"   # macOS MacTeX; skip if pdflatex is already on PATH
 cd paper
 python3 figs/make_figs.py                 # (re)generate fig_acc_tokens.pdf + fig_percat.pdf
+python3 check_numbers.py                  # must PASS before committing main.tex
 pdflatex -interaction=nonstopmode main.tex
 bibtex   main
 pdflatex -interaction=nonstopmode main.tex

@@ -157,3 +157,20 @@
 - **owner 判断**: "差这么多不想放了"。日志证实是对的——mem0 上下文中位 205 token（Engram 8151）、Hy-Memory 754 token 且延迟中位 1247s；**两者各 43/60 弃答**。适配器按 `topk` 取几条原子记忆，再套 Engram 自己的弃答型作答提示：对手拿到薄片 + 鼓励弃答的提示，这是系统性障碍不是能力差距。发出去会被复现打脸，自毁 Bet D。
 - **发布前提（写死）**: 每个竞品适配器先在**对方自己的 benchmark** 上复现出对方自报数字的量级；复现不出即视为我们的适配器 bug。在此之前这些日志只是内部诊断，**任何 agent 不得把它们写进 README / RESULTS / 官网**。
 - **不变**: 追总分的路径仍是压缩层那 9.4 分（`COMPARISON.md` §4）与全量 LOCOMO；不靠对比对手。
+
+- **Agent**: Claude Code · **日期**: 2026-09-10 · **ICLR 2027 投稿冲刺**（摘要 9/18 · 全文 9/25）
+- **owner 决定**: 投 ICLR 2027。前提不让步：投稿版数字必须是当前可复现的 84.4 / 78.8 / +5.6（`results/run500_v3_main_deepseekjudge.jsonl`），不能用已下线 ARK judge 的 83.6 / 73.2 / +10.4。
+- **验收标准（全部达标即停）**:
+  1. `python paper/check_numbers.py` 通过：`main.tex` 里每个准确率/token 数字都能追溯到已提交的 `results/*.jsonl`；headline = 84.4/78.8/+5.6；judge 迁移有脚注说明。
+  2. 用 `iclr2027_conference.sty` 编译无错；**主文 ≤ 9 页**（参考文献/附录不计）；匿名；含 AI 使用声明（必需）、可复现性声明、伦理声明。
+  3. 第二 backbone 表进 Results：doubao-pro（run500_v3）与 doubao-flash（`bb_flash.jsonl`）并列，报 lean/full/gap/token 比。
+  4. LOCOMO 全量 1986 题结果进论文（分类别 + haystack 长度框架，输赢都写）；若 9/20 前跑不完，用 200 题切片并明确标注为切片。
+  5. 一轮只读终审（Fable）：以违反 1–3 为由才阻塞；其余进二期。
+- **不做**: 压缩层 9.4 分（15 天内无法验证）；`identity_attribute_extraction`（未过 A/B）；竞品头对头（适配器未验证）。
+- **熔断**: 2 小时无交付 / 压缩 3 次 / 子代理 8 个 / 三修不过 → 停下汇报。
+
+- **Agent**: Claude Code（NUMBERS 子任务）· **日期**: 2026-09-10 · 分支 `paper/iclr2027`
+- **做了什么**: 把 `paper/main.tex` 的全部证据换成当前可复现日志。headline 84.4 / 78.8 / +5.6（`results/run500_v3_main_deepseekjudge.jsonl`，7.9k vs 79.2k token，10×，McNemar exact p=0.009，bootstrap 95% CI +1.6..+9.6，p50 52.9s/14.6s）；分类别表（6 类 + 弃答类单独一句 90.0 vs 93.3）；错误分析重算（106 错/60 弃答）；judge 迁移脚注在 Intro 首次提及处（`fn:judge`，标 `% arxiv-v1` 行）；第二 backbone 表 §5.1（三行：pro/现 main/官方 judge、pro/6-27 代码/退役 judge、flash/6-27/退役 judge）；LOCOMO 200 切片 §5.2（含 TODO 注释）；Limitations/Conclusion/Reproducibility/附录例子同步。`compute_stats.py` 重指 run500_v3 并输出 `paper_numbers()` 字典；`figs/make_figs.py` 直接读日志出图（两 backbone）；新增 `paper/check_numbers.py`（旧 tex 68 项 FAIL → 新 tex 173 项全部追溯 PASS）。`paper/README.md` 同步。
+- **重要发现（偏离任务说明）**: `bb_flash.jsonl` 与 `headline_500.jsonl` 同在 `4a2aa0e`（2026-06-27）提交，当时 checklist 的公共 flag 是 `--judge volcano:deepseek-v3-2-251201`——即 **flash 跑的是已退役 judge、6 月代码**，不是任务说明里的"same judge"。论文按行标注 code/judge，只比较行内 gap（+12.2 vs 同 judge 同代码的 pro +3.0，以及现 main 的 +5.6）；脚注里 baseline 历史按 judge 拆开（退役 73.2/76.0；现 judge 77.6/77.4/78.8）。
+- **验收状态**: 标准 1 ✅（check_numbers PASS）；标准 3 ✅；标准 4 ✅（切片版）；标准 2 由 Format 子任务接手（现 article 类编译干净 16 页，尚未套 iclr sty / 未加 AI 使用声明）。
+- **二期清单**: ① flash 在现 judge + 现 main 重跑（消掉表 4 的 judge 混排）；② `engram_full` 变体已从论文移除（只有退役 judge 数据），若要恢复"facts carry the accuracy"段落需在现 judge 重跑；③ LOCOMO 全量落地后按 §5.2 TODO 换数并重指 `LOCOMO_SLICE`；④ 论文"Retrieval itself is sub-second"已删——日志不分别记检索延迟，如要恢复需 harness 加 instrumentation；⑤ Intro 里跨来源分数差异的具体数字（58/66/92）已删，未追溯到日志。
