@@ -50,3 +50,4 @@ IDENTITY.md
 USER.md
 # Stale process-id files from scoreboard runs
 *.pid
+*.blg

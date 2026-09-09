@@ -395,7 +395,7 @@ a zero-dependency offline fallback, so the loop runs with no API keys (Appendix~
 
 \paragraph{Benchmark.}
 \textsc{LongMemEval}\textsubscript{S}~\citep{wu2025longmemeval}: 500 questions, each over a haystack of
-$\sim$50 sessions ($\sim$115k tokens), pulled from the public release. Questions span seven categories
+$\sim$50 sessions ($\sim$115k tokens), pulled from the public release. Questions span six categories
 (Figure~\ref{fig:percat}). We grade with the \emph{official} category-specific judge prompts---including the
 temporal off-by-one tolerance, knowledge-update old-information tolerance, preference-rubric leniency, the
 ``contains the answer'' semantics, and unanswerable (abstention) detection---rather than a home-grown judge.
@@ -714,8 +714,8 @@ python eval/bench.py --data s --limit 500 --systems engram\_lean,full\_context \
 \hspace*{1.5em}--reasoning --persona --chunks 2 --topk 15 --extract-k 8 \textbackslash\\
 \hspace*{1.5em}--summ-k 28 --n-summaries 28
 \end{list}
-Substitutions: \texttt{--answerer volcano:doubao-seed-1-6-flash-250615} for the second backbone;
-\texttt{--data locomo --limit 200} for the LOCOMO slice (items converted from the public release by
+Substitutions: \texttt{-{}-answerer volcano:doubao-seed-1-6-flash-250615} for the second backbone;
+\texttt{-{}-data locomo -{}-limit 200} for the LOCOMO slice (items converted from the public release by
 \texttt{eval/locomo.py}). The appendix reproduces every prompt verbatim. The significance tests and
 confidence intervals in \S\ref{sec:results} are recomputed from the committed logs by
 \texttt{paper/compute\_stats.py}, with no model calls. The code, the harness and the raw logs are
@@ -753,7 +753,7 @@ whose conversations are synthetic or already published; no private user data wer
 
 For full reproducibility we reproduce the exact prompts the harness uses, verbatim from the repository
 (non-ASCII characters are normalised for typesetting). The \emph{answerer} system prompt (used with
-\texttt{--reasoning}; it instructs evidence aggregation, most-recent-wins on conflicts, and abstention
+\texttt{-{}-reasoning}; it instructs evidence aggregation, most-recent-wins on conflicts, and abstention
 only as a last resort):
 
 \begin{lstlisting}[style=prompt]
