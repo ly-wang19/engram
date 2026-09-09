@@ -1,19 +1,27 @@
-% Engram: arXiv preprint
-% Self-contained: compiles with a standard TeX Live install (pdflatex + bibtex).
-% No conference .sty required. To build:  pdflatex main; bibtex main; pdflatex main; pdflatex main
-\documentclass[11pt]{article}
-\pdfoutput=1 % arXiv: force pdfLaTeX (the figures are included as PDF)
+% Engram: ICLR 2027 submission build (double-blind by default).
+% Build (from paper/):  pdflatex main; bibtex main; pdflatex main; pdflatex main
+% Camera-ready / named build:  pdflatex "\def\FINAL{}\input{main}"  (then bibtex main; pdflatex x2)
+\documentclass{article}
+\pdfoutput=1 % force pdfLaTeX (the figures are included as PDF)
+
+% Fallback for TeX installs that lack the `helvetic' package: the ICLR style loads Helvetica-Bold (phvb)
+% only for the grey reviewer line-number ruler. `texfonts.map' next to this file aliases phvb -> ptmb
+% (Times Bold metrics) when phvb.tfm is missing, and this map line gives pdfTeX the matching glyphs.
+% On a complete TeX Live the real phvb.tfm is found first and pdfTeX ignores the duplicate map entry.
+\pdfmapline{+phvb NimbusRomNo9L-Medi <utmb8a.pfb}
+
+\usepackage{iclr2027/iclr2027_conference,times}
+% \iclrfinalcopy is the camera-ready switch: it prints the author block and the "Published as..." header.
+% Default is the anonymous submission build; pass \def\FINAL{} on the command line for the named build.
+\ifdefined\FINAL\iclrfinalcopy\fi
 
 \usepackage[utf8]{inputenc}
 \usepackage[T1]{fontenc}
-\usepackage{lmodern} % scalable fonts, required for microtype font expansion
-\usepackage[margin=1in]{geometry}
 \usepackage{amsmath,amssymb}
 \usepackage{booktabs}
 \usepackage{graphicx}
 \usepackage{xcolor}
 \usepackage{microtype}
-\usepackage[numbers,sort&compress]{natbib}
 \usepackage[colorlinks=true,linkcolor=black,citecolor=blue!50!black,urlcolor=blue!50!black]{hyperref}
 \usepackage{url}
 \usepackage{tikz}
@@ -35,17 +43,18 @@
 \newcommand{\lean}{\texttt{engram\_lean}}
 \newcommand{\full}{\texttt{full\_context}}
 
-% Default build = named (arXiv). Double-blind build (TMLR/AAAI/ACL/ICLR):
-%   pdflatex -jobname=main_anon "\def\ANON{}\input{main}"   (then bibtex main_anon; pdflatex x2)
-\newif\ifanon\anonfalse \ifdefined\ANON\anontrue\fi
+% Anonymity follows the ICLR switch: the submission build (\iclrfinalfalse) carries no author names,
+% affiliations, acknowledgements or self-identifying URLs; \ifanon guards every such string in the body.
+\newif\ifanon \ificlrfinal\anonfalse\else\anontrue\fi
 
-\title{\bfseries Less Context, More Accuracy:\\
+\title{Less Context, More Accuracy:\\
 A Bi-Temporal Memory Engine for LLM Agents\\
 Where a Lean Retrieved Context Beats the Full History}
 
-% Named for the arXiv preprint; \anontrue (above) swaps in an anonymous block for double-blind review.
+% The style file prints "Anonymous authors / Paper under double-blind review" unless \iclrfinalcopy is
+% set, so the block below is typeset only in the camera-ready build.
 \ifanon
-\author{Anonymous Author(s)\\ Paper under double-blind review}
+\author{Anonymous authors}
 \else
 \author{%
   Liuyin Wang\thanks{Correspondence: \texttt{liuyinwangthu@gmail.com}. Code, raw logs, and the
@@ -53,10 +62,13 @@ Where a Lean Retrieved Context Beats the Full History}
   Independent Researcher%
 }
 \fi
-\date{June 2026}
 
 \begin{document}
 \maketitle
+% The style sets the running header inside \maketitle's group with fancyhdr's \lhead. The fancyhdr the
+% style file bundles (v3.2) makes that global; fancyhdr >= 4 (any current TeX Live) does not, and the
+% header vanishes. Re-issue it here, outside the group, with the style's own wording for both builds.
+\ificlrfinal\lhead{Published as a conference paper at ICLR 2027}\else\lhead{Under review as a conference paper at ICLR 2027}\fi
 
 \begin{abstract}
 Long-term memory is the missing layer for LLM agents: across sessions they forget, and the common
@@ -77,13 +89,11 @@ answers from a $\sim$7.9k-token retrieved slice, never the full history---scores
 \textbf{10$\times$ fewer tokens} (7.9k vs.\ 79k), with 0 of 500 questions errored under both systems. The
 advantage grows for a weaker reader: with a small answerer the same slice wins by $+12.2$ points. On a
 200-item slice of LOCOMO, whose $\sim$16k-token histories leave little for retrieval to remove, the two
-tie overall while the lean path wins the adversarial and multi-hop categories. We find the gain is
-load-bearing on the read path being \emph{hybrid}: a facts-only path loses recall, while facts plus
-retrieved raw chunks recover detail. Beyond
-the system, we contribute a single neutral, in-repo evaluation harness with the official judge baked in, the
-full-context baseline in every table, and the raw per-question logs published---and we document the
-measurement-integrity pitfalls (truncation, home-grown judges, full-history ``leaks'') that silently distort
-memory-benchmark numbers. Every number in this paper ships with the command to reproduce it.
+tie overall while the lean path wins the adversarial and multi-hop categories. The gain depends on the read
+path being \emph{hybrid}: facts alone lose recall; facts plus retrieved raw chunks recover detail. Beyond the
+system, we contribute a neutral, in-repo evaluation harness---official judge baked in, full-context baseline
+in every table, raw per-question logs published---and document the measurement-integrity pitfalls that
+silently distort memory-benchmark numbers. Every number in this paper ships with the command to reproduce it.
 \end{abstract}
 
 \section{Introduction}
@@ -141,10 +151,6 @@ fusion, salience decay, and asynchronous consolidation, and build in the seams b
   planner and exposes a date-granularity limitation of fact extraction.
 \end{enumerate}
 
-\engram{} is dual-licensed (AGPL-3.0 plus a commercial license), self-hostable, and runs end-to-end with zero
-setup---no API keys, no external services---via deterministic offline fallbacks, so the architecture and the
-demo are reproducible without network access.
-
 \section{Related Work}
 
 \paragraph{Memory systems for LLM agents.}
@@ -181,9 +187,8 @@ backbones and on a 200-item LOCOMO slice (\S\ref{sec:locomo}); the full LOCOMO s
 \paragraph{Retrieval.}
 \engram{}'s read path builds on dense retrieval~\citep{karpukhin2020dpr} with modern dense sentence
 embeddings (the BGE family~\citep{xiao2024cpack}; we use the English \texttt{bge-small-en-v1.5}), classical
-lexical scoring (BM25~\citep{robertson2009bm25}), and rank fusion
-via Reciprocal Rank Fusion~\citep{cormack2009rrf}, in the retrieval-augmented generation
-tradition~\citep{lewis2020rag}. The dual-process framing draws on the System-1/System-2 distinction in
+lexical scoring (BM25~\citep{robertson2009bm25}), and Reciprocal Rank Fusion~\citep{cormack2009rrf}, in
+the retrieval-augmented generation tradition~\citep{lewis2020rag}. The dual-process framing draws on the System-1/System-2 distinction in
 cognitive science~\citep{kahneman2011thinking}, and salience decay on the classical forgetting
 curve~\citep{ebbinghaus1913memory}.
 
@@ -196,7 +201,7 @@ consolidation path (System-2) that writes into a typed, bi-temporal memory, whic
 
 \begin{figure}[t]
 \centering
-\resizebox{\textwidth}{!}{%
+\resizebox{0.84\textwidth}{!}{%
 \begin{tikzpicture}[
   font=\footnotesize,
   chip/.style={rounded corners=2pt, draw=black!55, fill=white, inner sep=3pt,
@@ -259,12 +264,10 @@ consolidation path (System-2) that writes into a typed, bi-temporal memory, whic
 \draw[vflow] (bandM.south)--node[right=1pt,font=\scriptsize,text=black!60]{retrieve}(bandR.north);
 \end{tikzpicture}%
 }
-\caption{The \engram{} dual-process architecture. A hot write path (\textsc{System-1}) never blocks on an
-LLM; an asynchronous consolidation path (\textsc{System-2}) extracts atomic facts, builds the bi-temporal
-knowledge graph, and resolves conflicts non-destructively; both feed a typed, bi-temporal memory backed by
-pluggable stores; and a hybrid read path retrieves a compact, provenance-tagged slice (dense $+$ lexical $+$
-graph $+$ recency, fused by RRF), applies an as-of temporal filter and an abstention gate, and assembles the
-answer context.}
+\caption{The \engram{} dual-process architecture: a hot write path (\textsc{System-1}) that never blocks on
+an LLM; an asynchronous consolidation path (\textsc{System-2}) that extracts facts, builds the bi-temporal
+graph and resolves conflicts non-destructively; a typed memory over pluggable stores; and a hybrid read path
+(dense $+$ lexical $+$ graph $+$ recency, fused by RRF) with an as-of filter and an abstention gate.}
 \label{fig:arch}
 \end{figure}
 
@@ -290,7 +293,7 @@ keep the history. Every fact can therefore answer ``where did this come from?'' 
 
 \begin{figure}[t]
 \centering
-\resizebox{0.96\textwidth}{!}{%
+\resizebox{0.8\textwidth}{!}{%
 \begin{tikzpicture}[font=\footnotesize, >={Stealth[length=2.4mm]}]
 % time axis
 \draw[->, line width=1pt, black!70] (-0.2,0)--(13.2,0);
@@ -326,11 +329,10 @@ keep the history. Every fact can therefore answer ``where did this come from?'' 
 \draw[->, black!45] (qb)--(9.0,2.0);
 \end{tikzpicture}%
 }
-\caption{Bi-temporal facts make contradictions and ``as-of'' queries first-class. When Fact~B arrives at
-$t_1$, \engram{} sets $\text{A.}\texttt{invalid\_at}=t_1$ and $\text{B.}\texttt{supersedes}=\text{A}$: Fact~A
-is \emph{invalidated, not deleted}, so the history (and provenance) survives. A point-in-time query then
-resolves against the valid fact for that time---\textsc{Tencent} as-of $t_0$, \textsc{Moonshot~AI} as-of
-now---which is exactly what the knowledge-update and temporal categories require.}
+\caption{Bi-temporal facts make contradictions and ``as-of'' queries first-class: when Fact~B arrives at
+$t_1$, \engram{} sets $\text{A.}\texttt{invalid\_at}=t_1$ and $\text{B.}\texttt{supersedes}=\text{A}$---A is
+\emph{invalidated, not deleted}, so history and provenance survive---and a point-in-time query resolves
+against the fact valid at that time, which is what the knowledge-update and temporal categories require.}
 \label{fig:bitemporal}
 \end{figure}
 
@@ -351,18 +353,14 @@ abstraction (session summaries $\rightarrow$ profile) runs here as well.
 \subsection{Cheap-then-escalate conflict resolution}
 
 When a new fact arrives for an existing $(\textit{subject},\textit{predicate})$ slot with a different object,
-\engram{} resolves it in increasing order of cost:
-\begin{enumerate}
-  \item \textbf{Slot match} (exact) signals a likely update; \textbf{embedding similarity} catches the same
-  attribute under a different free-form predicate; \textbf{content subsumption} (one claim $\subseteq$ the
-  other) separates contradiction from elaboration.
-  \item If the claims are clearly contradictory and temporally ordered, invalidate the old one
-  ($\texttt{old.invalid\_at} \leftarrow \texttt{new.valid\_at}$) and set
-  $\texttt{new.supersedes} \leftarrow \texttt{old.id}$. \emph{No LLM call.}
-  \item Only genuinely ambiguous cases escalate to an LLM adjudicator.
-\end{enumerate}
-This is the cost win over systems that invoke an LLM on every fact, while preserving production-grade temporal
-correctness and a complete audit trail.
+\engram{} resolves it in increasing order of cost. First, cheap signals: an exact \textbf{slot match}
+signals a likely update, \textbf{embedding similarity} catches the same attribute under a different
+free-form predicate, and \textbf{content subsumption} (one claim $\subseteq$ the other) separates
+contradiction from elaboration. Second, if the claims are clearly contradictory and temporally ordered, the
+old one is invalidated ($\texttt{old.invalid\_at} \leftarrow \texttt{new.valid\_at}$) and
+$\texttt{new.supersedes} \leftarrow \texttt{old.id}$---with \emph{no LLM call}. Only genuinely ambiguous cases
+escalate to an LLM adjudicator. This is the cost win over systems that invoke an LLM on every fact, while
+preserving temporal correctness and a complete audit trail.
 
 \subsection{The hybrid read path}
 
@@ -389,12 +387,8 @@ assembled context is \emph{hybrid}: it contains both the conflict-resolved bi-te
 relevant raw session chunks (plus session-level summaries). \S\ref{sec:results} shows this hybrid composition
 is necessary---facts alone lose recall.
 
-\paragraph{Pluggable backends.}
-Every external dependency---LLM, embedder, vector store, graph store, lexical index---sits behind an interface
-with a zero-dependency offline fallback (a hashing embedder, a rule-based extractor, in-memory stores). The
-end-to-end loop and the unit tests therefore run deterministically with no API keys and no services; real
-backends (BGE embeddings, LanceDB/Qdrant/pgvector, Kuzu/Neo4j, any LLM via LiteLLM) slot in behind the same
-interfaces.
+Every external dependency---LLM, embedder, vector, graph and lexical store---sits behind an interface with
+a zero-dependency offline fallback, so the loop runs with no API keys (Appendix~\ref{app:backends}).
 
 \section{Experimental Setup}
 \label{sec:setup}
@@ -424,63 +418,26 @@ apples-to-apples by construction.
 
 \paragraph{Retrieval configuration.}
 The hybrid read path fuses five ranked signals by weighted Reciprocal Rank Fusion ($k_{\text{RRF}}=60$) with
-the weights in Table~\ref{tab:hyper} (repository defaults, tuned on the harness, not hand-set per question).
-The lean slice assembles up to 8 conflict-resolved facts, the top-15 fused items, 2 raw session chunks, and
-28 session-level summaries; exact flag semantics are in the reproduce command below.
-
-\begin{table}[h]
-\centering\small
-\caption{Retrieval-fusion weights for Eq.~\eqref{eq:score} and the RRF constant, as used by the headline
-\lean{} configuration (defaults in \texttt{engram/config.py}).}
-\label{tab:hyper}
-\begin{tabular}{cccccc}
-\toprule
-$w_{\text{sem}}$ & $w_{\text{lex}}$ & $w_{\text{graph}}$ & $w_{\text{rec}}$ & $w_{\text{sal}}$ & $k_{\text{RRF}}$ \\
-\midrule
-1.0 & 0.6 & 0.8 & 0.3 & 0.25 & 60 \\
-\bottomrule
-\end{tabular}
-\end{table}
+the Eq.~\eqref{eq:score} weights $w_{\text{sem}}=1.0$, $w_{\text{lex}}=0.6$, $w_{\text{graph}}=0.8$,
+$w_{\text{rec}}=0.3$, $w_{\text{sal}}=0.25$ (the repository defaults in \texttt{engram/config.py}, tuned on
+the harness, not hand-set per question). The lean slice assembles up to 8 conflict-resolved facts, the
+top-15 fused items, 2 raw session chunks, and 28 session-level summaries; exact flag semantics are in the
+reproduce command.
 
 \paragraph{Reproduce.}
-The headline run is a single command (raw per-question logs are committed to the repository as
-\texttt{results/run500\_v3\_main\_deepseekjudge.jsonl}):
-\begin{quote}\small\ttfamily
-python eval/bench.py --data s --limit 500 \textbackslash\\
-\hspace*{2em}--systems engram\_lean,full\_context \textbackslash\\
-\hspace*{2em}--answerer volcano:doubao-seed-2-0-pro-260215 \textbackslash\\
-\hspace*{2em}--judge deepseek --extractor volcano:doubao-seed-1-6-flash-250615 \textbackslash\\
-\hspace*{2em}--embedder bge-small --reasoning --persona \textbackslash\\
-\hspace*{2em}--chunks 2 --topk 15 --extract-k 8 --summ-k 28 --n-summaries 28
-\end{quote}
-The second backbone substitutes \texttt{--answerer volcano:doubao-seed-1-6-flash-250615}; the LOCOMO slice
-substitutes \texttt{--data locomo --limit 200} (\texttt{eval/locomo.py} converts the public LOCOMO release
-into the harness's item format). \texttt{python eval/report.py <run.jsonl>} recomputes every table below
-from a log, and \texttt{python paper/check\_numbers.py} asserts that every number in this paper's main text
-equals a value recomputed from the committed logs.
+The headline run is a single command, given verbatim (with the model identifiers and every flag) in the
+Reproducibility Statement; its raw per-question log is committed to the repository as
+\texttt{results/run500\_v3\_main\_deepseekjudge.jsonl}. The second backbone swaps the answerer flag and the
+LOCOMO slice the data flag, nothing else. \texttt{python eval/report.py <run.jsonl>} recomputes every table
+below from a log, and \texttt{python paper/check\_numbers.py} asserts that every number in this paper's
+main text equals a value recomputed from the committed logs.
 
 \paragraph{Measurement-integrity notes.}
-We document the bugs that silently inflate or deflate memory-benchmark numbers, because they are the reason
-cross-source numbers disagree:
-\begin{enumerate}
-  \item \textbf{Lean, not full-history (the honest test).} An earlier headline prepended facts \emph{above the
-  entire history}; because that system \emph{contains} full-context, it cannot really lose to it and does not
-  validate the retrieval thesis. The headline is now \lean{}, which answers from a $\sim$7.9k-token retrieved
-  slice.
-  \item \textbf{Full-context truncation.} The baseline was once capped below the haystack size, feeding it
-  only the oldest sessions; this \emph{deflated the baseline}. Fixed so it receives the whole haystack. (Any
-  much lower full-context figure from before this fix is a truncation artifact.)
-  \item \textbf{Official judge, not a home-grown one.} A generic ``same info?'' judge was \emph{stricter} than
-  the official LongMemEval judge and made scores non-comparable; we use the official prompts verbatim.
-  \item \textbf{Abstention} questions are graded by the official \emph{unanswerable} judge.
-  \item \textbf{Reliability.} The LLM client uses exponential-backoff retry with transient/permanent error
-  classification; the headline run completed with \textbf{0 errored questions} of 500 under both systems.
-  \item \textbf{Judge endpoint drift.} The judge behind our arXiv~v1 numbers was a third-party endpoint that
-  was retired underneath the documented command, and nothing in the repository noticed until the command
-  failed; the absolute scores moved when we re-ran under a judge we can still reach
-  (footnote~\ref{fn:judge}). A reproducible harness must name its judge beside every number and keep every
-  log it cites committed, which is what we now do.
-\end{enumerate}
+Six bugs and drifts that silently inflate or deflate memory-benchmark numbers---and that we hit and fixed
+ourselves---are documented in Appendix~\ref{app:integrity}: a ``memory'' system that still contained the
+full history, a truncated full-context baseline, a home-grown judge stricter than the official one,
+abstention grading, retry handling (the headline run has 0 errored questions of 500 under both systems),
+and the judge-endpoint drift of footnote~\ref{fn:judge}. They are the reason cross-source numbers disagree.
 
 \section{Results}
 \label{sec:results}
@@ -497,11 +454,12 @@ are recomputed from the committed log by \texttt{paper/compute\_stats.py}.
 
 \begin{table}[h]
 \centering
-\caption{\textsc{LongMemEval}\textsubscript{S}, 500 questions, official judge prompts. Same answerer
-(\texttt{doubao-seed-2.0-pro}) and judge (\texttt{deepseek-chat}) applied to both systems. Accuracy is shown
-with a Wilson 95\% confidence interval; the paired difference is significant (McNemar exact $p=0.009$).
-Latency is end-to-end wall-clock per question including the remote answerer call, p50\,/\,p95.}
+\caption{\textsc{LongMemEval}\textsubscript{S}, 500 questions, official judge prompts; same answerer
+(\texttt{doubao-seed-2.0-pro}) and judge (\texttt{deepseek-chat}) for both systems. Accuracy with a Wilson
+95\% CI (paired difference: McNemar exact $p=0.009$); latency is end-to-end wall-clock per question
+including the remote answerer call, p50\,/\,p95.}
 \label{tab:headline}
+\resizebox{\linewidth}{!}{%
 \begin{tabular}{lcrrr}
 \toprule
 System & Overall acc.\ (95\% CI) & Avg.\ context tokens & Latency p50\,/\,p95 & Errors \\
@@ -509,18 +467,16 @@ System & Overall acc.\ (95\% CI) & Avg.\ context tokens & Latency p50\,/\,p95 & 
 \textbf{\engram{}} (\lean{}) & \textbf{84.4\%} \,[81.0,\,87.3] & \textbf{7.9k} & 52.9\,s\,/\,118.7\,s & 0 / 500 \\
 full-context baseline        & 78.8\% \,[75.0,\,82.2]          & 79.2k         & 14.6\,s\,/\,59.2\,s  & 0 / 500 \\
 \bottomrule
-\end{tabular}
+\end{tabular}}
 \end{table}
 
 \begin{figure}[t]
 \centering
-\includegraphics[width=0.72\textwidth]{fig_acc_tokens.pdf}
-\caption{Accuracy vs.\ average context tokens on LongMemEval\textsubscript{S} (500 questions, official judge
-prompts) for two answerer backbones. For each backbone \lean{} (star) sits up and to the left of the
-full-context baseline (square): \textbf{$+5.6$ points at 10$\times$ fewer tokens} for
-\texttt{doubao-seed-2.0-pro}, and $+12.2$ points at 11$\times$ fewer tokens for the small
-\texttt{doubao-seed-1.6-flash} (Table~\ref{tab:backbones})---the weaker the reader, the more it needs the
-precise slice.}
+\includegraphics[width=0.62\textwidth]{fig_acc_tokens.pdf}
+\caption{Accuracy vs.\ average context tokens on LongMemEval\textsubscript{S} (500 questions) for two answerer
+backbones: \lean{} (star) sits up and to the left of full-context (square)---\textbf{$+5.6$ points at
+10$\times$ fewer tokens} for \texttt{doubao-seed-2.0-pro}, $+12.2$ at 11$\times$ for the small
+\texttt{doubao-seed-1.6-flash} (Table~\ref{tab:backbones}).}
 \label{fig:acctokens}
 \end{figure}
 
@@ -541,7 +497,7 @@ official \emph{unanswerable} judge and counted inside their host categories abov
 cost against a baseline that, as the error analysis below shows, abstains often anyway.
 
 \begin{table}[h]
-\centering\small
+\centering\footnotesize
 \caption{Per-category accuracy on \textsc{LongMemEval}\textsubscript{S} (500 questions; the run of
 Table~\ref{tab:headline}). $\Delta$ is \lean{} minus full-context. The 30 unanswerable (abstention) items are
 counted inside their host categories; broken out, they score 90.0\% (\lean{}) vs.\ 93.3\% (full-context).}
@@ -564,12 +520,10 @@ overall                   & \textbf{84.4\%} & 78.8\%          & $+5.6$  & 500 \\
 
 \begin{figure}[t]
 \centering
-\includegraphics[width=0.82\textwidth]{fig_percat.pdf}
-\caption{Per-category accuracy of \lean{} and the full-context baseline on the full 500-question set (with
-per-category $n$; the dashed line is the 84.4\% lean overall). The two bi-temporal
-categories---\emph{knowledge-update} and \emph{temporal-reasoning}---are highlighted: temporal-reasoning is a
-small win, knowledge-update the one loss. The largest margins are in \emph{single-session-preference} and
-\emph{multi-session} aggregation.}
+\includegraphics[width=0.74\textwidth]{fig_percat.pdf}
+\caption{Per-category accuracy of \lean{} vs.\ full-context on the full 500-question set (dashed line: the
+84.4\% lean overall). The two bi-temporal categories are highlighted: temporal-reasoning a small win,
+knowledge-update the one loss; the largest margins are single-session-preference and multi-session.}
 \label{fig:percat}
 \end{figure}
 
@@ -599,7 +553,7 @@ question is \emph{higher} for \lean{} (p50 52.9\,s vs.\ 14.6\,s, Table~\ref{tab:
 records wall-clock per question including the remote answerer call and does not instrument retrieval
 separately, so we report the latency as measured and make no retrieval-latency claim from these logs.
 
-\subsection{A second answerer backbone: the weaker the reader, the more it needs the slice}
+\subsection{A second backbone: the weaker the reader, the larger the gain}
 \label{sec:backbones}
 
 Memory quality should not depend on one model's ability to read our structures, so the same 500 questions
@@ -611,20 +565,19 @@ within-run, same-judge comparison, which is the claim we make. The lean slice wi
 judge, and the margin is \emph{largest for the weakest reader}: $+12.2$ points (65.2\% vs.\ 53.0\%) for the
 small answerer, against $+3.0$ for the pro answerer under the same judge and code, and $+5.6$ on the current
 code, at a $\sim$10--11$\times$ token ratio throughout. With the small answerer the lean advantage holds in
-five of six categories (multi-session $+16.5$, temporal-reasoning $+15.8$, single-session-user $+12.9$,
-single-session-preference $+10.0$, knowledge-update $+9.0$), the exception being single-session-assistant
-($-1.8$), which is near ceiling for both. The reading is simple: a strong model can partly compensate for a
+five of six categories, the exception being single-session-assistant, which is near ceiling for both
+(per-category gaps in Appendix~\ref{app:flash}). The reading is simple: a strong model can partly compensate for a
 noisy window by searching it; a weak one cannot, so removing distractors is worth more to it. That is the
 regime that matters for cheap and local deployments.
 
 \begin{table}[h]
 \centering\small
-\caption{Answerer backbones on the same 500 questions, extractor and harness. Gap $=$ \lean{} $-$
-full-context; token ratio $=$ full-context tokens / lean tokens. Each row is a within-run comparison under
-one judge; rows differ in code revision and judge as marked, so compare gaps, not levels, across rows.
-Logs: \texttt{results/run500\_v3\_main\_deepseekjudge.jsonl}, \texttt{results/headline\_500.jsonl},
-\texttt{results/bb\_flash.jsonl}.}
+\caption{Answerer backbones on the same 500 questions, extractor and harness (gap $=$ \lean{} $-$
+full-context; token ratio $=$ full-context / lean tokens). Each row is a within-run comparison under one
+judge; rows differ in code revision and judge as marked, so compare gaps, not levels, across rows. Logs:
+\texttt{run500\_v3\_main\_deepseekjudge}, \texttt{headline\_500}, \texttt{bb\_flash} (\texttt{results/*.jsonl}).}
 \label{tab:backbones}
+\resizebox{\linewidth}{!}{%
 \begin{tabular}{llrrrr}
 \toprule
 Answerer & Code / judge & \lean{} & full-context & Gap & Token ratio \\
@@ -633,7 +586,7 @@ Answerer & Code / judge & \lean{} & full-context & Gap & Token ratio \\
 \texttt{doubao-seed-2.0-pro}   & June 2026 / retired ARK judge & \textbf{79.0\%} & 76.0\% & $+3.0$  & 10.9$\times$ \\
 \texttt{doubao-seed-1.6-flash} & June 2026 / retired ARK judge & \textbf{65.2\%} & 53.0\% & $+12.2$ & 10.9$\times$ \\
 \bottomrule
-\end{tabular}
+\end{tabular}}
 \end{table}
 
 \subsection{A second benchmark: a 200-item LOCOMO slice}
@@ -667,7 +620,7 @@ date annotations did not expose---the concrete value of a second benchmark---and
 the bi-temporal model (\S\ref{sec:limitations}).
 
 \begin{table}[h]
-\centering\small
+\centering\footnotesize
 \caption{LOCOMO, first 200 of 1,986 items (a slice; the full run is in progress). Same answerer, extractor
 and judge as Table~\ref{tab:headline}; log \texttt{results/locomo200\_main\_deepseekjudge.jsonl}, 0 errors.}
 \label{tab:locomo}
@@ -690,8 +643,8 @@ avg.\ context tokens & 3.4k           & 16.2k           &         & \\
 \section{Discussion and Limitations}
 \label{sec:limitations}
 
-We report the result openly rather than as a leaderboard ``win,'' precisely because our thesis is that
-cross-harness numbers are not comparable. The honest scope of the present evidence:
+Because our thesis is that cross-harness numbers are not comparable, we state the honest scope of the
+present evidence rather than a leaderboard ``win'':
 
 \begin{itemize}
   \item \textbf{Two backbones from one family; one full benchmark plus a slice.} The headline is
@@ -728,23 +681,23 @@ optimization into a quality improvement. Equally,
 we contribute the neutral, reproducible harness that makes such a claim checkable: the official judge baked in,
 the full-context baseline in every table, documented measurement-integrity pitfalls, and the raw logs published.
 In a field where every number is contested, the trustworthy scoreboard is itself the result. The system, the
-harness, and the logs are open source.
+harness, and the logs are open source\ifanon{} in a public repository (link withheld for double-blind
+review; see the Reproducibility Statement)\else{} at \url{https://github.com/ly-wang19/engram}\fi.
 
-\section*{Ethics and Broader Impact}
+\section*{AI Use Statement}
+\label{sec:aiuse}
 
-A long-term memory layer necessarily persists personal data across sessions, which raises real privacy
-obligations. Two of \engram{}'s core design choices are mitigations as much as features: \emph{non-destructive
-invalidation with full provenance} yields an auditable trail of what was believed, when, and from which
-source, which makes targeted deletion and ``right to be forgotten'' requests tractable rather than
-best-effort; and \emph{salience decay} lets unreinforced personal details fade by default. Because every
-component has a zero-dependency offline fallback, \engram{} can run fully locally---no user data need leave the
-operator's machine---and the AGPL-3.0 license keeps self-hosted data under the operator's control. The
-principal risks are the obverse of the benefits: a memory store concentrates sensitive information and must be
-secured, access-controlled, and scoped to genuine consent; and a memory that confidently surfaces a
-\emph{stale} or \emph{wrong} fact can mislead, which is precisely why the bi-temporal model and the abstention
-gate (decline when memory lacks the answer) are first-class rather than optional.
+LLM-based AI coding assistants were used in producing this work, in two ways that we separate explicitly.
+First, as engineering tools: they wrote and refactored parts of the \engram{} code base, the evaluation
+harness, the statistics and figure scripts, and drafted and edited passages of this manuscript under the
+authors' direction. Second, as \emph{measured components}: the answerer, the fact extractor and the judge
+are LLMs and are named, with model identifiers, in \S\ref{sec:setup}; they are the object of study, not an
+authoring aid. The human authors designed the system and the experiments, ran and checked every run,
+verified every number against the committed logs (\texttt{paper/check\_numbers.py}), and take full
+responsibility for all claims, text and code in the paper.
 
 \section*{Reproducibility Statement}
+\label{sec:repro}
 
 Every number in this paper is produced by the in-repo harness and backed by committed per-question logs
 (prediction, gold, correctness, tokens, and latency for every question of every run cited: both answerer
@@ -752,14 +705,48 @@ backbones on \textsc{LongMemEval}\textsubscript{S} and the LOCOMO slice), and \t
 asserts that every number in the main text equals a value recomputed from those logs. The end-to-end loop and unit
 tests run with no API keys and no external services via deterministic offline fallbacks; the benchmark
 numbers require an OpenAI-compatible model endpoint for the answerer, extractor, and judge, all configurable.
-The exact command, model identifiers, embedder, and hyper-parameters are in \S\ref{sec:setup}; raw logs and
-the harness are in the repository. The significance tests and confidence intervals in \S\ref{sec:results} are
-recomputed from the committed logs by \texttt{paper/compute\_stats.py}, with no model calls.
+The model identifiers, embedder, and hyper-parameters are in \S\ref{sec:setup}, and the headline run is
+the single command below (log: \texttt{results/run500\_v3\_main\_deepseekjudge.jsonl}):
+\begin{list}{}{\leftmargin=1em}\item[]\footnotesize\ttfamily
+python eval/bench.py --data s --limit 500 --systems engram\_lean,full\_context \textbackslash\\
+\hspace*{1.5em}--answerer volcano:doubao-seed-2-0-pro-260215 --judge deepseek \textbackslash\\
+\hspace*{1.5em}--extractor volcano:doubao-seed-1-6-flash-250615 --embedder bge-small \textbackslash\\
+\hspace*{1.5em}--reasoning --persona --chunks 2 --topk 15 --extract-k 8 \textbackslash\\
+\hspace*{1.5em}--summ-k 28 --n-summaries 28
+\end{list}
+Substitutions: \texttt{--answerer volcano:doubao-seed-1-6-flash-250615} for the second backbone;
+\texttt{--data locomo --limit 200} for the LOCOMO slice (items converted from the public release by
+\texttt{eval/locomo.py}). The appendix reproduces every prompt verbatim. The significance tests and
+confidence intervals in \S\ref{sec:results} are recomputed from the committed logs by
+\texttt{paper/compute\_stats.py}, with no model calls. The code, the harness and the raw logs are
+\ifanon in a public repository whose link is withheld for double-blind review and will be given in the
+camera-ready version\else at \url{https://github.com/ly-wang19/engram}\fi; the benchmark data
+(\textsc{LongMemEval} and LOCOMO) are the public releases.
+
+\section*{Ethics Statement}
+\label{sec:ethics}
+
+A long-term memory layer necessarily persists personal data across sessions, which raises real privacy
+obligations. Two of \engram{}'s core design choices are mitigations as much as features: \emph{non-destructive
+invalidation with full provenance} yields an auditable trail of what was believed, when, and from which
+source, and \emph{salience decay} lets unreinforced personal details fade by default. Non-destructive
+invalidation is a statement about \emph{contradiction}, not about \emph{erasure}: a contradicted fact is
+kept, invalidated, so that the history stays auditable, but the store also exposes explicit deletion---a
+single fact, or everything held about a user---so that a ``right to be forgotten'' request is a supported
+operation rather than a best-effort one. Because every component has a zero-dependency offline fallback,
+\engram{} can run fully locally---no user data need leave the operator's machine---and the AGPL-3.0 license
+keeps self-hosted data under the operator's control. The principal risks are the obverse of the benefits: a
+memory store concentrates sensitive information and must be secured, access-controlled, and scoped to genuine
+consent; and a memory that confidently surfaces a \emph{stale} or \emph{wrong} fact can mislead, which is
+precisely why the bi-temporal model and the abstention gate (decline when memory lacks the answer) are
+first-class rather than optional. All experiments use the public \textsc{LongMemEval} and LOCOMO releases,
+whose conversations are synthetic or already published; no private user data were collected or used.
 
 \bibliographystyle{plainnat}
 \bibliography{references}
 
 \appendix
+\label{app:start}
 
 \section{Prompts}
 \label{app:prompts}
@@ -862,6 +849,49 @@ I will give you an unanswerable question, an explanation, and a response. Answer
 identifies the question as unanswerable (it may say the information is incomplete, or give other
 information but not the asked information).
 \end{lstlisting}
+
+\section{Measurement-Integrity Notes}
+\label{app:integrity}
+
+We document the bugs that silently inflate or deflate memory-benchmark numbers, because they are the reason
+cross-source numbers disagree:
+\begin{enumerate}
+  \item \textbf{Lean, not full-history (the honest test).} An earlier headline prepended facts \emph{above the
+  entire history}; because that system \emph{contains} full-context, it cannot really lose to it and does not
+  validate the retrieval thesis. The headline is now \lean{}, which answers from a $\sim$7.9k-token retrieved
+  slice.
+  \item \textbf{Full-context truncation.} The baseline was once capped below the haystack size, feeding it
+  only the oldest sessions; this \emph{deflated the baseline}. Fixed so it receives the whole haystack. (Any
+  much lower full-context figure from before this fix is a truncation artifact.)
+  \item \textbf{Official judge, not a home-grown one.} A generic ``same info?'' judge was \emph{stricter} than
+  the official LongMemEval judge and made scores non-comparable; we use the official prompts verbatim.
+  \item \textbf{Abstention} questions are graded by the official \emph{unanswerable} judge.
+  \item \textbf{Reliability.} The LLM client uses exponential-backoff retry with transient/permanent error
+  classification; the headline run completed with \textbf{0 errored questions} of 500 under both systems.
+  \item \textbf{Judge endpoint drift.} The judge behind our arXiv~v1 numbers was a third-party endpoint that
+  was retired underneath the documented command, and nothing in the repository noticed until the command
+  failed; the absolute scores moved when we re-ran under a judge we can still reach
+  (footnote~\ref{fn:judge}). A reproducible harness must name its judge beside every number and keep every
+  log it cites committed, which is what we now do.
+\end{enumerate}
+
+\section{Pluggable Backends}
+\label{app:backends}
+
+Every external dependency---LLM, embedder, vector store, graph store, lexical index---sits behind an interface
+with a zero-dependency offline fallback (a hashing embedder, a rule-based extractor, in-memory stores). The
+end-to-end loop and the unit tests therefore run deterministically with no API keys and no services; real
+backends (BGE embeddings, LanceDB/Qdrant/pgvector, Kuzu/Neo4j, any LLM via LiteLLM) slot in behind the same
+interfaces.
+
+\section{Second Backbone: Per-Category Gaps}
+\label{app:flash}
+
+With the small \texttt{doubao-seed-1.6-flash} answerer (Table~\ref{tab:backbones}; log
+\texttt{results/bb\_flash.jsonl}), the lean advantage holds in five of six categories: multi-session
+$+16.5$, temporal-reasoning $+15.8$, single-session-user $+12.9$, single-session-preference $+10.0$,
+knowledge-update $+9.0$. The exception is single-session-assistant ($-1.8$), which is near ceiling for both
+systems. All gaps are \lean{} minus full-context within that run, under its own judge.
 
 \section{Qualitative Examples}
 \label{app:examples}

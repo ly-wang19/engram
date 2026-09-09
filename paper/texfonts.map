@@ -1,0 +1,4 @@
+% Fallback for TeX installs without the helvetic package: the ICLR style loads phvb (Helvetica-Bold)
+% only for the reviewer line-number ruler. When phvb.tfm is absent, kpathsea resolves it to ptmb (Times Bold);
+% main.tex adds the matching pdfTeX map line. Ignored when the real phvb.tfm exists.
+ptmb phvb
