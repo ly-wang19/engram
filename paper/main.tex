@@ -708,11 +708,11 @@ numbers require an OpenAI-compatible model endpoint for the answerer, extractor,
 The model identifiers, embedder, and hyper-parameters are in \S\ref{sec:setup}, and the headline run is
 the single command below (log: \texttt{results/run500\_v3\_main\_deepseekjudge.jsonl}):
 \begin{list}{}{\leftmargin=1em}\item[]\footnotesize\ttfamily
-python eval/bench.py --data s --limit 500 --systems engram\_lean,full\_context \textbackslash\\
-\hspace*{1.5em}--answerer volcano:doubao-seed-2-0-pro-260215 --judge deepseek \textbackslash\\
-\hspace*{1.5em}--extractor volcano:doubao-seed-1-6-flash-250615 --embedder bge-small \textbackslash\\
-\hspace*{1.5em}--reasoning --persona --chunks 2 --topk 15 --extract-k 8 \textbackslash\\
-\hspace*{1.5em}--summ-k 28 --n-summaries 28
+python eval/bench.py -{}-data s -{}-limit 500 -{}-systems engram\_lean,full\_context \textbackslash\\
+\hspace*{1.5em}-{}-answerer volcano:doubao-seed-2-0-pro-260215 -{}-judge deepseek \textbackslash\\
+\hspace*{1.5em}-{}-extractor volcano:doubao-seed-1-6-flash-250615 -{}-embedder bge-small \textbackslash\\
+\hspace*{1.5em}-{}-reasoning -{}-persona -{}-chunks 2 -{}-topk 15 -{}-extract-k 8 \textbackslash\\
+\hspace*{1.5em}-{}-summ-k 28 -{}-n-summaries 28
 \end{list}
 Substitutions: \texttt{-{}-answerer volcano:doubao-seed-1-6-flash-250615} for the second backbone;
 \texttt{-{}-data locomo -{}-limit 200} for the LOCOMO slice (items converted from the public release by
