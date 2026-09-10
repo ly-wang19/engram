@@ -3,6 +3,8 @@ so the entire pipeline (graph build, conflict resolution, retrieval) is unchange
 quality goes up. Used automatically when a Memory is given an `llm`."""
 from __future__ import annotations
 
+from typing import Optional
+
 import json
 import re
 
@@ -43,6 +45,22 @@ _NAME_PREDICATES = {"name", "name_is", "is_named", "called", "nickname", "call_m
                     "name_preference", "称呼", "昵称"}
 # first-person / user references normalized to the user's canonical name (EN + ZH coreference)
 _SELF_REFS = {"user", "i", "me", "myself", "用户", "我", "本人", "自己", "俺", "咱"}
+
+# Speaker labels that mean "a role in a chat", not a person. When `ep.speaker` is anything else it is a
+# named person talking (a multi-party transcript such as LOCOMO, where two friends share one user_id),
+# and identity must be scoped to that person: their "I" is them, and a name they declare is *their*
+# alias. Registering every declared name as an alias of the user_id collapsed both speakers into one
+# subject — a latent rule since June that a thread-pool race mostly hid until extraction became
+# chronological (216802b), after which LOCOMO single-hop fell 18 points on the same 200 questions.
+_ROLE_SPEAKERS = {"", "user", "assistant", "system", "human", "ai", "bot", "agent"}
+
+
+def _speaker_person(ep: Episode) -> Optional[str]:
+    """The named person speaking this turn, or None when the speaker is just a chat role."""
+    s = (ep.speaker or "").strip()
+    if s.lower() in _ROLE_SPEAKERS or s.lower() in _SELF_REFS:
+        return None
+    return s
 
 
 def _norm_predicate(p: str) -> str:
@@ -117,6 +135,9 @@ class LLMExtractor:
         # Set from Memory.policy["extract_instruction"] — the headline "要记录什么记忆" knob in the console.
         self.instruction = ""
         self.self_name: dict[str, str] = {}        # user_id -> canonical name (the first one declared)
+        # (user_id, person) -> declared names of that person, for multi-party transcripts. Kept apart
+        # from `aliases`/`self_name` so a named speaker never becomes an alias of the user_id itself.
+        self.speaker_aliases: dict[tuple[str, str], set[str]] = {}
         self.aliases: dict[str, set] = {}          # user_id -> {all declared names/nicknames} (coreference)
 
     def self_of(self, user_id: str) -> str:
@@ -155,13 +176,29 @@ class LLMExtractor:
             obj = str(item.get("object", "")).strip()
             if not subj or not pred or not obj:
                 continue
+            person = _speaker_person(ep)
             if pred in _NAME_PREDICATES:
+                if person is not None:
+                    # A named speaker declaring a name/nickname: it is *their* alias, not the user_id's.
+                    self.speaker_aliases.setdefault((ep.user_id, person), set()).add(obj.lower())
+                    continue
                 # register every declared name/nickname as a user alias; the FIRST one is the canonical
                 # subject. So 李雷 / 小雷 / 我 / 用户 all normalize to one identity below.
                 self.aliases.setdefault(ep.user_id, set()).add(obj.lower())
                 self.self_name.setdefault(ep.user_id, obj)
                 continue
-            if subj.lower() in _SELF_REFS or subj.lower() in self.aliases.get(ep.user_id, ()):
+            if person is not None:
+                # Multi-party transcript: "I" is the person speaking; a declared nickname resolves to whoever
+                # declared it. The user_id-level canonical name is deliberately NOT applied here.
+                low = subj.lower()
+                if low in _SELF_REFS or low in self.speaker_aliases.get((ep.user_id, person), ()):
+                    subj = person
+                else:
+                    for (uid, who), names in self.speaker_aliases.items():
+                        if uid == ep.user_id and low in names:
+                            subj = who
+                            break
+            elif subj.lower() in _SELF_REFS or subj.lower() in self.aliases.get(ep.user_id, ()):
                 # first-person / user reference OR any of the user's declared names (我/用户/李雷/小雷) ->
                 # normalize to ONE canonical subject, so all of the user's own facts share it (otherwise they
                 # split across subjects and the profile / conflict-resolution can't tell they're the user's).
