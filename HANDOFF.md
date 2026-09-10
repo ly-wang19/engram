@@ -188,3 +188,9 @@
 - **我另修**: 复现命令的 `--` 被 LaTeX 合字成单杠（PDF 里 `-data`）——对"每个数字附复现命令"的论文这是可信度问题；`\texttt` 内与主命令块均改为 `-{}-`（`2f85a17`）。`arxiv_abstract.txt` 从 tex 重生成（曾仍是 v1 数字）。"seven categories"→six。
 - **二期（reviewer 视角，达标即停未动，等 owner 决定）**: ① 无与其他记忆系统的对比、无 plain-RAG 消融；② **延迟自相矛盾**：图 1 写 System-1 <50ms / 读路径 <100ms，表 2 实测 p50 52.9s；③ 摘要/引言/结论说 flash 上 +12.2 但未带"不同 judge"限定；④ 未声明融合权重是在 LongMemEval 上调的（测试集调参）。②③④ 各是一段话的改动。
 - **分支** `paper/iclr2027` 已推（未开 PR——投稿不需要合 main）。
+
+- **Agent**: Claude Code · **日期**: 2026-09-10 · **LOCOMO 全量第一次作废，按论文 rig 重跑**
+- **作废原因**: 我起跑只传了 `--answerer/--judge`，其余走 bench 默认：extractor=deepseek（论文 doubao-flash）、chunks=5（2）、topk=10（15）、summ-k=25（28）、n-summaries=12（28）、reasoning/persona **关**（论文开）。七项五项不同，`engram_lean` 不是论文声明的系统。该日志改名 `results/locomo1986_WRONGRIG_bench_defaults.jsonl`，**不得引用为结果**；作为"配置敏感性"证据可用（该 rig 下 84.1 vs 89.6）。
+- **顺带发现**: 91 个错误项全是 DeepSeek judge `Insufficient Balance`（conv-43），不是数据问题；conv-43 有 64/242 题 answer 本就为空（LOCOMO 数据特性）。当前余额 16.34 CNY，重跑期间可能再次不足——watcher 见 `Insufficient Balance` 即杀进程。
+- **重跑**: `results/locomo1986_paperrig_deepseekjudge.jsonl`，完整论文 rig，workers=3。
+- **二期**: bench.py 加 `--rig paper` 预设或 `eval/run_paper_rig.sh`，杜绝"漏传 flag 静默变 rig"。同题运行方差要等此次跑完，用同 rig 的 200 切片对比才成立。
