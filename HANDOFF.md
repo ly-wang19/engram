@@ -194,3 +194,10 @@
 - **顺带发现**: 91 个错误项全是 DeepSeek judge `Insufficient Balance`（conv-43），不是数据问题；conv-43 有 64/242 题 answer 本就为空（LOCOMO 数据特性）。当前余额 16.34 CNY，重跑期间可能再次不足——watcher 见 `Insufficient Balance` 即杀进程。
 - **重跑**: `results/locomo1986_paperrig_deepseekjudge.jsonl`，完整论文 rig，workers=3。
 - **二期**: bench.py 加 `--rig paper` 预设或 `eval/run_paper_rig.sh`，杜绝"漏传 flag 静默变 rig"。同题运行方差要等此次跑完，用同 rig 的 200 切片对比才成立。
+
+- **Agent**: Claude Code · **日期**: 2026-09-11 · **LOCOMO 全量（论文 rig）结果**
+- **结果**: engram_lean **78.3%** vs full_context **88.2%**（**−9.9**，p=3.6e−29，CI [−11.5, −8.2]），1986/1986，0 错误；只有 adversarial +2.0，其余四类输 12–17 分。报告 `results/locomo_2026-09-11_full.md`。
+- **切片作废**: 8/29 的 200 题（−1.0、adversarial 45/45、multi-hop +7.2）在全量上全部不成立。同 rig 同题重跑 lean 88→76、full 89→85.5。
+- **判别实验进行中**: 当前代码重跑同 200 题（`locomo200_rerun_2026-09-11_paperrig.jsonl`）分离"方差 vs 代码回归"。
+- **论文动作**: 按验收 4 把全量替换切片（§5.2、摘要、引言、Limitations、复现命令、compute_stats/check_numbers）；**输写输**；不确定性陈述加同题重跑波动。改动**先给 owner 看再提交**。
+- **对投稿的影响（owner 须知）**: 论文从"两个 benchmark 都不输"变成"长 haystack 赢 5.6、短 haystack 输 9.9 + 边界条件"。这是更诚实也更弱的故事。
