@@ -946,7 +946,8 @@ def test_key_file_bootstrap_shares_path_without_copying_secret(tmp_path, monkeyp
             "--codex-config", str(codex), "--mcp-json", str(mcp_json)])
     installed = codex.read_text() + mcp_json.read_text()
     output = capsys.readouterr().out
-    assert '"--api-key-file"' in installed and str(key_file) in installed
+    # TOML and JSON both escape a Windows path's backslashes
+    assert '"--api-key-file"' in installed and json.dumps(str(key_file))[1:-1] in installed
     assert '"--api-key"' not in installed
     assert "synthetic-shared-secret" not in installed + output
     assert "ambient-other-tenant" not in installed + output

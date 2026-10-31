@@ -212,8 +212,10 @@ def pending_sessions(state: dict, since: Optional[float] = None,
             st = os.stat(path)
         except OSError:
             continue
-        if now - st.st_mtime < quiet_seconds:
-            continue  # still live; ingesting now would only force a re-ingest later
+        if quiet_seconds > 0 and now - st.st_mtime < quiet_seconds:
+            # still live; ingesting now would only force a re-ingest later. 0 means do not wait — on
+            # Windows a file just written can carry an mtime a few ms past time.time().
+            continue
         if seen.get(path) == st.st_size or claimed.get(path) == st.st_size:
             continue  # unchanged since the last run, or already fed by the SessionEnd hook
         if non_conversational.get(path) == st.st_size:

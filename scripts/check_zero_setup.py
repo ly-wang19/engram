@@ -40,7 +40,7 @@ CONSOLE_HELP_CALLABLES = (
 
 def _rel(path: Path) -> str:
     try:
-        return str(path.relative_to(ROOT))
+        return path.relative_to(ROOT).as_posix()  # the same text on every OS (RESULTS.md links use /)
     except ValueError:
         return str(path)
 

@@ -60,6 +60,17 @@ def _est_tokens(text: str) -> int:
     return cjk + words
 
 
+def _remove_tree_except(path: str, keep: str) -> None:
+    """Delete everything under `path` except its top-level file named `keep`."""
+    for entry in os.scandir(path):
+        if entry.name == keep:
+            continue
+        if entry.is_dir(follow_symlinks=False):
+            shutil.rmtree(entry.path)
+        else:
+            os.remove(entry.path)
+
+
 def _all_facts(mem: Memory) -> list:
     return mem.fact_store.values() + mem.cold_store.values()
 
@@ -346,6 +357,7 @@ class MemoryService:
         return mem
 
     def forget(self, user: str) -> dict:
+        emptied: list[str] = []
         with self.write_lock(user):
             self.jobs.scrub(user)
             self.management_store.clear_namespace(user)
@@ -357,10 +369,17 @@ class MemoryService:
                 # Re-check immediately before deletion so symlink swaps cannot widen the target.
                 checked = self._contained_child(os.path.basename(target))
                 if os.path.exists(checked):
-                    if os.path.isdir(checked):
+                    if os.path.isdir(checked) and os.name == "nt":
+                        # Windows cannot delete the .service.lock this call holds open: empty the
+                        # directory now and remove the lock and the directory once it is released.
+                        _remove_tree_except(checked, ".service.lock")
+                        emptied.append(checked)
+                    elif os.path.isdir(checked):
                         shutil.rmtree(checked)
                     else:
                         os.remove(checked)
+        for path in emptied:
+            shutil.rmtree(path, ignore_errors=True)
         return {"ok": True, "message": f"all memory for '{user}' erased"}
 
     @property
