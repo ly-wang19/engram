@@ -1,6 +1,9 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
+// Only the build environment is read here; declared locally rather than pulling in @types/node.
+declare const process: { env: Record<string, string | undefined> }
+
 // The console is served by the FastAPI memory server under `/ui/` in production
 // (engram/server/app.py mounts the built `dist/`). In dev, Vite proxies the API
 // to the running server so the SPA talks to the real backend with zero CORS.
