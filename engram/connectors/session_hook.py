@@ -56,7 +56,7 @@ import sys
 import time
 from typing import Callable, Iterable, Optional
 
-from . import watch
+from . import agent_sessions, watch
 
 DEFAULT_DEADLINE_S = 180
 MAX_STDIN_BYTES = 1 << 20  # a hook payload is a few hundred bytes; anything larger is not one
@@ -68,7 +68,7 @@ MIN_BYTES = 2048
 
 # Injectable: a test that actually called os.setsid() would move the whole pytest process into a new
 # session. Everything else in this module is already parameterised, so this is the one global.
-_setsid: Callable[[], int] = os.setsid
+_setsid: Callable[[], int] = getattr(os, "setsid", lambda: 0)  # POSIX only; the hook is never run on Windows
 
 
 def _path_key(path: str) -> str:
@@ -231,6 +231,11 @@ def run(argv: Optional[list[str]] = None, *, stdin: Optional[str] = None,
         return 0
     if st.st_size < MIN_BYTES:
         _say(f"hook {key12} skipped (under {MIN_BYTES} bytes)")
+        return 0
+    excluded = agent_sessions.exclude_cwd_pattern()
+    cwd = agent_sessions.session_cwd(path) if excluded is not None else None
+    if cwd and excluded.search(cwd.replace("\\", "/")):
+        _say(f"hook {key12} skipped (excluded workspace)")  # same rule as find_sessions
         return 0
     if (state.get("seen") or {}).get(path) == st.st_size:
         _say(f"hook {key12} skipped (seen)")

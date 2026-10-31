@@ -42,6 +42,7 @@ import urllib.error
 from datetime import datetime, timezone
 from typing import Optional
 
+from .. import filelock
 from . import hook_install
 from .agent_sessions import find_sessions, load_sessions, parse_agent_session
 
@@ -56,7 +57,9 @@ DEFAULT_INTERVAL = "30m"
 
 # A session still being written to is a moving target: ingesting it now means re-ingesting it later with
 # the tail attached. Wait until it has been idle for a while.
-QUIET_SECONDS = 15 * 60
+# An embedding app that pays per model call (如我 runs the engine on Codex) waits longer, so a session is
+# distilled once after it settles rather than once per burst of activity: ENGRAM_WATCH_QUIET_SECONDS.
+QUIET_SECONDS = int(os.environ.get("ENGRAM_WATCH_QUIET_SECONDS") or 15 * 60)
 
 # One tick's worth of transcripts does not fit in one request. The server caps a body at 2 MiB by default
 # (DEFAULT_MAX_REQUEST_BYTES) and 25 real sessions serialize to ~18 MB, so the single bulk POST this used
@@ -418,16 +421,10 @@ def ingest(base_url: str, api_key: str, paths: list[str], timeout: int = 900,
 def _lock(path: str):
     """Exclusive, non-blocking lock so an overlapping tick (a slow backfill still running when launchd
     fires the next one) skips instead of double-posting. Returns the open file, or None when held.
-    No-op on Windows (no fcntl) — there the scheduler flags are not offered anyway."""
-    try:
-        import fcntl
-    except ImportError:
-        return open(os.devnull)
+    Also holds on Windows, where an embedding app runs the ticks itself."""
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     fh = open(path, "a+")
-    try:
-        fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except OSError:
+    if not filelock.lock(fh.fileno(), blocking=False):
         fh.close()
         return None
     return fh

@@ -468,8 +468,7 @@ def test_every_loop_runs_n_times_with_injected_sleep(tmp_path, monkeypatch):
 
 def test_lock_makes_second_run_skip(tmp_path, monkeypatch):
     """launchd fires every 30 minutes regardless of whether the last backfill tick is still posting."""
-    import fcntl
-
+    from engram import filelock
     from engram.connectors import watch
 
     path = _quiet_file(tmp_path)
@@ -481,7 +480,7 @@ def test_lock_makes_second_run_skip(tmp_path, monkeypatch):
     args = _args(tmp_path)
     os.makedirs(os.path.dirname(args.state))
     holder = open(os.path.join(os.path.dirname(args.state), "watch.lock"), "a+")
-    fcntl.flock(holder.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    assert filelock.lock(holder.fileno(), blocking=False)
     try:
         out = watch.run_once(args)
         assert out == {"exit": 0, "skipped": "locked"} and posted == []

@@ -10,14 +10,20 @@ interface AuthState {
   logout: () => void
 }
 
+// Built with VITE_EMBEDDED=1, the console lives inside a host app (如我) that forwards /engram/* to a
+// local Engram and attaches the key itself. There is no login: the page never holds the secret, and
+// `apiKey` is only a stable placeholder so per-tenant query keys and `enabled` gates keep working.
+export const EMBEDDED = import.meta.env.VITE_EMBEDDED === '1'
+const EMBEDDED_KEY = 'embedded'
+
 export const useAuth = create<AuthState>()(
   persist(
     (set) => ({
-      apiKey: null,
+      apiKey: EMBEDDED ? EMBEDDED_KEY : null,
       login: (key) => set({ apiKey: key.trim() }),
-      logout: () => set({ apiKey: null }),
+      logout: () => set({ apiKey: EMBEDDED ? EMBEDDED_KEY : null }),
     }),
-    { name: 'engram.auth' },
+    { name: EMBEDDED ? 'engram.auth.embedded' : 'engram.auth' },
   ),
 )
 

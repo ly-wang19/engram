@@ -2,7 +2,7 @@ import { useEffect } from 'react'
 import { Navigate, Route, Routes } from 'react-router-dom'
 
 import Layout from './components/Layout'
-import { useAuth } from './store/auth'
+import { EMBEDDED, useAuth } from './store/auth'
 import { getT, useLang } from './i18n'
 import Login from './pages/Login'
 import Dashboard from './pages/Dashboard'
@@ -29,7 +29,7 @@ export default function App() {
     document.title = getT().meta.title
   }, [lang])
 
-  if (!apiKey) {
+  if (!apiKey && !EMBEDDED) {
     return (
       <Routes>
         <Route path="/login" element={<Login />} />

@@ -20,10 +20,11 @@ from collections import OrderedDict
 from contextlib import contextmanager
 from typing import Any, Optional
 
+from . import filelock
 from .memory import Memory
 from .metrics import Metrics, timed
 from .store.persist import DimensionMismatchError, EmbedderMismatchError
-from .util import fmt_date, fmt_datetime
+from .util import fmt_date, fmt_datetime, is_cjk
 
 DEFAULT_DATA_DIR = os.path.expanduser("~/.engram/data")
 
@@ -110,7 +111,10 @@ class MemoryService:
     ) -> None:
         from .llm.providers import load_dotenv, make_embedder, make_llm
 
-        load_dotenv()  # pick up provider keys (ARK_API_KEY, DEEPSEEK_API_KEY, ...) from a local .env
+        # pick up provider keys (ARK_API_KEY, DEEPSEEK_API_KEY, ...) from a local .env — unless embedded in
+        # an app, whose working directory is not a place the user put Engram settings
+        if os.environ.get("ENGRAM_NO_DOTENV") != "1":
+            load_dotenv()
         self.data_dir = os.path.abspath(
             os.path.expanduser(data_dir or os.environ.get("ENGRAM_DATA_DIR", DEFAULT_DATA_DIR))
         )
@@ -133,6 +137,8 @@ class MemoryService:
         self.config = Config()
         if os.environ.get("ENGRAM_MAX_HOT_FACTS"):
             self.config.max_hot_facts = int(os.environ["ENGRAM_MAX_HOT_FACTS"])
+        if os.environ.get("ENGRAM_AGENT_SESSION_MAX_CHARS"):
+            self.config.agent_session_max_chars = int(os.environ["ENGRAM_AGENT_SESSION_MAX_CHARS"])
         # opt-in System-2 LLM conflict detection -> the detect->confirm loop (needs an LLM). Off by
         # default so the offline/zero-setup path stays deterministic (pure-rules conflict handling).
         if os.environ.get("ENGRAM_CONFLICT_DETECTION") == "1" and self.llm is not None:
@@ -248,14 +254,11 @@ class MemoryService:
                 raise ValueError("namespace directory escaped ENGRAM_DATA_DIR")
             lock_path = os.path.join(path, ".service.lock")
         with open(lock_path, "a", encoding="utf-8") as fh:
+            filelock.lock(fh.fileno())
             try:
-                import fcntl
-
-                fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
                 yield
-                fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
-            except ImportError:  # pragma: no cover - fcntl exists on supported Linux/macOS targets.
-                yield
+            finally:
+                filelock.unlock(fh.fileno())
 
     @contextmanager
     def write_lock(self, user: str):
@@ -691,11 +694,12 @@ class MemoryService:
             if answer:
                 # full-context baseline for the same time view: what it would cost to stuff every eligible
                 # episode into the prompt. For as-of reads, future episodes are not part of the baseline.
-                full = "\n".join(
-                    ep.content for ep in mem.episodes_doc.values()
+                # Summed per episode: joining every transcript into one string first briefly doubled the
+                # resident size of a large store (~3GB on a 2.3GB one).
+                out["full_tokens"] = sum(
+                    _est_tokens(ep.content) for ep in mem.episodes_doc.values()
                     if as_of is None or ep.event_time <= as_of
                 )
-                out["full_tokens"] = _est_tokens(full)
                 out["answer"] = _answer_from_memory(self.answerer, query, ctx)
             # live token-saving accounting (Bet D online): context size always; the full-history baseline
             # only when this call computed it anyway — measuring must not add cost to the hot path.
@@ -1376,10 +1380,11 @@ class MemoryService:
 
         Measured on the owner's real store: HashingEmbedder scored 0.000 for every Chinese query/fact
         pair and /v1/recall returned the identical four facts for three unrelated queries
-        (results/embedder_zh_2026-09-01.md). Nothing in the product said why. The cause is structural —
-        the hashing stemmer only emits [a-z0-9] tokens, so a CJK-dominated text hashes to (almost)
-        nothing and BM25 sees the same empty token stream — which makes it detectable without a model
-        call: count how much of the corpus is non-ASCII. Shared by audit() and agent_status() so the
+        (results/embedder_zh_2026-09-01.md). Nothing in the product said why. The cause was structural —
+        the hashing stemmer only emitted [a-z0-9] tokens, so a CJK-dominated text hashed to (almost)
+        nothing. It now also indexes CJK bigrams, so Chinese ranks; a text in any other non-Latin script
+        (Cyrillic, Thai, Arabic, ...) still hashes to nothing, which stays detectable without a model
+        call: count how much of the corpus is in a script the tokenizer drops. Shared by audit() and agent_status() so the
         console and the agent see the same verdict.
         """
         from .embed import HashingEmbedder
@@ -1394,8 +1399,8 @@ class MemoryService:
             return None
 
         def split(text: str) -> tuple[int, int]:
-            """(rankable, dark) character counts. Rankable = ASCII alphanumerics, the only thing the
-            hashing stemmer's [a-z0-9]+ tokenizer keeps; dark = letters in any other script, which it
+            """(rankable, dark) character counts. Rankable = ASCII alphanumerics and CJK, the only
+            things the hashing stemmer's tokenizer keeps; dark = letters in any other script, which it
             drops on the floor. Punctuation and whitespace are neither: a JSON blob or a shell line is
             100% rankable even though most of its characters are braces and pipes — the first version
             counted those against the text and called a store of code facts "33% unrankable"."""
@@ -1404,6 +1409,8 @@ class MemoryService:
                 if c.isascii():
                     if c.isalnum():
                         rankable += 1
+                elif exact and is_cjk(c):
+                    rankable += 1
                 elif c.isalpha():
                     dark += 1
             return rankable, dark
@@ -1443,7 +1450,7 @@ class MemoryService:
             "kind": "embedder_blind",
             "text": f"{name} cannot rank {pct}% of {checked} memories",
             "why": (f"{pct}% of what this namespace holds is written in a script {name} cannot "
-                    f"tokenize — it only indexes [a-z0-9] tokens, so those memories are invisible to both "
+                    f"tokenize — it only indexes Latin letters, digits and CJK, so those memories are invisible to both "
                     f"the semantic and lexical channels and recall returns the same items for unrelated "
                     f"queries"),
             "action": (f"switch the server embedder and re-embed: {migrate} "

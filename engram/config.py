@@ -58,6 +58,10 @@ class Config:
     aggregation_constraint_filter: bool = True  # mark numeric candidates that violate query constraints as EXCLUDE
     aggregation_pool_boost: bool = True  # count/list/sum questions consolidate a wider session pool (they need every occurrence)
     procedural_extraction: bool = True  # extract durable runbooks/how-to steps into typed procedure facts
+    # Characters of an agent-session transcript kept in memory (0 = all). Codex sessions average ~83k
+    # parsed chars and a year of them does not fit a desktop process; the summary and conclusions passes
+    # already read only a 24k head+tail window, and the transcript itself stays in the agent's own file.
+    agent_session_max_chars: int = 0
     session_outcomes: bool = True  # distil each session into decision/finding/lesson facts (one LLM
     #   call per session). ON by default. "The read path must stay byte-identical" was the reason to keep
     #   it off, and it is now the evidence that flipping it is safe: (1) nothing under eval/ calls

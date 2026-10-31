@@ -465,6 +465,19 @@ _ZH = ["我们决定用 multilingual 作为线上 embedder，因为中文区分�
        "验收要用证据，不用自评",
        "个人记忆路径和 benchmark 路径共用一套默认值是缝隙所在",
        "记忆自己长：watch 定时喂入"]
+# A script the hashing tokenizer still drops (it indexes Latin letters, digits and CJK bigrams).
+_RU = ["Мы решили использовать multilingual как основной embedder, потому что он лучше различает текст",
+       "Сервер каждый час падает из-за задачи quant cron, Engram здесь пострадавший",
+       "Перед выпуском обязательно пройти LongMemEval A/B, нельзя проверять только на одном языке",
+       "Два однотипных дефекта пути чтения: вспомогательный сигнал вытесняет основной",
+       "Вывод сессии является единицей памяти, а пошаговое извлечение даёт биографические тройки",
+       "Изменение алгоритма требует обновить карту оптимизации архитектуры",
+       "Отчёт в рабочую панель только для существенных задач",
+       "Два агента работают через файлы на диске, а не через общий контекст",
+       "Предохранитель: два часа без результата означают остановку и отчёт",
+       "Приёмка требует доказательств, а не самооценки",
+       "Общие настройки для личной памяти и для бенчмарка и есть слабое место",
+       "Память растёт сама: watch регулярно подаёт новые данные"]
 _EN = ["We decided to use the multilingual embedder for production because it ranks Chinese.",
        "The production box is crushed hourly by a quant cron job; Engram is the victim.",
        "Every algorithm change must pass a LongMemEval A/B before shipping.",
@@ -487,12 +500,12 @@ def _seed(svc: MemoryService, user: str, texts: list[str]) -> None:
 
 def test_audit_embedder_blind_fires_on_hashing_non_ascii_store(tmp_path):
     svc = MemoryService(data_dir=str(tmp_path), embedder_name="hashing", llm_name="")
-    _seed(svc, "zh", _ZH)
-    audit = svc.audit("zh")
+    _seed(svc, "ru", _RU)
+    audit = svc.audit("ru")
     rows = [f for f in audit["findings"] if f["kind"] == "embedder_blind"]
     assert len(rows) == 1 and audit["by_kind"]["embedder_blind"] == 1, audit
     row = rows[0]
-    assert row["exact"] is True and row["embedder"] == "HashingEmbedder" and row["model"] is None
+    assert row["exact"] is True and row["embedder"] == "HashingEmbedder" and row["model"] == "hashing-cjk2"
     # The rule counts letters, not punctuation: lines that lean on ASCII names ("multilingual",
     # "quant cron", "LongMemEval A/B") come out roughly half-and-half and are rightly NOT called blind.
     # Nine of twelve still are, which is the 20% share several times over.
@@ -502,9 +515,19 @@ def test_audit_embedder_blind_fires_on_hashing_non_ascii_store(tmp_path):
     assert row["migrate"] in row["action"] and "bge-small-zh" in row["action"]
     assert audit["total_findings"] >= 1
     # the agent sees the same verdict, with the command an operator can run
-    actions = svc.agent_status("zh")["recommended_next_actions"]
+    actions = svc.agent_status("ru")["recommended_next_actions"]
     assert any("ENGRAM_EMBEDDER=multilingual ENGRAM_REEMBED_ON_MISMATCH=1" in a
                and "HashingEmbedder" in a for a in actions), actions
+
+
+def test_audit_no_embedder_blind_on_hashing_chinese_store(tmp_path):
+    """Hashing indexes CJK bigrams now, so a Chinese store is rankable and the audit stays quiet — and a
+    two-character Chinese query finds the one memory that holds it."""
+    svc = MemoryService(data_dir=str(tmp_path), embedder_name="hashing", llm_name="")
+    _seed(svc, "zh", _ZH)
+    assert "embedder_blind" not in svc.audit("zh")["by_kind"]
+    context = svc.recall("zh", "熔断", answer=False)["context"]
+    assert "熔断线" in context
 
 
 def test_audit_no_embedder_blind_on_english_store(tmp_path):
@@ -557,12 +580,12 @@ def test_audit_no_embedder_blind_on_code_heavy_ascii_store(tmp_path):
     assert "embedder_blind" not in svc.audit("code")["by_kind"]
 
 
-def test_audit_embedder_blind_fires_on_two_large_chinese_sessions(tmp_path):
+def test_audit_embedder_blind_fires_on_two_large_unindexed_sessions(tmp_path):
     """The owner's real backfill: a couple of long transcripts, zero facts. Item count is 2, letter mass
     is thousands — the verdict must come from the mass."""
     svc = MemoryService(data_dir=str(tmp_path), embedder_name="hashing", llm_name="")
-    long_zh = ["，".join(_ZH) * 8, "。".join(reversed(_ZH)) * 8]
-    _seed(svc, "big", long_zh)
+    long_ru = ["; ".join(_RU) * 8, ". ".join(reversed(_RU)) * 8]
+    _seed(svc, "big", long_ru)
     audit = svc.audit("big")
     rows = [f for f in audit["findings"] if f["kind"] == "embedder_blind"]
     assert len(rows) == 1, audit["by_kind"]

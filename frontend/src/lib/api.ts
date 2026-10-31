@@ -1,4 +1,4 @@
-import { currentKey, useAuth } from '../store/auth'
+import { EMBEDDED, currentKey, useAuth } from '../store/auth'
 import { getT } from '../i18n'
 import type { AuditReport,
   AgentStatus,
@@ -47,13 +47,13 @@ export async function request<T>(path: string, init: RequestInit = {}): Promise<
   const key = currentKey()
   const headers = new Headers(init.headers)
   headers.set('Content-Type', 'application/json')
-  if (key) headers.set('Authorization', `Bearer ${key}`)
+  if (key && !EMBEDDED) headers.set('Authorization', `Bearer ${key}`)
 
   const res = await fetch(`${BASE}${path}`, { ...init, headers })
 
   if (res.status === 401) {
-    // Stale / wrong key — drop it so the app returns to the login gate.
-    useAuth.getState().logout()
+    // Stale / wrong key — drop it so the app returns to the login gate (embedded: the host owns the key).
+    if (!EMBEDDED) useAuth.getState().logout()
     throw new ApiError(401, getT().errors.unauthorized)
   }
   if (!res.ok) {
@@ -228,7 +228,7 @@ export const api = {
     const key = currentKey()
     const qs = `?include_sensitive=${includeSensitive ? 'true' : 'false'}`
     const res = await fetch(`${BASE}/v1/export${qs}`, {
-      headers: key ? { Authorization: `Bearer ${key}` } : undefined,
+      headers: key && !EMBEDDED ? { Authorization: `Bearer ${key}` } : undefined,
     })
     if (!res.ok) throw new ApiError(res.status, getT().errors.exportFailed(res.status))
     const blob = await res.blob()

@@ -23,6 +23,9 @@ from engram.connectors import hook_install as hi
 from engram.connectors import session_hook, watch
 from engram.connectors.agent_sessions import _session_label
 
+# The hook is a POSIX shell line installed into Claude Code's settings; Windows ticks are run by the app.
+pytestmark = pytest.mark.skipif(os.name == "nt", reason="POSIX shell hook")
+
 REAL_SETTINGS = os.path.expanduser("~/.claude/settings.json")
 PY = "/opt/python/bin/python3"
 

@@ -1,5 +1,34 @@
 # HANDOFF
 
+## 嵌入如我 · 第 0 步已完成（Claude Code，2026-10-31，未提交 / 未部署）
+
+- 本人 10-31 对“整体集成进如我”方案的 7 项拍板“按建议开工”，本轮做第 0 步（只改 Engram）。
+- 代码在隔离 worktree `.claude/worktrees/ruwo-embed-20261031`（分支 `claude/ruwo-embed-20261031`）。
+  - 主工作区的未提交改动已原样带入，并暂存为基线，所以 `git diff` 就是本轮改动。
+  - 主工作区、线上实例和本机 8766 服务都没动。
+- 改了什么：
+  - 中文二元组分词，`hashing-cjk2` 自动升级旧库；
+  - agent 会话变长时原地替换，加 24k 窗口；
+  - episodes 改为追加写，只备份要替换的文件，加载时共享浮点；
+  - 摘要截窗，召回不再全量拼接；
+  - `filelock.py` 统一锁，修掉 Windows 三处硬阻塞，CI 加 windows-latest；
+  - watch 按 cwd 排除如我会话线程，支持 `CODEX_HOME`；
+  - 新增 `llm/codex_llm.py`（宿主 runner、一次一个回合、日上限 60、限流冷却、宿主优先）；
+  - 嵌入模式（前端 `VITE_EMBEDDED`、同源 frame）和启动器 `python -m engram.embedded`。
+- 关口 1：
+  - 中文检索：通过。
+  - 全量测试：903 通过、1 跳过。
+  - 真实规模合成库内存：打开后 270–286MB，峰值不到 293MB，通过。
+  - Windows CI：要推送后才有结果，未验证。
+- 两份架构文档已同步。验收记录在 worktree 的 `docs/ruwo-embed-step0-20261031.zh-CN.md`。
+- 遗留问题：
+  - 内存每月约增长 50MB，需要冷热分层；
+  - 推送分支跑 Windows CI 要本人同意；
+  - Codex runner 留到如我侧第 1 步实现。
+- 下一步：本人确认后推送跑 Windows CI，或直接进入第 1 步（在如我新候选克隆里做）。
+
+---
+
 ## 集成进如我的方案改为整体集成（Claude Code，2026-10-31，仅方案，未改本仓库）
 
 - 本人 10-31 的决定：Engram 前后端整体集成进如我，作为个人记忆模块；AI 引擎改用 Codex；与如我分身互不影响。本条取代下方 10-30 那条评估的结论。

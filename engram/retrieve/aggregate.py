@@ -11,7 +11,7 @@ import re
 from dataclasses import dataclass
 
 from ..types import Episode, Fact
-from ..util import fmt_date, stems
+from ..util import content_term, fmt_date, stems, tokenize
 from .lexical import overlap_terms
 
 
@@ -156,7 +156,7 @@ def _numeric_mode(query: str) -> str:
 
 
 def _topic_terms(query: str) -> set[str]:
-    return {t for t in stems(query) if len(t) > 2 and t not in _NUMERIC_GENERIC_TERMS}
+    return {t for t in stems(query) if content_term(t) and t not in _NUMERIC_GENERIC_TERMS}
 
 
 def _numeric_item(query: str, mode: str) -> str:
@@ -382,12 +382,12 @@ def _candidate_from_text(query: str, target: str, text: str, date: float) -> lis
 
 
 def _query_terms(query: str) -> set[str]:
-    return {t for t in re.findall(r"[a-z0-9]+", query.lower()) if len(t) > 2}
+    return {t for t in tokenize(query) if content_term(t)}
 
 
 def _evidence_score(query: str, text: str) -> int:
     lower = text.lower()
-    score = len(_query_terms(query) & set(re.findall(r"[a-z0-9]+", lower)))
+    score = len(_query_terms(query) & set(tokenize(lower)))
     for _, pattern in _ACTION_PATTERNS:
         if re.search(pattern, lower):
             score += 4

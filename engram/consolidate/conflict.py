@@ -22,12 +22,11 @@ the same multi-valued guard, so accumulating preferences ("likes pizza" / "likes
 """
 from __future__ import annotations
 
-import re
 from typing import Optional
 
 from ..embed import Embedder
 from ..types import Fact
-from ..util import cosine
+from ..util import content_term, cosine, tokenize
 
 # content words for subsumption ("Contained") detection — short/function words ignored so that
 # "Charles is my boss" ⊂ "Charles is my boss and a branch manager" is recognized.
@@ -36,7 +35,7 @@ _STOP = frozenset({"the", "a", "an", "and", "or", "of", "to", "in", "on", "at", 
 
 
 def _content_tokens(s: str) -> frozenset:
-    return frozenset(w for w in re.findall(r"[a-z0-9]+", s.lower()) if len(w) > 2 and w not in _STOP)
+    return frozenset(w for w in tokenize(s) if content_term(w) and w not in _STOP)
 
 # Predicates whose values ACCUMULATE — a person legitimately has many. These never supersede; everything
 # else is treated as a single-current-value attribute (state) that a newer fact replaces.

@@ -1,6 +1,6 @@
 # Engram 架构优化地图
 
-最后更新：2026-10-30
+最后更新：2026-10-31
 
 用途：这是给项目负责人和后续 AI/人类贡献者看的本地中文驾驶舱。它回答四个问题：
 
@@ -11,6 +11,15 @@
 
 这不是公开营销稿。任何对外性能主张仍以 `RESULTS.md`、`README.md`、`README.zh-CN.md`
 和已提交的 `results/*.jsonl` 原始日志为准。
+
+## 2026-10-31：嵌入如我的第 0 步（中文、内存、Windows、Codex 引擎）
+
+- 读取：分词对中日韩连续字输出重叠二元组（`util.tokenize`），`content_term` 取代各处 `len>2` 过滤（evidence/aggregate/conflict）。hashing 嵌入器身份改为 `hashing-cjk2`；旧 `HashingEmbedder` 库打开时只重嵌含中文的条目，其他嵌入器不一致仍拒绝。英文文本的切分与向量不变，公开基准不受影响。
+- System-1 写入：agent_session 同一会话变长时原地替换旧 episode（id 不变，出处仍有效），不再每次新增一份；`Config.agent_session_max_chars`（嵌入默认 24000）只保留头 35%、尾 65% 窗口。摘要同样截到 24000 字。召回不再把全部原文拼成一个字符串来估算基线。
+- 持久化：episodes.jsonl 改为追加写，只有删除或失效行超过四分之一时才重写；备份只覆盖要替换的文件，manifest 记录已提交字节数（`sizes.episodes`），读取时同 id 后一行生效。加载时同值浮点数共享一个对象。
+- 平台：新增 `engram/filelock.py`（POSIX 用 fcntl，Windows 用 msvcrt），去掉 Windows 上的三处硬阻塞；CI 增加 windows-latest。
+- 引擎与嵌入：`ENGRAM_LLM=codex` 交给宿主提供的 runner 执行（`llm/codex_llm.py`：全进程一次一个回合、每日上限、限流冷却、宿主忙时让路）；`python -m engram.embedded` 作为宿主托管的入口；watch 按 cwd 排除如我会话线程，并支持 `CODEX_HOME`。
+- [验收记录](ruwo-embed-step0-20261031.zh-CN.md)：离线完整测试 903 通过、1 跳过；按真实规模（2280 个会话、1 万条结论）合成的库，冷启动后进程约 270–286MB，峰值 293MB 以下；追加一个会话只写约 35KB。未部署，未提交。
 
 ## 2026-10-30：异常恢复与完成标记的可靠性修复
 

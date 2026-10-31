@@ -14,6 +14,7 @@ from typing import Callable, Optional
 from .config import Config
 from .consolidate import ConsolidationEngine, is_single_valued, reinforce
 from .consolidate.llm_extractor import EXTRACT_SYSTEM
+from .consolidate.outcomes import _windowed
 from .consolidate.summarizer import (
     PERSONA_SYSTEM,
     SESSION_SUMMARY_SYSTEM,
@@ -42,7 +43,7 @@ from .store import (
     save_memory,
 )
 from .types import Conflict, Episode, Fact, WorkingMemory
-from .util import DAY, fmt_date, now
+from .util import DAY, fmt_date, has_cjk, now
 
 # The editable memory-policy prompts (the console's "提示词" / "要记录什么记忆"). Defaults are the
 # built-in prompts; a per-user override (empty string = use default) is stored in Memory.policy.
@@ -269,10 +270,38 @@ class Memory:
             kwargs["config"] = replace(cfg, data_path=f"{path}/lancedb")
         mem = cls(**kwargs)
         if load_memory(mem, path, allow_mismatch=allow_mismatch):
+            if getattr(mem, "_stale_cjk_vectors", False):
+                mem._refresh_cjk_vectors()
             mem._rewire()
             mem._classify()  # backfill category/sensitivity on facts saved before feature ⑤
         mem._persist_path = path
         return mem
+
+    def _refresh_cjk_vectors(self) -> int:
+        """Re-embed the items whose text holds CJK, after opening a store saved by the pre-CJK hashing
+        embedder. Every other vector is already what the current tokenizer produces, so this is the
+        whole migration; the manifest records the new embedder identity on the next save."""
+        refreshed = 0
+        for store in (self.fact_store, self.cold_store):
+            for fact in list(store.values()):
+                if has_cjk(fact.text):
+                    fact.embedding = self.embedder.embed(fact.text)
+                    store.upsert(fact.id, fact.embedding, fact)
+                    refreshed += 1
+        for ep in list(self.episodes_doc.values()):
+            if has_cjk(ep.content):
+                ep.embedding = self.embedder.embed(ep.content)
+                self.episodes_vec.upsert(ep.id, ep.embedding, ep)
+                refreshed += 1
+            source = ep.summary or ep.content[:200]
+            if ep.summary_embedding is not None and has_cjk(source):
+                ep.summary_embedding = self.embedder.embed(source)
+                self.summary_vec.upsert(ep.id, ep.summary_embedding, ep)
+        for wm in self.working_mem.values():
+            if has_cjk(wm.content):
+                wm.embedding = self.embedder.embed(wm.content)
+        self._stale_cjk_vectors = False
+        return refreshed
 
     def reembed(self, embedder: Optional[Embedder] = None) -> dict[str, int]:
         """Migrate every stored vector into `embedder`'s space (default: the currently attached one) —
@@ -467,6 +496,25 @@ class Memory:
 
         def _fp(sid: str, row_key: str) -> str:
             return hashlib.sha1(f"{user_id}|{sid}|{row_key}".encode()).hexdigest()
+
+        # An agent-session transcript is re-sent whole every time it grows. Fingerprinting the full text
+        # made each longer copy a NEW episode beside the old ones: a real store held 5952 episodes for 2280
+        # sessions, one of them 174 times, 87% of its text duplicated. The session id of an agent session
+        # names one conversation, so its longer transcript replaces the episode in place (same id, so
+        # provenance pointing at it stays valid). Other sources keep their append behavior.
+        prior_by_sid: Optional[dict[str, Episode]] = None
+
+        def _prior_agent_episode(sid: str) -> Optional[Episode]:
+            nonlocal prior_by_sid
+            if prior_by_sid is None:
+                prior_by_sid = {}
+                for ep in self.episodes_doc.values():
+                    if (ep.user_id == user_id and ep.speaker == "session"
+                            and ep.metadata.get("source") == "agent_session"):
+                        cur = prior_by_sid.get(ep.session_id)
+                        if cur is None or len(ep.content) >= len(cur.content):
+                            prior_by_sid[ep.session_id] = ep
+            return prior_by_sid.get(sid)
         for i, s in enumerate(items):
             source = str(s.metadata.get("source", ""))
             dated_times = {m.event_time for m in s.messages if m.event_time is not None}
@@ -489,7 +537,7 @@ class Memory:
                     et = m.event_time if m.event_time is not None else fallback
                     et = et if et is not None else base + i * DAY + j
                     texts.append(body)
-                    metas.append((sid, et, s.title, fp, source))
+                    metas.append((sid, et, s.title, fp, source, None))
                     added += 1
                 if added:
                     session_count += 1
@@ -499,14 +547,18 @@ class Memory:
             if not body.strip():
                 continue
             sid = s.session_id or f"imported_{i}"
-            fp = _fp(sid, body)
+            fp = _fp(sid, body)  # over the full transcript, so a re-send of the same length still dedupes
             if dedupe and fp in self._import_seen:
                 skipped += 1
                 continue
+            cap = self.config.agent_session_max_chars
+            if source == "agent_session" and cap and len(body) > cap:
+                body = _windowed([body], cap)
+            prior = _prior_agent_episode(sid) if dedupe and source == "agent_session" else None
             et = s.start_time()
             et = et if et is not None else base + i * DAY  # synthetic but ordered
             texts.append(body)
-            metas.append((sid, et, s.title, fp, source))
+            metas.append((sid, et, s.title, fp, source, prior))
             session_count += 1
         if not texts:
             return {"sessions": 0, "episodes": 0, "facts_added": 0, "summaries": 0, "skipped": skipped,
@@ -517,7 +569,23 @@ class Memory:
             vecs.extend(self.embedder.embed_batch(texts[j:j + batch_size]))
 
         new_eps: list[Episode] = []
-        for (sid, et, title, fp, source), text, vec in zip(metas, texts, vecs):
+        grown = 0
+        for (sid, et, title, fp, source, prior), text, vec in zip(metas, texts, vecs):
+            if prior is not None:
+                # the session grew: its longer transcript (or its newer window) supersedes the stored one
+                prior.content = text
+                prior.embedding = vec
+                self.episodes_vec.upsert(prior.id, vec, prior)
+                prior.summary = ""  # re-summarized below, over the whole transcript
+                prior.summary_embedding = None
+                self.summary_vec.delete(prior.id)
+                prior.metadata["grown_at"] = now()
+                if title:
+                    prior.metadata["title"] = title
+                new_eps.append(prior)
+                self._import_seen.add(fp)
+                grown += 1
+                continue
             ep = self.add(text, user_id=user_id, session_id=sid, speaker="session",
                           event_time=et, embedding=vec)
             ep.metadata["date"] = fmt_date(et)
@@ -544,8 +612,9 @@ class Memory:
         extract = new_eps if want_facts else [ep for ep in new_eps if ep.id not in agent_ids]
         do_consolidate = True if consolidate is None else consolidate
 
-        stats = {"sessions": session_count, "episodes": len(new_eps), "facts_added": 0, "summaries": 0,
-                 "skipped": skipped}
+        # `episodes` counts what this import wrote, a grown session's replaced episode included
+        stats = {"sessions": session_count, "episodes": len(new_eps), "grown": grown,
+                 "facts_added": 0, "summaries": 0, "skipped": skipped}
         # Guard the empty list: consolidate([]) would still run _apply_policy/sweep for nothing.
         if do_consolidate and extract:
             stats["facts_added"] = self.consolidate(extract).get("facts_added", 0)

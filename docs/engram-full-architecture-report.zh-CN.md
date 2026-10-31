@@ -1,6 +1,6 @@
 # Engram 全链路架构与数据流报告
 
-最后更新：2026-10-30
+最后更新：2026-10-31
 
 本文是 Engram 当前实现的中文工程说明书，目标是让项目负责人不用逐行读代码，也能完整掌握：
 
@@ -14,6 +14,14 @@
 和已提交的 `results/*.jsonl` 原始日志为准。
 
 ## 0. 阅读入口
+
+### 2026-10-31：作为如我个人记忆模块的运行形态
+
+- 数据流：agent_session 导入按会话 id 原地更新同一 episode，正文为头尾窗口（`agent_session_max_chars`）；摘要截窗；结论仍在 close 时一次生成。原文的完整版本留在 Codex 自己的会话文件里。
+- 存储形态：schema 不变。manifest 新增 `sizes.episodes`；episodes.jsonl 允许同 id 多行，加载时后一行生效；`.snapshot-backup/ready.json` 新格式为 `{"present", "rewrite"}`，旧的列表格式仍可恢复。旧版本读取新库没有问题，回退前须先由本版恢复未完成的事务。
+- 服务面：`ENGRAM_LLM=codex` 加 `ENGRAM_CODEX_RUNNER`、`ENGRAM_CODEX_BUSY`、`ENGRAM_CODEX_DAILY_CAP`、`ENGRAM_CODEX_STATE`；`ENGRAM_EMBEDDED=1` 只允许同源 frame；`ENGRAM_UI_DIST` 指定控制台构建；`ENGRAM_NO_DOTENV=1` 不读当前目录的 .env；`ENGRAM_WATCH_EXCLUDE_CWD`、`ENGRAM_WATCH_QUIET_SECONDS` 控制 watch。入口为 `python -m engram.embedded`（端口 0 加 announce 文件、生成密钥、随父进程退出）。
+- 前端：`VITE_BASE`、`VITE_API_BASE`、`VITE_EMBEDDED=1` 构建嵌入版，没有登录页，也不持有密钥，密钥由宿主转发时注入。
+- 详细边界见 [第 0 步验收记录](ruwo-embed-step0-20261031.zh-CN.md)。
 
 ### 2026-10-29：评测读路径的标签隔离
 

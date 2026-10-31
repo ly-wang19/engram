@@ -15,6 +15,7 @@ from typing import Optional
 
 from ..llm import LLM
 from ..types import Episode, Fact
+from .outcomes import _windowed
 
 _SESSION_SUMMARY_SYSTEM = (
     "You compress one dated conversation into a dense, factual digest for a memory index that a later "
@@ -44,9 +45,12 @@ _PERSONA_SYSTEM = (
 class SessionSummarizer:
     """Episode (raw session) -> compact L2 summary. LLM-backed when available; excerpt fallback offline."""
 
-    def __init__(self, llm: Optional[LLM] = None, max_excerpt: int = 400) -> None:
+    def __init__(self, llm: Optional[LLM] = None, max_excerpt: int = 400, max_chars: int = 24000) -> None:
         self.llm = llm
         self.max_excerpt = max_excerpt
+        # A whole agent-session transcript is one episode and can run to hundreds of thousands of chars;
+        # sent as-is it is one enormous model call per import. Same both-ends window as the outcomes pass.
+        self.max_chars = max_chars
         # The active summary system prompt. Defaults to the built-in; a Memory may swap in a per-user
         # override from its policy (the editable "提示词" in the console).
         self.system = _SESSION_SUMMARY_SYSTEM
@@ -57,7 +61,8 @@ class SessionSummarizer:
             text = " ".join(episode.content.split())
             return text[: self.max_excerpt]
         date = episode.metadata.get("date", "")
-        prompt = f"Date: {date}\nConversation:\n{episode.content}\n\nDigest:"
+        conversation = _windowed([episode.content], self.max_chars)
+        prompt = f"Date: {date}\nConversation:\n{conversation}\n\nDigest:"
         try:
             out = self.llm.complete(prompt, system=self.system)
             return out.strip() or episode.content[: self.max_excerpt]

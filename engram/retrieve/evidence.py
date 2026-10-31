@@ -9,7 +9,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
-from ..util import stems
+from ..util import content_term, stems
 
 
 @dataclass(frozen=True)
@@ -154,7 +154,7 @@ def _aggregation_recall_subqueries(query: str, obj: str = "") -> list[str]:
         flags=re.I,
     )
     for part in re.split(r"\band\b|\bor\b|/|,", topic_source, flags=re.I):
-        toks = [t for t in stems(part) if len(t) > 2 and t not in _AGG_STOP_TERMS]
+        toks = [t for t in stems(part) if content_term(t) and t not in _AGG_STOP_TERMS]
         if not toks:
             continue
         phrase = " ".join(toks)

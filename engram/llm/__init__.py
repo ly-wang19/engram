@@ -4,7 +4,7 @@ from .base import LLM
 from .fake import FakeLLM
 from .offline import OfflineLLM
 
-__all__ = ["LLM", "OfflineLLM", "FakeLLM", "LiteLLMClient"]
+__all__ = ["LLM", "OfflineLLM", "FakeLLM", "LiteLLMClient", "CodexLLM"]
 
 
 def __getattr__(name: str):
@@ -12,4 +12,8 @@ def __getattr__(name: str):
         from .litellm_llm import LiteLLMClient
 
         return LiteLLMClient
+    if name == "CodexLLM":
+        from .codex_llm import CodexLLM
+
+        return CodexLLM
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

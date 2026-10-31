@@ -16,7 +16,9 @@ from .util import gen_id, now
 
 @dataclass
 class Episode:
-    """A raw, lossless turn or event. Never mutated after ingestion (append-only log)."""
+    """A raw, lossless turn or event. Never mutated after ingestion (append-only log) — with one exception:
+    an agent-session transcript that grew is replaced in place by its longer version (or, with
+    Config.agent_session_max_chars, by that version's head+tail window; see Memory.import_messages)."""
 
     content: str
     user_id: str = "default"

@@ -127,7 +127,8 @@ def test_interrupted_recovery_remains_retryable_and_preserves_permissions(tmp_pa
             Memory.open(str(path))
 
     assert _snapshot(Memory.open(str(path))) == committed
-    assert stat.S_IMODE((path / "episodes.jsonl").stat().st_mode) == 0o600
+    if os.name != "nt":  # Windows keeps only a read-only bit
+        assert stat.S_IMODE((path / "episodes.jsonl").stat().st_mode) == 0o600
     mem.save(str(path))
     assert _snapshot(Memory.open(str(path))) == _snapshot(mem)
 

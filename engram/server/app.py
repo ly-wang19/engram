@@ -123,6 +123,12 @@ app = FastAPI(
 )
 
 
+# Embedded in a host app (ENGRAM_EMBEDDED=1), the console is shown in an iframe of the host's own page on
+# the same origin (the host forwards /engram/* here), so framing is allowed for that origin only.
+_EMBEDDED = os.environ.get("ENGRAM_EMBEDDED") == "1"
+_FRAME_ANCESTORS = "'self'" if _EMBEDDED else "'none'"
+
+
 def _apply_security_headers(response, path: str):
     if path.startswith("/v1/"):
         response.headers["Cache-Control"] = "no-store"
@@ -131,12 +137,12 @@ def _apply_security_headers(response, path: str):
     elif path == "/ui" or path.startswith("/ui/") or path == "/":
         response.headers["Cache-Control"] = "no-cache"
     response.headers["X-Content-Type-Options"] = "nosniff"
-    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["X-Frame-Options"] = "SAMEORIGIN" if _EMBEDDED else "DENY"
     response.headers["Referrer-Policy"] = "no-referrer"
     response.headers["Content-Security-Policy"] = (
         "default-src 'self'; script-src 'self' 'unsafe-inline'; "
         "style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
-        "connect-src 'self'; frame-ancestors 'none'; base-uri 'self'"
+        f"connect-src 'self'; frame-ancestors {_FRAME_ANCESTORS}; base-uri 'self'"
     )
     return response
 
@@ -326,7 +332,10 @@ def ready():
 # The production console (the React app in frontend/) is served at /ui once built; "/" redirects
 # there. When it ISN'T built (fresh clone, tests, the zero-setup demo) we fall back to the tiny inline
 # dashboard below — so the server is always usable with no build step (CLAUDE.md zero-setup invariant).
-_DIST = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "frontend", "dist")
+# ENGRAM_UI_DIST points at a build elsewhere: an app that bundles Engram ships its own console build
+# (e.g. the embedded one, VITE_EMBEDDED=1) next to the package rather than in a frontend/ checkout.
+_DIST = os.environ.get("ENGRAM_UI_DIST") or os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "frontend", "dist")
 
 
 def _spa_built() -> bool:

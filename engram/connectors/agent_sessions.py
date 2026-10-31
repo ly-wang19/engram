@@ -155,16 +155,63 @@ def _session_label(path: str) -> str:
     return f"claude-code:{project}:{os.path.splitext(name)[0][:8]}"
 
 
+# Working directories of sessions that are not the user's own conversation with an agent. The default is
+# a delegate app's per-chat workspace (如我 runs one Codex thread per DingTalk chat, at
+# <root>/<org>/conversations/{o2o,group,mail}-<20 hex>): those threads carry other people's messages, and
+# since 10-30 they announce themselves as "Codex Desktop", so the directory is the only reliable mark.
+# ENGRAM_WATCH_EXCLUDE_CWD replaces the pattern; set it empty to exclude nothing.
+DEFAULT_EXCLUDE_CWD = r"/conversations/(?:o2o|group|mail)-[0-9a-f]{20}(?:/|$)"
+
+
+def exclude_cwd_pattern() -> Optional["re.Pattern[str]"]:
+    raw = os.environ.get("ENGRAM_WATCH_EXCLUDE_CWD", DEFAULT_EXCLUDE_CWD)
+    return re.compile(raw) if raw else None
+
+
+def session_roots() -> list[str]:
+    """Where Claude Code and Codex keep transcripts, honoring CODEX_HOME (an app that runs its own Codex,
+    or a user who moved it, keeps sessions under $CODEX_HOME/sessions)."""
+    codex_home = os.environ.get("CODEX_HOME") or os.path.expanduser("~/.codex")
+    return [os.path.expanduser("~/.claude/projects"), os.path.join(codex_home, "sessions")]
+
+
+def session_cwd(path: str, max_lines: int = 40) -> Optional[str]:
+    """The working directory a transcript recorded near its top: Codex writes it in the first
+    `session_meta` payload, Claude Code on its first message records."""
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            for _ in range(max_lines):
+                line = fh.readline(1 << 20)
+                if not line:
+                    break
+                try:
+                    row = json.loads(line)
+                except ValueError:
+                    continue
+                if not isinstance(row, dict):
+                    continue
+                payload = row.get("payload")
+                cwd = (payload.get("cwd") if isinstance(payload, dict) else None) or row.get("cwd")
+                if isinstance(cwd, str) and cwd:
+                    return cwd
+    except OSError:
+        return None
+    return None
+
+
 def find_sessions(root: Optional[str] = None, limit: Optional[int] = None,
-                  min_bytes: int = 2048, since: Optional[float] = None) -> list[str]:
+                  min_bytes: int = 2048, since: Optional[float] = None,
+                  exclude_cwd: Any = "default") -> list[str]:
     """Session transcripts on this machine, newest first.
 
     `min_bytes` skips sessions too short to contain anything durable (a one-question run).
+    `exclude_cwd` (a regex; default `exclude_cwd_pattern()`, None to keep everything) drops sessions whose
+    recorded working directory matches. It is applied here, before parsing, so an excluded file is never
+    read past its head — and never counted as "no conversation" to be re-read each time it grows.
     """
-    roots = [root] if root else [
-        os.path.expanduser("~/.claude/projects"),
-        os.path.expanduser("~/.codex/sessions"),
-    ]
+    roots = [root] if root else session_roots()
+    pattern = exclude_cwd_pattern() if exclude_cwd == "default" else (
+        re.compile(exclude_cwd) if isinstance(exclude_cwd, str) else exclude_cwd)
     found: list[tuple[float, str]] = []
     for base in roots:
         if not base or not os.path.isdir(base):
@@ -186,6 +233,10 @@ def find_sessions(root: Optional[str] = None, limit: Optional[int] = None,
                     continue
                 if since is not None and st.st_mtime < since:
                     continue
+                if pattern is not None:
+                    cwd = session_cwd(path)
+                    if cwd and pattern.search(cwd.replace("\\", "/")):
+                        continue
                 found.append((st.st_mtime, path))
     found.sort(reverse=True)
     paths = [p for _, p in found]

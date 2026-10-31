@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { Copy, Eye, EyeOff, LogOut, Menu, Wifi, WifiOff } from 'lucide-react'
 
-import { useAuth } from '../store/auth'
+import { EMBEDDED, useAuth } from '../store/auth'
 import { useHealth } from '../hooks/queries'
 import { useT } from '../i18n'
 import { copyText } from '../lib/clipboard'
@@ -55,39 +55,43 @@ export function Topbar({ onMenu }: { onMenu: () => void }) {
           )}
         </span>
 
-        <div className="flex min-w-0 items-center gap-1.5 rounded-xl border border-line bg-white/5 px-2 py-1.5">
-          <span className="grid h-6 w-6 place-items-center rounded-full bg-brand-gradient text-[11px] font-bold text-ink-900">
-            {(apiKey ?? '?').slice(0, 1).toUpperCase()}
-          </span>
-          <span className="min-w-0 max-w-[116px] truncate text-sm text-slate-200">{maskKey(apiKey, reveal)}</span>
-          <button
-            type="button"
-            onClick={() => setReveal((v) => !v)}
-            aria-label={reveal ? t.topbar.hideKey : t.topbar.showKey}
-            title={reveal ? t.topbar.hideKey : t.topbar.showKey}
-            className="rounded-md p-1 text-ghost transition hover:text-slate-100"
-          >
-            {reveal ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
-          </button>
-          <button
-            type="button"
-            onClick={copyKey}
-            aria-label={t.topbar.copyKey}
-            title={t.topbar.copyKey}
-            className="rounded-md p-1 text-ghost transition hover:text-slate-100"
-          >
-            <Copy className="h-3.5 w-3.5" />
-          </button>
-        </div>
+        {!EMBEDDED && (
+          <>
+            <div className="flex min-w-0 items-center gap-1.5 rounded-xl border border-line bg-white/5 px-2 py-1.5">
+              <span className="grid h-6 w-6 place-items-center rounded-full bg-brand-gradient text-[11px] font-bold text-ink-900">
+                {(apiKey ?? '?').slice(0, 1).toUpperCase()}
+              </span>
+              <span className="min-w-0 max-w-[116px] truncate text-sm text-slate-200">{maskKey(apiKey, reveal)}</span>
+              <button
+                type="button"
+                onClick={() => setReveal((v) => !v)}
+                aria-label={reveal ? t.topbar.hideKey : t.topbar.showKey}
+                title={reveal ? t.topbar.hideKey : t.topbar.showKey}
+                className="rounded-md p-1 text-ghost transition hover:text-slate-100"
+              >
+                {reveal ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+              </button>
+              <button
+                type="button"
+                onClick={copyKey}
+                aria-label={t.topbar.copyKey}
+                title={t.topbar.copyKey}
+                className="rounded-md p-1 text-ghost transition hover:text-slate-100"
+              >
+                <Copy className="h-3.5 w-3.5" />
+              </button>
+            </div>
 
-        <button
-          onClick={logout}
-          className="flex items-center gap-1.5 rounded-xl border border-line bg-white/5 px-3 py-2 text-sm text-ghost transition hover:border-brand-rose/40 hover:text-brand-rose"
-          title={t.topbar.logoutTitle}
-        >
-          <LogOut className="h-4 w-4" />
-          <span className="hidden sm:inline">{t.topbar.logout}</span>
-        </button>
+            <button
+              onClick={logout}
+              className="flex items-center gap-1.5 rounded-xl border border-line bg-white/5 px-3 py-2 text-sm text-ghost transition hover:border-brand-rose/40 hover:text-brand-rose"
+              title={t.topbar.logoutTitle}
+            >
+              <LogOut className="h-4 w-4" />
+              <span className="hidden sm:inline">{t.topbar.logout}</span>
+            </button>
+          </>
+        )}
       </div>
     </header>
   )

@@ -46,7 +46,8 @@ def test_store_atomic_update_reopen_and_tenant_isolation(tmp_path):
     store.put('other', 'counter', 'one', {'count': 900})
     reopened = ManagementStore(str(tmp_path))
     assert reopened.get('tenant', 'counter', 'one') == {'count': 60}
-    assert stat.S_IMODE(os.stat(store.path).st_mode) == 0o600
+    if os.name != "nt":  # Windows keeps only a read-only bit
+        assert stat.S_IMODE(os.stat(store.path).st_mode) == 0o600
     reopened.clear_namespace('tenant')
     assert reopened.get('other', 'counter', 'one') == {'count': 900}
     assert reopened.scan('counter') == [('other', 'one', {'count': 900})]

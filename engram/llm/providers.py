@@ -25,11 +25,17 @@ def make_llm(name: str, **overrides):
     """Build a LiteLLMClient from a friendly name:
 
     deepseek | deepseek-reasoner | qwen-plus | qwen-turbo | qwen-max |
-    univibe:<model> (OpenAI relay) | univibe-claude:<model> | <raw litellm model id>
+    univibe:<model> (OpenAI relay) | univibe-claude:<model> | <raw litellm model id> |
+    codex (turns run by the hosting app; see llm/codex_llm.py)
     """
+    n = name.strip()
+    if n == "codex":
+        from .codex_llm import CodexLLM
+
+        return CodexLLM(**overrides)
+
     from .litellm_llm import LiteLLMClient
 
-    n = name.strip()
     if n in ("deepseek", "deepseek-chat"):
         return LiteLLMClient("deepseek/deepseek-chat", **overrides)
     if n == "deepseek-reasoner":

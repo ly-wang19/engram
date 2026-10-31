@@ -9,11 +9,12 @@ import json
 import os
 import shutil
 import stat
+import time
 from contextlib import contextmanager
 from dataclasses import fields
 from typing import Any, Iterable
 
-from .. import __version__
+from .. import __version__, filelock
 from ..ingest import IdentityResolver
 from ..types import Conflict, Entity, Episode, Fact, Relation, WorkingMemory
 from ..util import now
@@ -69,24 +70,53 @@ def _json_dump(obj: Any, fh) -> None:
     fh.write("\n")
 
 
+# Every float parsed from JSON is its own 24-byte object, so a loaded 256-dim vector cost ~8KB and
+# vectors were a third of a real-scale process. Hashing vectors repeat a handful of values (mostly 0.0),
+# so the loader hands out one object per distinct number and a vector costs its 2KB of pointers — same
+# list, same values, same speed (an array('d') saved as much but made every similarity scan box its
+# floats, 3x slower recall). Sharing at parse time, not after: floats created and then dropped leave
+# their memory with the process.
+_FLOATS: dict[str, float] = {}
+_FLOATS_MAX = 1 << 20  # dense model vectors rarely repeat; stop growing the table rather than hoard them
+
+
+def _parse_float(text: str) -> float:
+    value = _FLOATS.get(text)
+    if value is None:
+        value = float(text)
+        if len(_FLOATS) < _FLOATS_MAX:
+            _FLOATS[text] = value
+    return value
+
+
 @contextmanager
 def _lock(path: str):
     os.makedirs(path, exist_ok=True)
     lock_path = os.path.join(path, ".lock")
     with open(lock_path, "a", encoding="utf-8") as fh:
-        try:
-            import fcntl
-        except ImportError:  # pragma: no cover - fcntl exists on supported Linux/macOS targets.
-            yield
-            return
-        fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+        filelock.lock(fh.fileno())
         try:
             yield
         finally:
-            fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+            filelock.unlock(fh.fileno())
+
+
+def _replace(source: str, target: str, attempts: int = 6) -> None:
+    """os.replace, retried on Windows where antivirus or an indexer briefly holding the target makes
+    it fail with PermissionError."""
+    for attempt in range(attempts):
+        try:
+            os.replace(source, target)
+            return
+        except PermissionError:
+            if os.name != "nt" or attempt == attempts - 1:
+                raise
+            time.sleep(0.05 * (2 ** attempt))
 
 
 def _sync_dir(path: str) -> None:
+    if os.name == "nt":
+        return  # a directory cannot be opened for fsync on Windows; NTFS journals the rename itself
     fd = os.open(path, os.O_RDONLY)
     try:
         os.fsync(fd)
@@ -96,7 +126,8 @@ def _sync_dir(path: str) -> None:
 
 def _copy_synced(source: str, target: str) -> None:
     with open(source, "rb") as src, open(target, "wb") as dst:
-        os.fchmod(dst.fileno(), stat.S_IMODE(os.fstat(src.fileno()).st_mode))
+        if hasattr(os, "fchmod"):  # absent on Windows, where the mode bits mean little anyway
+            os.fchmod(dst.fileno(), stat.S_IMODE(os.fstat(src.fileno()).st_mode))
         shutil.copyfileobj(src, dst)
         dst.flush()
         os.fsync(dst.fileno())
@@ -109,8 +140,19 @@ def _recover_snapshot(path: str) -> None:
         return
     try:
         with open(ready, "r", encoding="utf-8") as fh:
-            present = json.load(fh)
-        if not isinstance(present, list) or any(name not in SNAPSHOT_FILES for name in present):
+            marker = json.load(fh)
+        # A list is the original format: every snapshot file was backed up. The dict form backs up only
+        # the files a save replaces; a file it appended to or left alone is not in `rewrite` and must not
+        # be touched here (an append is undone by the restored manifest's committed count instead).
+        if isinstance(marker, list):
+            present, rewrite = marker, list(SNAPSHOT_FILES)
+        elif isinstance(marker, dict):
+            present, rewrite = marker.get("present"), marker.get("rewrite")
+        else:
+            raise ValueError("invalid snapshot backup marker")
+        if not isinstance(present, list) or not isinstance(rewrite, list) \
+                or any(name not in SNAPSHOT_FILES for name in [*present, *rewrite]) \
+                or any(name not in rewrite for name in present):
             raise ValueError("invalid snapshot backup file list")
         # Check all recovery inputs before changing the live snapshot. Keep backups until recovery
         # completes, so another interruption during recovery itself can safely retry the same work.
@@ -118,7 +160,7 @@ def _recover_snapshot(path: str) -> None:
             raise ValueError("snapshot backup is incomplete")
     except (ValueError, TypeError) as exc:
         raise StoreFormatError("cannot recover unfinished snapshot: invalid backup") from exc
-    for name in SNAPSHOT_FILES:
+    for name in rewrite:
         target = os.path.join(path, name)
         if name in present:
             tmp = target + ".recover"
@@ -132,15 +174,19 @@ def _recover_snapshot(path: str) -> None:
 
 
 @contextmanager
-def _snapshot_transaction(path: str):
+def _snapshot_transaction(path: str, rewrite: Iterable[str] = SNAPSHOT_FILES):
+    """Make the replacement of `rewrite` (plus the manifest) atomic. Only those files are backed up: on a
+    large store the episodes log is appended to, not replaced, and copying it before every save wrote
+    twice the store's size per write."""
     _recover_snapshot(path)
+    rewrite = [name for name in SNAPSHOT_FILES if name in set(rewrite) or name == "manifest.json"]
     backup = os.path.join(path, _BACKUP_DIR)
     # An unmarked backup is either an interrupted preparation or a completed transaction.
     if os.path.exists(backup):
         shutil.rmtree(backup)
     os.mkdir(backup, mode=0o700)
     present = []
-    for name in SNAPSHOT_FILES:
+    for name in rewrite:
         source = os.path.join(path, name)
         if os.path.exists(source):
             _copy_synced(source, os.path.join(backup, name))
@@ -149,7 +195,7 @@ def _snapshot_transaction(path: str):
     ready = os.path.join(backup, "ready.json")
     ready_tmp = ready + ".tmp"
     with open(ready_tmp, "w", encoding="utf-8") as fh:
-        json.dump(present, fh)
+        json.dump({"present": present, "rewrite": rewrite}, fh)
         fh.flush()
         os.fsync(fh.fileno())
     os.replace(ready_tmp, ready)
@@ -170,41 +216,77 @@ def _snapshot_transaction(path: str):
 
 
 def _write_jsonl(path: str, name: str, rows: Iterable[dict[str, Any]]) -> int:
+    return _write_jsonl_sized(path, name, rows)[0]
+
+
+def _write_jsonl_sized(path: str, name: str, rows: Iterable[dict[str, Any]]) -> tuple[int, int]:
+    """Replace `<name>.jsonl` with `rows`; returns (row count, byte size)."""
     tmp = os.path.join(path, f"{name}.jsonl.tmp")
     final = os.path.join(path, f"{name}.jsonl")
     count = 0
-    with open(tmp, "w", encoding="utf-8") as fh:
+    with open(tmp, "w", encoding="utf-8", newline="\n") as fh:
         for row in rows:
             _json_dump(row, fh)
             count += 1
         fh.flush()
         os.fsync(fh.fileno())
-    os.replace(tmp, final)
-    return count
+        size = fh.tell()
+    _replace(tmp, final)
+    return count, size
+
+
+def _append_jsonl(path: str, name: str, committed_bytes: int, rows: Iterable[dict[str, Any]]) -> tuple[int, int]:
+    """Append `rows` after the committed prefix of `<name>.jsonl` (bytes past it are an interrupted
+    append, cut first). Returns (rows appended, new byte size). Readers stop at the manifest's committed
+    row count, so until the manifest is replaced the appended rows do not exist."""
+    final = os.path.join(path, f"{name}.jsonl")
+    count = 0
+    with open(final, "r+b") as fh:
+        fh.truncate(committed_bytes)
+        if committed_bytes:
+            fh.seek(committed_bytes - 1)
+            if fh.read(1) != b"\n":  # a committed last row written without its newline
+                fh.write(b"\n")
+        fh.seek(0, os.SEEK_END)
+        for row in rows:
+            fh.write((json.dumps(row, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n")
+                     .encode("utf-8"))
+            count += 1
+        fh.flush()
+        os.fsync(fh.fileno())
+        size = fh.tell()
+    return count, size
 
 
 def _read_jsonl(path: str, name: str, limit: int | None = None) -> list[dict[str, Any]]:
+    return _read_jsonl_sized(path, name, limit)[0]
+
+
+def _read_jsonl_sized(path: str, name: str, limit: int | None = None) -> tuple[list[dict[str, Any]], int]:
+    """The committed rows of `<name>.jsonl` and the byte length of that committed prefix."""
     file_path = os.path.join(path, f"{name}.jsonl")
     if not os.path.exists(file_path):
         if limit:
             raise StoreFormatError(f"{name}.jsonl is missing {limit} committed record(s)")
-        return []
+        return [], 0
     out: list[dict[str, Any]] = []
-    with open(file_path, "r", encoding="utf-8") as fh:
-        for line_no, line in enumerate(fh, start=1):
+    consumed = 0
+    with open(file_path, "rb") as fh:
+        for line_no, raw in enumerate(fh, start=1):
             if limit is not None and len(out) >= limit:
                 break
             try:
-                out.append(json.loads(line))
-            except json.JSONDecodeError as exc:
+                out.append(json.loads(raw.decode("utf-8"), parse_float=_parse_float))
+            except (json.JSONDecodeError, UnicodeDecodeError) as exc:
                 raise StoreFormatError(
                     f"{name}.jsonl has malformed JSON inside the committed prefix at line {line_no}"
                 ) from exc
+            consumed += len(raw)
     if limit is not None and len(out) < limit:
         raise StoreFormatError(
             f"{name}.jsonl has {len(out)} committed record(s), manifest requires {limit}"
         )
-    return out
+    return out, consumed
 
 
 def _manifest_count(counts: dict[str, Any], name: str) -> int:
@@ -233,70 +315,145 @@ def _memory_state(mem: Any) -> dict[str, Any]:
     }
 
 
+def _episode_sig(ep: Any) -> int:
+    """Cheap change detector for one episode within this process (str hashes are cached on the object,
+    so this does not rehash a transcript that did not change)."""
+    return hash((
+        ep.content, ep.user_id, ep.session_id, ep.speaker, ep.event_time, ep.ingested_at, ep.consolidated,
+        ep.summary, tuple(ep.embedding or ()), tuple(ep.summary_embedding or ()),
+        json.dumps(ep.metadata, sort_keys=True, default=str),
+    ))
+
+
+def _episodes_plan(mem: Any, path: str, manifest: dict[str, Any] | None):
+    """Decide how to persist episodes: ("skip"|"append"|"rewrite", rows to append, new sigs).
+
+    Append when the on-disk log is exactly what this Memory last loaded or saved and nothing was
+    deleted: new episodes and changed ones (a grown agent session) go on the end, and the loader lets a
+    later row for an id win. Rewrite on deletes, when superseded rows pass a quarter of the log, or when
+    the log is not ours (another process saved, a forget was installed, a first save)."""
+    episodes = list(mem.episodes_doc.values())
+    sigs = {ep.id: _episode_sig(ep) for ep in episodes}
+    cache = getattr(mem, "_persist_episodes", None)
+    sizes = (manifest or {}).get("sizes") or {}
+    counts = (manifest or {}).get("counts") or {}
+    log = os.path.join(path, "episodes.jsonl")
+    if (cache is None or cache.get("path") != os.path.abspath(path) or manifest is None
+            or sizes.get("episodes") != cache.get("bytes") or counts.get("episodes") != cache.get("rows")
+            or not os.path.exists(log) or os.path.getsize(log) < cache["bytes"]):
+        return "rewrite", episodes, sigs
+    old = cache["sigs"]
+    if any(ident not in sigs for ident in old):
+        return "rewrite", episodes, sigs
+    changed = [ep for ep in episodes if old.get(ep.id) != sigs[ep.id]]
+    if not changed:
+        return "skip", [], sigs
+    superseded = cache.get("dead", 0) + sum(1 for ep in changed if ep.id in old)
+    if superseded > max(64, (cache["rows"] + len(changed)) // 4):
+        return "rewrite", episodes, sigs
+    return "append", sorted(changed, key=lambda e: e.id), sigs
+
+
+def _read_manifest(path: str) -> dict[str, Any] | None:
+    manifest_path = os.path.join(path, "manifest.json")
+    if not os.path.exists(manifest_path):
+        return None
+    try:
+        with open(manifest_path, "r", encoding="utf-8") as fh:
+            manifest = json.load(fh)
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        return None
+    return manifest if isinstance(manifest, dict) else None
+
+
 def save_memory(mem: Any, path: str, backend: str = "durable") -> None:
     """Persist a Memory instance to a schema-versioned JSONL directory."""
     if os.path.exists(path) and not os.path.isdir(path):
         raise StoreFormatError(f"store path exists and is not a directory: {path}")
 
-    with _lock(path), _snapshot_transaction(path):
-        episodes = sorted(mem.episodes_doc.values(), key=lambda e: e.id)
-        hot_ids = {f.id for f in mem.fact_store.values()}
-        facts = []
-        for fact in sorted(mem.fact_store.values(), key=lambda f: f.id):
-            row = _record(fact)
-            row["_store"] = "hot"
-            facts.append(row)
-        for fact in sorted(mem.cold_store.values(), key=lambda f: f.id):
-            if fact.id in hot_ids:
-                continue
-            row = _record(fact)
-            row["_store"] = "cold"
-            facts.append(row)
-        counts = {
-            "episodes": _write_jsonl(path, "episodes", (_record(e) for e in episodes)),
-            "facts": _write_jsonl(path, "facts", facts),
-            "entities": _write_jsonl(
-                path, "entities", (_record(e) for e in sorted(mem.graph.entities.values(), key=lambda e: e.id))
-            ),
-            "relations": _write_jsonl(
-                path, "relations", (_record(r) for r in sorted(mem.graph.relations(), key=lambda r: r.id))
-            ),
-            "working": _write_jsonl(
-                path, "working", (_record(w) for w in sorted(mem.working_mem.values(), key=lambda w: w.id))
-            ),
-            "conflicts": _write_jsonl(
-                path, "conflicts", (_record(c) for c in sorted(mem.conflicts.values(), key=lambda c: c.id))
-            ),
-        }
-        for name in COLLECTIONS:
-            counts.setdefault(name, 0)
+    with _lock(path):
+        _recover_snapshot(path)
+        prior = _read_manifest(path)
+        mode, ep_rows, sigs = _episodes_plan(mem, path, prior)
+        small = [f"{name}.jsonl" for name in COLLECTIONS if name != "episodes"]
+        rewrite = small + (["episodes.jsonl"] if mode == "rewrite" else [])
+        with _snapshot_transaction(path, rewrite):
+            _save_locked(mem, path, backend, prior, mode, ep_rows, sigs)
 
-        created_at = now()
-        manifest_path = os.path.join(path, "manifest.json")
-        if os.path.exists(manifest_path):
-            try:
-                with open(manifest_path, "r", encoding="utf-8") as fh:
-                    created_at = float(json.load(fh).get("created_at", created_at))
-            except (OSError, ValueError, TypeError, json.JSONDecodeError):
-                pass
-        manifest = {
-            "schema_version": SCHEMA_VERSION,
-            "engram_version": __version__,
-            "embedder_id": _embedder_id(mem.embedder),
-            "embedding_dim": _embedder_dim(mem.embedder),
-            "backend": backend,
-            "created_at": created_at,
-            "updated_at": now(),
-            "counts": counts,
-            "state": _memory_state(mem),
-        }
-        tmp = os.path.join(path, "manifest.json.tmp")
-        with open(tmp, "w", encoding="utf-8") as fh:
-            json.dump(manifest, fh, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-            fh.write("\n")
-            fh.flush()
-            os.fsync(fh.fileno())
-        os.replace(tmp, manifest_path)
+
+def _save_locked(mem: Any, path: str, backend: str, prior: dict[str, Any] | None, mode: str,
+                 ep_rows: list, sigs: dict[str, int]) -> None:
+    cache = getattr(mem, "_persist_episodes", None) or {}
+    if mode == "rewrite":
+        ep_count, ep_bytes = _write_jsonl_sized(
+            path, "episodes", (_record(e) for e in sorted(ep_rows, key=lambda e: e.id)))
+        dead = 0
+    elif mode == "append":
+        appended, ep_bytes = _append_jsonl(path, "episodes", cache["bytes"], (_record(e) for e in ep_rows))
+        ep_count = cache["rows"] + appended
+        dead = cache.get("dead", 0) + sum(1 for e in ep_rows if e.id in cache["sigs"])
+    else:
+        ep_count, ep_bytes, dead = cache["rows"], cache["bytes"], cache.get("dead", 0)
+    hot_ids = {f.id for f in mem.fact_store.values()}
+    facts = []
+    for fact in sorted(mem.fact_store.values(), key=lambda f: f.id):
+        row = _record(fact)
+        row["_store"] = "hot"
+        facts.append(row)
+    for fact in sorted(mem.cold_store.values(), key=lambda f: f.id):
+        if fact.id in hot_ids:
+            continue
+        row = _record(fact)
+        row["_store"] = "cold"
+        facts.append(row)
+    counts = {
+        "episodes": ep_count,
+        "facts": _write_jsonl(path, "facts", facts),
+        "entities": _write_jsonl(
+            path, "entities", (_record(e) for e in sorted(mem.graph.entities.values(), key=lambda e: e.id))
+        ),
+        "relations": _write_jsonl(
+            path, "relations", (_record(r) for r in sorted(mem.graph.relations(), key=lambda r: r.id))
+        ),
+        "working": _write_jsonl(
+            path, "working", (_record(w) for w in sorted(mem.working_mem.values(), key=lambda w: w.id))
+        ),
+        "conflicts": _write_jsonl(
+            path, "conflicts", (_record(c) for c in sorted(mem.conflicts.values(), key=lambda c: c.id))
+        ),
+    }
+    for name in COLLECTIONS:
+        counts.setdefault(name, 0)
+
+    created_at = now()
+    manifest_path = os.path.join(path, "manifest.json")
+    if prior is not None:
+        try:
+            created_at = float(prior.get("created_at", created_at))
+        except (ValueError, TypeError):
+            pass
+    manifest = {
+        "schema_version": SCHEMA_VERSION,
+        "engram_version": __version__,
+        "embedder_id": _embedder_id(mem.embedder),
+        "embedding_dim": _embedder_dim(mem.embedder),
+        "backend": backend,
+        "created_at": created_at,
+        "updated_at": now(),
+        "counts": counts,
+        # committed byte length of the episodes log, so the next save can append after exactly it
+        "sizes": {"episodes": ep_bytes},
+        "state": _memory_state(mem),
+    }
+    tmp = os.path.join(path, "manifest.json.tmp")
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(manifest, fh, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        fh.write("\n")
+        fh.flush()
+        os.fsync(fh.fileno())
+    _replace(tmp, manifest_path)
+    mem._persist_episodes = {"path": os.path.abspath(path), "rows": ep_count, "bytes": ep_bytes,
+                             "dead": dead, "sigs": sigs}
 
 
 def load_memory(mem: Any, path: str, allow_mismatch: bool = False) -> bool:
@@ -340,7 +497,11 @@ def _load_memory(mem: Any, path: str, allow_mismatch: bool) -> bool:
         )
     stored_embedder = manifest.get("embedder_id")
     current_embedder = _embedder_id(mem.embedder)
-    if not allow_mismatch and stored_embedder is not None and str(stored_embedder) != current_embedder:
+    # A store written by the pre-CJK hashing embedder is the same vector space for every ASCII text; only
+    # items holding CJK hashed to near-empty vectors. Open it and let Memory.open re-embed just those.
+    legacy_hashing = _is_hashing_upgrade(stored_embedder, current_embedder)
+    if not allow_mismatch and stored_embedder is not None and str(stored_embedder) != current_embedder \
+            and not legacy_hashing:
         raise EmbedderMismatchError(
             f"store embedder_id={stored_embedder!r} does not match current embedder_id={current_embedder!r}; "
             "re-attach the original embedder, or migrate with Memory.open(path, allow_mismatch=True, ...)"
@@ -350,11 +511,14 @@ def _load_memory(mem: Any, path: str, allow_mismatch: bool) -> bool:
     counts = manifest.get("counts") or {}
     expected_counts = {name: _manifest_count(counts, name) for name in COLLECTIONS}
 
-    episodes = [_from_record(Episode, row) for row in _read_jsonl(path, "episodes", expected_counts["episodes"])]
+    episode_rows, episode_bytes = _read_jsonl_sized(path, "episodes", expected_counts["episodes"])
+    episodes = [_from_record(Episode, row) for row in episode_rows]
+    del episode_rows
     facts = [
         (row.get("_store", "hot"), _from_record(Fact, row))
         for row in _read_jsonl(path, "facts", expected_counts["facts"])
     ]
+
     entities = [_from_record(Entity, row) for row in _read_jsonl(path, "entities", expected_counts["entities"])]
     relations = [
         _from_record(Relation, row)
@@ -420,4 +584,17 @@ def _load_memory(mem: Any, path: str, allow_mismatch: bool) -> bool:
     mem.cold_pages_out = {k: int(v) for k, v in (state.get("cold_pages_out") or {}).items()}
     mem.cold_pages_in = {k: int(v) for k, v in (state.get("cold_pages_in") or {}).items()}
     mem._import_seen = set(state.get("import_seen") or ())
+    mem._stale_cjk_vectors = legacy_hashing
+    # What is on disk now, so the next save can append instead of rewriting. A later row for an id
+    # superseded an earlier one (an appended grown session); those dead rows count toward compaction.
+    loaded = mem.episodes_doc.values()
+    mem._persist_episodes = {"path": os.path.abspath(path), "rows": len(episodes), "bytes": episode_bytes,
+                             "dead": len(episodes) - len(loaded),
+                             "sigs": {ep.id: _episode_sig(ep) for ep in loaded}}
     return True
+
+
+def _is_hashing_upgrade(stored: Any, current: str) -> bool:
+    from ..embed.hashing import HASHING_MODEL, LEGACY_HASHING_IDS
+
+    return stored is not None and str(stored) in LEGACY_HASHING_IDS and current == HASHING_MODEL

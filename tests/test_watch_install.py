@@ -14,6 +14,8 @@ import pytest
 
 from engram.connectors import watch_install as wi
 
+pytestmark = pytest.mark.skipif(os.name == "nt", reason="launchd/systemd/cron installers are POSIX-only")
+
 PY = "/opt/python/bin/python3"
 ARGV = ["--once", "--url", "http://127.0.0.1:8000", "--key-file", "/h/.engram/watch.key",
         "--state", "/h/.engram/watch_state.json", "--limit", "25"]
