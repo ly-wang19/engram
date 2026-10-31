@@ -8,11 +8,14 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import shutil
 import shlex
 import time
 from pathlib import Path
 from typing import Iterable
+
+from .mcp.backends import api_key_source, resolve_api_key
 
 
 CLIENTS = ("all", "claude-code", "codex", "cursor", "openai")
@@ -22,11 +25,16 @@ POLICY_START_MARKER = "<!-- ENGRAM MEMORY START -->"
 POLICY_END_MARKER = "<!-- ENGRAM MEMORY END -->"
 
 
-def mcp_args(*, api_url: str | None, api_key: str | None, namespace: str | None) -> list[str]:
+def mcp_args(*, api_url: str | None, api_key: str | None, namespace: str | None,
+             api_key_file: str | None = None) -> list[str]:
     args = ["-m", "engram.mcp"]
     if api_url:
         args += ["--api-url", api_url]
-        if api_key:
+        api_key, api_key_file = api_key_source(api_key, api_key_file, default="me")
+        if api_key_file is not None:
+            resolve_api_key(api_key_file=api_key_file)  # validate without persisting the secret
+            args += ["--api-key-file", api_key_file]
+        elif api_key:
             args += ["--api-key", api_key]
     else:
         args += ["--namespace", namespace or "me"]
@@ -39,6 +47,23 @@ def _stdio_server(args: list[str], python_cmd: str) -> dict:
 
 def _json(obj: object) -> str:
     return json.dumps(obj, ensure_ascii=False, indent=2)
+
+
+def _display_args(args: list[str]) -> list[str]:
+    out = list(args)
+    for i, arg in enumerate(out[:-1]):
+        if arg == "--api-key":
+            out[i + 1] = "<API_KEY>"
+    return out
+
+
+def _display_toml(block: str) -> str:
+    return re.sub(r'("--api-key",\s*)"(?:[^"\\]|\\.)*"',
+                  r'\1"<API_KEY>"', block)
+
+
+def _display_server(server: dict) -> dict:
+    return {**server, "args": _display_args(server.get("args", []))}
 
 
 def _shell(parts: Iterable[str]) -> str:
@@ -58,8 +83,9 @@ def agents_file_path(path: str | None = None) -> Path:
 
 
 def codex_toml_block(*, api_url: str | None, api_key: str | None,
-                     namespace: str | None, python_cmd: str) -> str:
-    args = mcp_args(api_url=api_url, api_key=api_key, namespace=namespace)
+                     namespace: str | None, python_cmd: str,
+                     api_key_file: str | None = None) -> str:
+    args = mcp_args(api_url=api_url, api_key=api_key, namespace=namespace, api_key_file=api_key_file)
     toml_args = ", ".join(json.dumps(a) for a in args)
     return "\n".join([
         "[mcp_servers.engram]",
@@ -231,7 +257,8 @@ def install_codex_config(
     *,
     config_path: str | None = None,
     api_url: str | None = "http://localhost:8000",
-    api_key: str | None = "me",
+    api_key: str | None = None,
+    api_key_file: str | None = None,
     namespace: str | None = None,
     python_cmd: str = "python",
     dry_run: bool = False,
@@ -241,6 +268,7 @@ def install_codex_config(
     block = codex_toml_block(
         api_url=api_url,
         api_key=api_key,
+        api_key_file=api_key_file,
         namespace=namespace,
         python_cmd=python_cmd,
     )
@@ -308,7 +336,8 @@ def install_mcp_json_config(
     *,
     config_path: str | None = None,
     api_url: str | None = "http://localhost:8000",
-    api_key: str | None = "me",
+    api_key: str | None = None,
+    api_key_file: str | None = None,
     namespace: str | None = None,
     python_cmd: str = "python",
     server_name: str = "engram",
@@ -324,7 +353,7 @@ def install_mcp_json_config(
         raise ValueError(f"{path} field `mcpServers` must be a JSON object")
     data["mcpServers"] = servers
     server = _stdio_server(
-        mcp_args(api_url=api_url, api_key=api_key, namespace=namespace),
+        mcp_args(api_url=api_url, api_key=api_key, namespace=namespace, api_key_file=api_key_file),
         python_cmd,
     )
     servers[server_name] = server
@@ -396,7 +425,8 @@ def run_codex_doctor(
     *,
     python_cmd: str = "python",
     api_url: str | None = None,
-    api_key: str = "me",
+    api_key: str | None = None,
+    api_key_file: str | None = None,
     codex_config: str | None = None,
     mcp_json: str | None = None,
     mcp_server_name: str = "engram",
@@ -408,6 +438,7 @@ def run_codex_doctor(
         python_cmd=python_cmd,
         api_url=api_url,
         api_key=api_key,
+        api_key_file=api_key_file,
         codex_config=codex_config,
         mcp_json=mcp_json,
         mcp_server_name=mcp_server_name,
@@ -419,7 +450,8 @@ def run_mcp_doctor(
     client: str = "none",
     python_cmd: str = "python",
     api_url: str | None = None,
-    api_key: str = "me",
+    api_key: str | None = None,
+    api_key_file: str | None = None,
     mcp_json: str | None = None,
     mcp_server_name: str = "engram",
 ) -> dict:
@@ -430,6 +462,7 @@ def run_mcp_doctor(
         python_cmd=python_cmd,
         api_url=api_url,
         api_key=api_key,
+        api_key_file=api_key_file,
         mcp_json=mcp_json,
         mcp_server_name=mcp_server_name,
     )
@@ -441,12 +474,16 @@ def _doctor_verify_command(
     python_cmd: str,
     api_url: str | None,
     api_key: str | None,
+    api_key_file: str | None = None,
 ) -> list[str]:
     verify = ["engram-agent-doctor", "--client", client, "--python", python_cmd]
     if api_url:
         verify += ["--api-url", api_url]
-        if api_key:
-            verify += ["--api-key", api_key]
+        api_key, api_key_file = api_key_source(api_key, api_key_file, default="me")
+        if api_key_file is not None:
+            verify += ["--api-key-file", api_key_file]
+        elif api_key:
+            verify += ["--api-key", "<API_KEY>"]
     elif api_key:
         verify += ["--api-key", api_key]
     return verify
@@ -458,6 +495,7 @@ def render_codex_config_result(
     python_cmd: str = "python",
     api_url: str | None = None,
     api_key: str | None = None,
+    api_key_file: str | None = None,
     doctor_report: dict | None = None,
     doctor_skipped: str | None = None,
 ) -> str:
@@ -478,13 +516,14 @@ def render_codex_config_result(
     if result.get("backup"):
         lines.append(f"Backup: `{result['backup']}`")
     if action == "install" and result.get("block"):
-        lines += ["", "Configured block:", "", "```toml", result["block"].rstrip(), "```"]
+        lines += ["", "Configured block:", "", "```toml", _display_toml(result["block"]).rstrip(), "```"]
     if action == "install":
         verify = _doctor_verify_command(
             client="codex",
             python_cmd=python_cmd,
             api_url=api_url,
             api_key=api_key,
+            api_key_file=api_key_file,
         )
         lines += [
             "",
@@ -510,6 +549,7 @@ def render_mcp_json_config_result(
     doctor_client: str = "none",
     api_url: str | None = None,
     api_key: str | None = None,
+    api_key_file: str | None = None,
     doctor_report: dict | None = None,
     doctor_skipped: str | None = None,
 ) -> str:
@@ -535,7 +575,7 @@ def render_mcp_json_config_result(
             f"Configured server `{result.get('server_name', 'engram')}`:",
             "",
             "```json",
-            _json(result["server"]),
+            _json(_display_server(result["server"])),
             "```",
         ]
         verify = _doctor_verify_command(
@@ -543,6 +583,7 @@ def render_mcp_json_config_result(
             python_cmd=python_cmd,
             api_url=api_url,
             api_key=api_key,
+            api_key_file=api_key_file,
         )
         lines += ["", "Verify with:", "", "```bash", _shell(verify), "```"]
     if doctor_skipped:
@@ -634,6 +675,7 @@ def render_bootstrap_result(
     python_cmd: str,
     api_url: str | None,
     api_key: str | None,
+    api_key_file: str | None = None,
     session_id: str,
     doctor_reports: list[dict] | None = None,
     doctor_skipped: str | None = None,
@@ -658,6 +700,7 @@ def render_bootstrap_result(
         python_cmd=python_cmd,
         api_url=api_url,
         api_key=api_key,
+        api_key_file=api_key_file,
     )
     lines += ["", "Verify later with:", "", "```bash", _shell(verify), "```", ""]
     if policy_result is not None:
@@ -683,12 +726,14 @@ def render_markdown(
     client: str = "all",
     *,
     api_url: str | None = "http://localhost:8000",
-    api_key: str | None = "me",
+    api_key: str | None = None,
+    api_key_file: str | None = None,
     namespace: str | None = None,
     session_id: str = "codex:super-memory:thread-123",
     python_cmd: str = "python",
 ) -> str:
-    args = mcp_args(api_url=api_url, api_key=api_key, namespace=namespace)
+    args = _display_args(mcp_args(api_url=api_url, api_key=api_key, namespace=namespace,
+                                  api_key_file=api_key_file))
     server = _stdio_server(args, python_cmd)
     out: list[str] = [
         "# Engram Agent Setup",
@@ -740,12 +785,13 @@ def render_markdown(
             "`~/.codex/config.toml`:",
             "",
             "```toml",
-            codex_toml_block(
+            _display_toml(codex_toml_block(
                 api_url=api_url,
                 api_key=api_key,
+                api_key_file=api_key_file,
                 namespace=namespace,
                 python_cmd=python_cmd,
-            ).rstrip(),
+            )).rstrip(),
             "```",
             "",
             "Suggested AGENTS.md note:",
@@ -775,7 +821,9 @@ def render_markdown(
         ]
 
     if client in {"all", "openai"}:
-        key = api_key or namespace or "me"
+        _, selected_file = api_key_source(api_key, api_key_file, default="me")
+        key = "<API_KEY>" if api_url else namespace or "me"
+        key_expr = (f"Path({selected_file!r}).read_text().strip()" if selected_file else repr(key))
         url = (api_url or "http://localhost:8000").rstrip("/") + "/v1"
         out += [
             "## OpenAI-Compatible Apps",
@@ -784,9 +832,10 @@ def render_markdown(
             "",
             "```python",
             "from openai import OpenAI",
+            *(["from pathlib import Path"] if selected_file else []),
             "",
             f"session_id = {session_id!r}",
-            f"client = OpenAI(base_url={url!r}, api_key={key!r})",
+            f"client = OpenAI(base_url={url!r}, api_key={key_expr})",
             "client.chat.completions.create(",
             "    model='engram',",
             "    messages=[{'role': 'user', 'content': 'Continue the work.'}],",
@@ -822,7 +871,8 @@ def main(argv: list[str] | None = None, *, prog: str = "engram-agent-setup") -> 
     ap.add_argument("--client", choices=CLIENTS, default="all", help="which adapter recipe to print")
     ap.add_argument("--api-url", default="http://localhost:8000",
                     help="Engram HTTP server for remote MCP/OpenAI-compatible mode")
-    ap.add_argument("--api-key", default="me", help="Bearer key = user memory namespace")
+    ap.add_argument("--api-key", default=None, help="Bearer key (default $ENGRAM_API_KEY or me)")
+    ap.add_argument("--api-key-file", default=None, help="read Bearer key from a file; overrides $ENGRAM_API_KEY")
     ap.add_argument("--local", action="store_true", help="use local MCP storage instead of an HTTP server")
     ap.add_argument("--namespace", default="me", help="local MCP namespace when --local is set")
     ap.add_argument("--session-id", default="codex:super-memory:thread-123",
@@ -887,7 +937,13 @@ def main(argv: list[str] | None = None, *, prog: str = "engram-agent-setup") -> 
         ap.error("--no-doctor requires --bootstrap")
 
     api_url = None if args.local else args.api_url
-    api_key = None if args.local else args.api_key
+    api_key, api_key_file = (None, None) if args.local else api_key_source(
+        args.api_key, args.api_key_file, default="me")
+    if api_key_file is not None:
+        try:
+            resolve_api_key(api_key_file=api_key_file)
+        except ValueError as exc:
+            ap.error(str(exc))
     namespace = args.namespace if args.local else None
     if args.bootstrap:
         try:
@@ -902,6 +958,7 @@ def main(argv: list[str] | None = None, *, prog: str = "engram-agent-setup") -> 
                     config_path=args.codex_config,
                     api_url=api_url,
                     api_key=api_key,
+                    api_key_file=api_key_file,
                     namespace=namespace,
                     python_cmd=args.python,
                     dry_run=args.dry_run,
@@ -914,6 +971,7 @@ def main(argv: list[str] | None = None, *, prog: str = "engram-agent-setup") -> 
                     config_path=args.mcp_json,
                     api_url=api_url,
                     api_key=api_key,
+                    api_key_file=api_key_file,
                     namespace=namespace,
                     python_cmd=args.python,
                     server_name=args.mcp_server_name,
@@ -941,7 +999,8 @@ def main(argv: list[str] | None = None, *, prog: str = "engram-agent-setup") -> 
             doctor_reports.append(run_codex_doctor(
                 python_cmd=args.python,
                 api_url=api_url,
-                api_key=api_key or args.namespace,
+                api_key=api_key if api_url else args.namespace,
+                api_key_file=api_key_file,
                 codex_config=codex_path,
                 mcp_json=mcp_json_path_,
                 mcp_server_name=args.mcp_server_name,
@@ -951,7 +1010,8 @@ def main(argv: list[str] | None = None, *, prog: str = "engram-agent-setup") -> 
                     client=args.doctor_client,
                     python_cmd=args.python,
                     api_url=api_url,
-                    api_key=api_key or args.namespace,
+                    api_key=api_key if api_url else args.namespace,
+                    api_key_file=api_key_file,
                     mcp_json=mcp_json_path_,
                     mcp_server_name=args.mcp_server_name,
                 ))
@@ -961,7 +1021,8 @@ def main(argv: list[str] | None = None, *, prog: str = "engram-agent-setup") -> 
                 client=args.doctor_client,
                 python_cmd=args.python,
                 api_url=api_url,
-                api_key=api_key or args.namespace,
+                api_key=api_key if api_url else args.namespace,
+                api_key_file=api_key_file,
                 mcp_json=mcp_json_path_,
                 mcp_server_name=args.mcp_server_name,
             ))
@@ -970,7 +1031,8 @@ def main(argv: list[str] | None = None, *, prog: str = "engram-agent-setup") -> 
                 results=results,
                 python_cmd=args.python,
                 api_url=api_url,
-                api_key=api_key or namespace,
+                api_key=api_key if api_url else namespace,
+                api_key_file=api_key_file,
                 session_id=args.session_id,
                 doctor_reports=doctor_reports,
                 doctor_skipped=doctor_skipped,
@@ -985,6 +1047,7 @@ def main(argv: list[str] | None = None, *, prog: str = "engram-agent-setup") -> 
             config_path=args.codex_config,
             api_url=api_url,
             api_key=api_key,
+            api_key_file=api_key_file,
             namespace=namespace,
             python_cmd=args.python,
             dry_run=args.dry_run,
@@ -997,7 +1060,8 @@ def main(argv: list[str] | None = None, *, prog: str = "engram-agent-setup") -> 
             doctor_report = run_codex_doctor(
                 python_cmd=args.python,
                 api_url=api_url,
-                api_key=api_key or args.namespace,
+                api_key=api_key if api_url else args.namespace,
+                api_key_file=api_key_file,
                 codex_config=result["path"],
             )
         print(
@@ -1005,7 +1069,8 @@ def main(argv: list[str] | None = None, *, prog: str = "engram-agent-setup") -> 
                 result,
                 python_cmd=args.python,
                 api_url=api_url,
-                api_key=api_key or namespace,
+                api_key=api_key if api_url else namespace,
+                api_key_file=api_key_file,
                 doctor_report=doctor_report,
                 doctor_skipped=doctor_skipped,
             ),
@@ -1023,6 +1088,7 @@ def main(argv: list[str] | None = None, *, prog: str = "engram-agent-setup") -> 
             config_path=args.mcp_json,
             api_url=api_url,
             api_key=api_key,
+            api_key_file=api_key_file,
             namespace=namespace,
             python_cmd=args.python,
             server_name=args.mcp_server_name,
@@ -1037,7 +1103,8 @@ def main(argv: list[str] | None = None, *, prog: str = "engram-agent-setup") -> 
                 client=args.doctor_client,
                 python_cmd=args.python,
                 api_url=api_url,
-                api_key=api_key or args.namespace,
+                api_key=api_key if api_url else args.namespace,
+                api_key_file=api_key_file,
                 mcp_json=result["path"],
                 mcp_server_name=args.mcp_server_name,
             )
@@ -1047,7 +1114,8 @@ def main(argv: list[str] | None = None, *, prog: str = "engram-agent-setup") -> 
                 python_cmd=args.python,
                 doctor_client=args.doctor_client,
                 api_url=api_url,
-                api_key=api_key or namespace,
+                api_key=api_key if api_url else namespace,
+                api_key_file=api_key_file,
                 doctor_report=doctor_report,
                 doctor_skipped=doctor_skipped,
             ),
@@ -1080,6 +1148,7 @@ def main(argv: list[str] | None = None, *, prog: str = "engram-agent-setup") -> 
         args.client,
         api_url=api_url,
         api_key=api_key,
+        api_key_file=api_key_file,
         namespace=namespace,
         session_id=args.session_id,
         python_cmd=args.python,

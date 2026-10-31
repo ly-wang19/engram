@@ -1,265 +1,148 @@
 import { useState } from 'react'
-import { AlertTriangle, Check, Eraser, Pencil, RefreshCw, ShieldCheck, Trash2 } from 'lucide-react'
+import { AlertTriangle, Eraser, Pencil, RefreshCw, ShieldCheck, Trash2 } from 'lucide-react'
 
-import { Badge, Button, Card, CardTitle, EmptyState, ErrorState, PageHeader, Spinner } from '../components/ui'
-import { ConfirmDialog } from '../components/Modal'
+import { Badge, Button, Card, CardTitle, ErrorState, PageHeader, Spinner } from '../components/ui'
+import { ConfirmDialog, Modal } from '../components/Modal'
 import { toast } from '../components/Toast'
-import { useAudit, useClearSlot, useDeleteFact, useEditFact } from '../hooks/queries'
+import { useClearSlot, useDeleteFact, useEditFact } from '../hooks/queries'
 import { useT } from '../i18n'
-import type { AuditFinding } from '../types'
+import { useAuth } from '../store/auth'
+import { useHealthQueue, useInvalidateReview, useReviewUpdate, type Finding } from '../features/review/api'
+import { ReviewHistory, ReviewPager, statusLabel, useReviewText } from '../features/review/components'
 
-/** Memory health: what's stored that a person would want to fix, and a way to fix it here.
- *
- * A memory store earns trust by being checkable, not by being large. Extraction on real conversations
- * leaves junk — raw tokens used as values, objects that only repeat the predicate, sentence-length
- * claims never reduced to a fact — and none of it is visible unless you read every fact by hand. Each
- * row carries WHY it was flagged and fixes in place, because a finding you can't act on is just noise.
- */
 export default function Health() {
+  const apiKey = useAuth(s => s.apiKey)
+  return <HealthContent key={apiKey} />
+}
+
+function HealthContent() {
   const t = useT()
-  const { data, isLoading, isError, error, refetch, isFetching } = useAudit(60)
+  const tr = useReviewText()
+  const [kind, setKind] = useState('all')
+  const [status, setStatus] = useState('open')
+  const [q, setQ] = useState('')
+  const [offset, setOffset] = useState(0)
+  const [includeSensitive, setIncludeSensitive] = useState(false)
+  const query = useHealthQueue({ kind, status, q, offset, limit: 30, include_sensitive: includeSensitive })
+  const data = query.data
   const update = useEditFact()
   const del = useDeleteFact()
   const clearSlot = useClearSlot()
-  const [confirmSlot, setConfirmSlot] = useState<AuditFinding | null>(null)
+  const invalidateReview = useInvalidateReview()
+  const [confirmSlot, setConfirmSlot] = useState<Finding | null>(null)
+  const [confirmDelete, setConfirmDelete] = useState<Finding | null>(null)
+  const [handling, setHandling] = useState<{ item: Finding; status: string } | null>(null)
   const [editing, setEditing] = useState<string | null>(null)
   const [draft, setDraft] = useState('')
-  const [done, setDone] = useState<Set<string>>(new Set())
 
-  if (isLoading) return <Spinner label={t.health.loading} />
-  if (isError) return <ErrorState message={(error as Error).message} />
-  if (!data) return null
-
-  const markDone = (id: string) => setDone((prev) => new Set(prev).add(id))
-
-  const saveEdit = (f: AuditFinding) => {
-    if (!f.fact_id || !draft.trim() || draft === f.object) {
-      setEditing(null)
-      return
-    }
-    update.mutate(
-      { id: f.fact_id, patch: { object: draft.trim() } },
-      {
-        onSuccess: () => {
-          // The edit also marks the fact user-authored, so auto-extraction can't quietly revert it.
-          toast.success(t.health.fixed)
-          markDone(f.fact_id!)
-          setEditing(null)
-        },
-        onError: (e: unknown) => toast.error(String((e as Error).message)),
-      },
-    )
-  }
-
-  const remove = (f: AuditFinding) => {
-    if (!f.fact_id) return
-    if (!window.confirm(t.health.confirmDelete)) return
-    del.mutate(f.fact_id, {
-      onSuccess: () => {
-        toast.success(t.health.removed)
-        markDone(f.fact_id!)
-      },
-      onError: (e: unknown) => toast.error(String((e as Error).message)),
+  const saveEdit = (f: Finding) => {
+    if (!f.fact_id || !draft.trim() || draft === f.object) { setEditing(null); return }
+    update.mutate({ id: f.fact_id, patch: { object: draft.trim() } }, {
+      onSuccess: () => { toast.success(t.health.fixed); setEditing(null); invalidateReview() },
+      onError: e => toast.error((e as Error).message),
     })
   }
+  const kindName = (value: string) => value === 'embedder_blind' ? tr('嵌入模型覆盖不足', 'Embedding coverage')
+    : t.health.kind[value as keyof typeof t.health.kind] ?? value
 
-  const KIND_TONE: Record<string, 'user' | 'violet' | 'cyan' | undefined> = {
-    machine_token: 'user',     // amber-ish: a value that needs rewriting
-    empty_value: 'violet',
-    unreduced_claim: 'cyan',
-    orphan_entity: undefined,
-    slot_overflow: 'user',     // a whole single-value slot drowning in extraction fragments
-  }
-
-  return (
-    <div className="space-y-6">
-      <PageHeader
-        title={t.health.title}
-        subtitle={t.health.subtitle}
-        actions={
-          <Button variant="ghost" onClick={() => refetch()} loading={isFetching}>
-            <RefreshCw className="h-4 w-4" /> {t.health.recheck}
-          </Button>
-        }
-      />
-
-      <Card>
-        <CardTitle hint={t.health.scopeHint}>
-          <span className="inline-flex items-center gap-2">
-            <ShieldCheck className="h-4 w-4 text-brand-mint" /> {t.health.summary}
-          </span>
-        </CardTitle>
-        <div className="flex flex-wrap items-center gap-x-6 gap-y-2 text-sm">
-          <span className="text-ghost">
-            {t.health.checked(data.checked.facts, data.checked.entities)}
-          </span>
-          <span className={data.total_findings ? 'font-semibold text-brand-amber' : 'font-semibold text-brand-mint'}>
-            {data.total_findings ? t.health.foundN(data.total_findings) : t.health.allClear}
-          </span>
-        </div>
-        {!!data.total_findings && (
-          <div className="mt-3 flex flex-wrap gap-2">
-            {Object.entries(data.by_kind).map(([kind, n]) => (
-              <Badge key={kind} tone={KIND_TONE[kind]}>
-                {String(t.health.kind[kind as keyof typeof t.health.kind] ?? kind)} · {String(n)}
-              </Badge>
-            ))}
+  return <div className="space-y-6">
+    <PageHeader title={t.health.title} subtitle={t.health.subtitle} actions={
+      <Button variant="ghost" onClick={() => query.refetch()} loading={query.isFetching}><RefreshCw className="h-4 w-4" />{t.health.recheck}</Button>
+    } />
+    <Card>
+      <CardTitle><span className="inline-flex items-center gap-2"><ShieldCheck className="h-4 w-4 text-brand-mint" />{t.health.summary}</span></CardTitle>
+      {data && <div className="mb-4 flex flex-wrap gap-3 text-sm text-ghost">
+        <span>{t.health.checked(data.checked.facts, data.checked.entities)}</span>
+        <span>{t.health.foundN(data.total_findings)}</span>
+        {Object.entries(data.by_status).map(([s, n]) => <span key={s}>{statusLabel(s, tr)} · {n}</span>)}
+      </div>}
+      <div className="flex flex-wrap gap-3">
+        <input className="input min-w-0 flex-1" aria-label={tr('搜索体检队列', 'Search health queue')} placeholder={tr('搜索体检结果', 'Search findings')}
+          value={q} onChange={e => { setQ(e.target.value); setOffset(0) }} />
+        <select className="input max-w-full" value={kind} aria-label={tr('体检类型', 'Finding type')} onChange={e => { setKind(e.target.value); setOffset(0) }}>
+          <option value="all">{tr('全部类型', 'All types')}</option>
+          {[...new Set([...Object.keys(data?.by_kind ?? {}), ...(kind !== 'all' ? [kind] : [])])].map(k => <option key={k} value={k}>{kindName(k)} · {data?.by_kind[k] ?? 0}</option>)}
+        </select>
+        <select className="input max-w-full" value={status} aria-label={tr('体检状态', 'Finding status')} onChange={e => { setStatus(e.target.value); setOffset(0) }}>
+          {['open', 'ignored', 'resolved', 'all'].map(s => <option key={s} value={s}>{statusLabel(s, tr)}</option>)}
+        </select>
+      </div>
+      <label className="mt-3 flex items-center gap-2 text-xs text-ghost">
+        <input type="checkbox" checked={includeSensitive} onChange={e => {
+          setIncludeSensitive(e.target.checked); setOffset(0); setHandling(null); setEditing(null); setConfirmDelete(null); setConfirmSlot(null)
+        }} />{tr('显示敏感内容与处理备注', 'Show sensitive content and handling notes')}
+      </label>
+    </Card>
+    {query.isLoading && <Spinner label={t.health.loading} />}
+    {query.isError && <ErrorState message={(query.error as Error).message} />}
+    {data && <Card>
+      <CardTitle><span className="inline-flex items-center gap-2"><AlertTriangle className="h-4 w-4 text-brand-amber" />{tr('完整体检队列', 'Complete health queue')}</span></CardTitle>
+      {!data.items.length && <p className="py-4 text-sm text-ghost">{tr('当前条件下没有体检结果。', 'No findings match these filters.')}</p>}
+      <div className="divide-y divide-line">
+        {data.items.map(f => <div key={f.id} className="py-4">
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge>{kindName(f.kind)}</Badge><Badge>{statusLabel(f.status, tr)}</Badge>
+            {f.valid_at_h && <span className="text-xs text-ghost">{f.valid_at_h}</span>}
           </div>
-        )}
-      </Card>
+          <p className="mt-2 break-words text-sm">{f.text ?? f.entity ?? (f.present ? '' : tr('原来源已不再被报告', 'Source is no longer flagged'))}</p>
+          <p className="mt-1 break-words text-xs text-ghost">{!f.present ? tr('修正或移除后，当前规则已不再报告此项，处理记录仍保留。', 'The current rules no longer flag this source; handling history is retained.')
+            : f.kind === 'slot_overflow' ? t.health.slotOverflowWhy(f.count ?? 0, f.label ?? '', f.predicate ?? '') : f.why}</p>
+          {f.source_changed && <p className="mt-1 text-xs text-brand-amber">{tr('来源已变化，旧处理状态已失效。', 'Source changed; previous handling status no longer applies.')}</p>}
+          {!!f.samples?.length && <ul className="mt-2 space-y-1 text-xs text-ghost">{f.samples.map(s => <li className="break-words" key={s.fact_id}>{s.text}</li>)}</ul>}
+          {editing === f.id && <div className="mt-3 flex flex-wrap gap-2">
+            <input className="input min-w-0 flex-1" aria-label={t.health.fix} value={draft} onChange={e => setDraft(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter') saveEdit(f); if (e.key === 'Escape') setEditing(null) }} />
+            <Button loading={update.isPending} onClick={() => saveEdit(f)}>{t.common.save}</Button>
+            <Button variant="ghost" onClick={() => setEditing(null)}>{t.common.cancel}</Button>
+          </div>}
+          {f.present && <div className="mt-3 flex flex-wrap gap-2">
+            {f.fact_id && editing !== f.id && <>
+              <Button variant="ghost" onClick={() => { setEditing(f.id); setDraft(f.object ?? '') }}><Pencil className="h-3.5 w-3.5" />{t.health.fix}</Button>
+              <Button variant="ghost" onClick={() => setConfirmDelete(f)}><Trash2 className="h-3.5 w-3.5" />{t.common.delete}</Button>
+            </>}
+            {f.kind === 'slot_overflow' && <Button variant="ghost" className="text-brand-rose" onClick={() => setConfirmSlot(f)}><Eraser className="h-3.5 w-3.5" />{t.health.clearSlot(f.count ?? 0)}</Button>}
+            {f.status === 'open' ? <>
+              <Button variant="ghost" onClick={() => setHandling({ item: f, status: 'ignored' })}>{tr('忽略误报', 'Ignore false positive')}</Button>
+              <Button variant="ghost" onClick={() => setHandling({ item: f, status: 'resolved' })}>{tr('标记已处理', 'Mark resolved')}</Button>
+            </> : <Button variant="ghost" onClick={() => setHandling({ item: f, status: 'open' })}>{tr('重新打开', 'Reopen')}</Button>}
+          </div>}
+          <ReviewHistory events={f.history} />
+        </div>)}
+      </div>
+      <ReviewPager page={data.page} onOffset={setOffset} />
+    </Card>}
+    {handling && <HandlingDialog item={handling.item} status={handling.status} includeSensitive={includeSensitive} onClose={() => setHandling(null)} />}
+    <ConfirmDialog open={!!confirmDelete} title={t.common.delete} danger confirmLabel={t.common.delete} loading={del.isPending}
+      body={<div className="space-y-2"><p>{t.health.confirmDelete}</p><p className="break-words text-xs text-brand-rose">{confirmDelete?.text}</p></div>}
+      onClose={() => setConfirmDelete(null)} onConfirm={() => {
+        if (confirmDelete?.fact_id) del.mutate(confirmDelete.fact_id, {
+          onSuccess: () => { toast.success(t.health.removed); setConfirmDelete(null); invalidateReview() }, onError: e => toast.error((e as Error).message),
+        })
+      }} />
+    <ConfirmDialog open={!!confirmSlot} title={t.health.clearSlotTitle} danger confirmLabel={t.common.delete} loading={clearSlot.isPending}
+      body={<div className="space-y-3"><p>{confirmSlot && t.health.clearSlotBody(confirmSlot.count ?? 0, confirmSlot.predicate ?? '')}</p>
+        <ul className="space-y-1 text-xs text-brand-rose">{confirmSlot?.samples?.map(s => <li className="break-words" key={s.fact_id}>{s.text}</li>)}</ul><p className="text-xs text-ghost">{t.health.clearSlotIrreversible}</p></div>}
+      onClose={() => setConfirmSlot(null)} onConfirm={() => {
+        if (!confirmSlot?.subject || !confirmSlot.predicate || !confirmSlot.count) return
+        clearSlot.mutate({ subject: confirmSlot.subject, predicate: confirmSlot.predicate, count: confirmSlot.count }, {
+          onSuccess: res => { if (res.ok) toast.success(t.health.clearSlotDone(res.deleted)); else toast.error(t.health.clearSlotStale); setConfirmSlot(null); invalidateReview() },
+          onError: e => toast.error((e as Error).message),
+        })
+      }} />
+  </div>
+}
 
-      {!data.findings.length ? (
-        <EmptyState title={t.health.allClear} hint={t.health.allClearHint} />
-      ) : (
-        <Card>
-          <CardTitle hint={t.health.listHint}>
-            <span className="inline-flex items-center gap-2">
-              <AlertTriangle className="h-4 w-4 text-brand-amber" /> {t.health.worthLook}
-            </span>
-          </CardTitle>
-          <div className="divide-y divide-line">
-            {data.findings.map((f: AuditFinding, i: number) => {
-              const id = f.fact_id ?? `${f.kind}-${f.entity}-${i}`
-              const isDone = f.fact_id ? done.has(f.fact_id) : false
-              return (
-                <div key={id} className={isDone ? 'py-3 opacity-40' : 'py-3'}>
-                  <div className="flex flex-wrap items-start justify-between gap-3">
-                    <div className="min-w-0 flex-1">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <Badge tone={KIND_TONE[f.kind]}>
-                          {t.health.kind[f.kind as keyof typeof t.health.kind] ?? f.kind}
-                        </Badge>
-                        {f.valid_at_h && <span className="text-xs text-ghost">{f.valid_at_h}</span>}
-                        {isDone && (
-                          <span className="inline-flex items-center gap-1 text-xs text-brand-mint">
-                            <Check className="h-3.5 w-3.5" /> {t.health.handled}
-                          </span>
-                        )}
-                      </div>
-                      {(f.text ?? f.entity) && (
-                        <p className="mt-1 break-words text-sm text-slate-100">{f.text ?? f.entity}</p>
-                      )}
-                      {/* why it was flagged, then what to do — a finding you can't act on is noise */}
-                      {/* The backend writes why/action in one language for every rule. Fine for a
-                          hint, but slot_overflow carries a one-click irreversible delete, so its
-                          sentence is composed here from the structured fields instead. */}
-                      <p className="mt-1 text-xs leading-relaxed text-ghost">
-                        {f.kind === 'slot_overflow' && f.count
-                          ? t.health.slotOverflowWhy(f.count, f.label || '', f.predicate || '')
-                          : f.why}{' '}
-                        → <span className="text-slate-300">
-                          {f.kind === 'slot_overflow' ? t.health.slotOverflowAction : f.action}
-                        </span>
-                      </p>
-                      {/* group findings (slot_overflow) carry no fact_id — samples are what makes
-                          "N facts in one slot" concrete enough to act on */}
-                      {!!f.samples?.length && (
-                        <ul className="mt-1.5 space-y-0.5">
-                          {f.samples.slice(0, 5).map((s) => (
-                            <li key={s.fact_id} className="break-words text-[11px] leading-relaxed text-ghost/80">
-                              {s.text}
-                            </li>
-                          ))}
-                        </ul>
-                      )}
-                      {editing === f.fact_id && (
-                        <div className="mt-2 flex flex-wrap items-center gap-2">
-                          <input
-                            className="input max-w-md flex-1"
-                            value={draft}
-                            autoFocus
-                            onChange={(e) => setDraft(e.target.value)}
-                            onKeyDown={(e) => {
-                              if (e.key === 'Enter') saveEdit(f)
-                              if (e.key === 'Escape') setEditing(null)
-                            }}
-                          />
-                          <Button onClick={() => saveEdit(f)} loading={update.isPending}>
-                            {t.common.save}
-                          </Button>
-                          <Button variant="ghost" onClick={() => setEditing(null)}>
-                            {t.common.cancel}
-                          </Button>
-                        </div>
-                      )}
-                    </div>
-                    {/* A group finding has no fact_id, so the per-row buttons above skip it — and its
-                        own action text ("clear this slot") had nothing behind it. 84 rows behind 84
-                        confirm dialogs is not a path a person walks. */}
-                    {!f.fact_id && f.kind === 'slot_overflow' && !!f.count && (
-                      <Button
-                        variant="ghost"
-                        className="shrink-0 text-brand-rose"
-                        onClick={() => setConfirmSlot(f)}
-                      >
-                        <Eraser className="mr-1.5 h-4 w-4" />
-                        {t.health.clearSlot(f.count)}
-                      </Button>
-                    )}
-                    {f.fact_id && !isDone && editing !== f.fact_id && (
-                      <div className="flex shrink-0 items-center gap-1">
-                        <Button
-                          variant="ghost"
-                          aria-label={t.health.fix}
-                          onClick={() => {
-                            setEditing(f.fact_id!)
-                            setDraft(f.object ?? '')
-                          }}
-                        >
-                          <Pencil className="h-4 w-4" />
-                        </Button>
-                        <Button variant="ghost" aria-label={t.common.delete} onClick={() => remove(f)}>
-                          <Trash2 className="h-4 w-4" />
-                        </Button>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              )
-            })}
-          </div>
-          {data.truncated && <p className="mt-4 text-xs text-ghost">{t.health.truncated}</p>}
-        </Card>
-      )}
-
-      <ConfirmDialog
-        open={!!confirmSlot}
-        title={t.health.clearSlotTitle}
-        danger
-        confirmLabel={t.common.delete}
-        loading={clearSlot.isPending}
-        body={
-          <div className="space-y-3">
-            <p>{confirmSlot && t.health.clearSlotBody(confirmSlot.count ?? 0, confirmSlot.predicate ?? '')}</p>
-            {!!confirmSlot?.samples?.length && (
-              <ul className="space-y-1 rounded-lg border border-brand-rose/25 bg-brand-rose/10 px-3 py-2">
-                {confirmSlot.samples.slice(0, 5).map((sample) => (
-                  <li key={sample.fact_id} className="break-words text-xs text-brand-rose">
-                    {sample.text}
-                  </li>
-                ))}
-              </ul>
-            )}
-            <p className="text-xs text-ghost">{t.health.clearSlotIrreversible}</p>
-          </div>
-        }
-        onClose={() => setConfirmSlot(null)}
-        onConfirm={() => {
-          if (!confirmSlot?.subject || !confirmSlot.predicate || !confirmSlot.count) return
-          clearSlot.mutate(
-            { subject: confirmSlot.subject, predicate: confirmSlot.predicate, count: confirmSlot.count },
-            {
-              onSuccess: (res) => {
-                // The server refuses instead of erasing more than the owner approved; say which it was.
-                if (res.ok) toast.success(t.health.clearSlotDone(res.deleted))
-                else toast.error(t.health.clearSlotStale)
-                setConfirmSlot(null)
-              },
-              onError: (e) => toast.error((e as Error).message),
-            },
-          )
-        }}
-      />
-    </div>
-  )
+function HandlingDialog({ item, status, includeSensitive, onClose }: { item: Finding; status: string; includeSensitive: boolean; onClose: () => void }) {
+  const tr = useReviewText()
+  const t = useT()
+  const [note, setNote] = useState('')
+  const update = useReviewUpdate('health')
+  return <Modal open title={status === 'ignored' ? tr('忽略误报', 'Ignore false positive') : statusLabel(status, tr)} onClose={onClose}
+    footer={<><Button variant="ghost" onClick={onClose}>{t.common.cancel}</Button><Button loading={update.isPending} onClick={() => update.mutate({
+      id: item.id, status, expected_version: item.version, include_sensitive: includeSensitive, note,
+    }, { onSuccess: () => { toast.success(tr('处理状态已保存', 'Handling status saved')); onClose() }, onError: e => toast.error((e as Error).message) })}>{t.common.confirm}</Button></>}>
+    <p className="mb-3 break-words text-sm">{item.text ?? item.entity ?? item.kind}</p>
+    <p className="mb-3 text-xs text-ghost">{tr('此操作只更新体检处理状态；来源变化后会重新待处理。', 'This updates the review status. A source change reopens the finding.')}</p>
+    <textarea className="input w-full" maxLength={2000} value={note} onChange={e => setNote(e.target.value)} aria-label={tr('处理备注', 'Handling note')} placeholder={tr('处理备注（可选）', 'Optional handling note')} />
+  </Modal>
 }

@@ -1,0 +1,102 @@
+{
+  "schema_version": 1,
+  "created_at": "2026-10-29T18:09:25.349034Z",
+  "updated_at": "2026-10-29T18:20:42.708299Z",
+  "status": "PASS",
+  "objective": "Super memory 本地真实可靠性改进",
+  "stage": "已有证据驱动的异常恢复修复与离线前后验证",
+  "evidence_standard": "至少两条当前缺陷可复现；同用例基线失败修复通过；完整离线回归和zero-setup；恢复点及架构文档齐全",
+  "source": {
+    "thread_id": "01a188d7-564b-7571-88a9-932a66dfbf20",
+    "rollout": "/Users/ywwl/.codex/sessions/2026/10/30/rollout-2026-10-30T02-06-16-01a188d7-564b-7571-88a9-932a66dfbf20.jsonl",
+    "state_db": null,
+    "measurement": "rollout"
+  },
+  "limits": {
+    "token_budget": 5000000,
+    "checkpoint_interval": 1000000,
+    "candidate_limit": 2,
+    "probe_token_limit": 500000,
+    "probe_minutes": 5.0
+  },
+  "baseline_total_tokens": 557395,
+  "last_checkpoint_total_tokens": 5051052,
+  "last_checkpoint_candidate_count": 1,
+  "first_artifact_at": "2026-10-29T18:09:25.482085Z",
+  "artifacts": [
+    {
+      "value": "/Users/ywwl/Documents/Claude/Projects/Super memory/HANDOFF.md",
+      "recorded_at": "2026-10-29T18:09:25.481842Z"
+    },
+    {
+      "value": "/Users/ywwl/Documents/Claude/Projects/Super memory/docs/validation/reliability-20261030/consolidation-before.log",
+      "recorded_at": "2026-10-29T18:13:46.159056Z"
+    },
+    {
+      "value": "/Users/ywwl/Documents/Claude/Projects/Super memory/docs/validation/reliability-20261030/consolidation-after.log",
+      "recorded_at": "2026-10-29T18:13:46.159711Z"
+    },
+    {
+      "value": "/Users/ywwl/Documents/Claude/Projects/Super memory/docs/reliability-validation-20261030.zh-CN.md",
+      "recorded_at": "2026-10-29T18:20:42.680121Z"
+    },
+    {
+      "value": "/Users/ywwl/Documents/Claude/Projects/Super memory/docs/validation/reliability-20261030/summary.json",
+      "recorded_at": "2026-10-29T18:20:42.680566Z"
+    },
+    {
+      "value": "/Users/ywwl/Documents/Claude/Projects/Super memory/docs/reliability-cases-20261030.zh-CN.md",
+      "recorded_at": "2026-10-29T18:20:42.680639Z"
+    }
+  ],
+  "candidates": [
+    {
+      "value": "reliability-fix-v1",
+      "recorded_at": "2026-10-29T18:13:46.159732Z"
+    }
+  ],
+  "evidence_refs": [
+    {
+      "value": "Initial usage82%; frozen pre-edit source hashes and diff; four acceptance criteria",
+      "recorded_at": "2026-10-29T18:09:25.482098Z"
+    },
+    {
+      "value": "Batch failure reproduced in4 tests;49 targeted checks passed after exception propagation; two independently reproduced storage/capture paths under repair",
+      "recorded_at": "2026-10-29T18:13:46.159738Z"
+    },
+    {
+      "value": "Fixed25: before19fail6pass after25pass; full878pass1skip; zero-setup pass; one independent review no blockers;185 baseline files0 unexpected changes; persistent recovery packaged",
+      "recorded_at": "2026-10-29T18:20:42.680650Z"
+    }
+  ],
+  "checkpoints": [
+    {
+      "recorded_at": "2026-10-29T18:13:46.184221Z",
+      "decision": "BLOCK",
+      "reason": "Within fixed scope: complete snapshot recovery and capture cursor fixes, then one combined offline regression and independent review",
+      "resume_when": null,
+      "total_tokens": 2384615,
+      "token_delta": 1827220,
+      "candidate_count": 1,
+      "artifact_count": 3,
+      "evidence_ref_count": 2,
+      "trigger_reasons": [
+        "TOKEN_CHECKPOINT_REACHED"
+      ]
+    },
+    {
+      "recorded_at": "2026-10-29T18:20:42.708285Z",
+      "decision": "PASS",
+      "reason": "All four acceptance criteria met. Stop implementation and preserve remaining plan allowance.",
+      "resume_when": null,
+      "total_tokens": 5051052,
+      "token_delta": 4493657,
+      "candidate_count": 1,
+      "artifact_count": 6,
+      "evidence_ref_count": 3,
+      "trigger_reasons": [
+        "TOKEN_CHECKPOINT_REACHED"
+      ]
+    }
+  ]
+}

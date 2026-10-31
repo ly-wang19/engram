@@ -1,0 +1,43 @@
+--- a/engram/service.py
++++ b/engram/service.py
+@@ -426,13 +426,12 @@
+ 
+     @timed("import")
+     def import_(self, user: str, sessions: Optional[list] = None, format: str = "auto",
+-                data: Any = None, consolidate: Optional[bool] = None, summarize: bool = True,
++                data: Any = None, consolidate: bool = True, summarize: bool = True,
+                 session_id: str = "imported", dedupe: bool = True) -> dict:
+         """Bulk import: either pre-parsed `sessions` (list of ImportSession/dicts) OR raw `data` to parse
+         with `format` (chatgpt/messages/records/jsonl/transcript/auto). One batched ingest + consolidation.
+         Idempotent by default: re-posting the same export skips already-ingested episodes (`skipped`).
+-        `consolidate=None` resolves inside Memory.import_messages: per-turn extraction for every source
+-        except agent-session transcripts, which are stored for close-time distillation instead."""
++        This deployment keeps the existing core's default per-turn import extraction."""
+         with self.write_lock(user):
+             mem = self.get(user)
+             if sessions is None:
+--- a/engram/server/app.py
++++ b/engram/server/app.py
+@@ -260,9 +260,8 @@
+     summarize: bool = True
+     clear_working: bool = True
+     # Distil the session into decision/finding/lesson facts. None = follow the server's
+-    # session_outcomes config (now ON by default); True/False lets a client opt out of, or back into,
+-    # the distillation for one close without changing the server default. It is NOT an escape hatch
+-    # from the operator's cost ceiling: ENGRAM_SESSION_OUTCOMES=0 forces this off whatever is sent.
++    # session_outcomes config; True/False lets a client opt in per session without changing the server
++    # default (the benchmark read path depends on that default staying off).
+     outcomes: Optional[bool] = None
+ 
+ 
+@@ -585,9 +584,7 @@
+     sessions: Optional[list] = None
+     data: Optional[object] = None
+     format: str = "auto"
+-    # None = extract facts per turn for every source EXCEPT agent-session transcripts (those are stored
+-    # for close-time distillation; per-turn extraction on them needs an explicit true AND an LLM).
+-    consolidate: Optional[bool] = None
++    consolidate: bool = True
+     summarize: bool = True
+     dedupe: bool = True  # idempotent re-import: skip episodes already ingested (content fingerprint)
+ 

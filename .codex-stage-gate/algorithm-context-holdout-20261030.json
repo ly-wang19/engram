@@ -1,0 +1,69 @@
+{
+  "schema_version": 1,
+  "created_at": "2026-10-29T17:09:41.684472Z",
+  "updated_at": "2026-10-29T17:54:06.414939Z",
+  "status": "WAIT_EXTERNAL",
+  "objective": "Engram 算法达到可复现的世界领先水平",
+  "stage": "固定前置回补候选在剩余410题的离线验证",
+  "evidence_standard": "冻结原候选源码和开发60题名单；其余410题完整尝试不补样本，缓存缺失记invalid；同冻结输入同预算两臂，主预算来源与字面配对无退步且有恢复才保留待QA；不得调参或宣称QA准确率",
+  "source": {
+    "thread_id": "01a18848-d996-7dd2-b4a7-95394f99ac5f",
+    "rollout": "/Users/ywwl/.codex/sessions/2026/10/29/rollout-2026-10-29T23-30-41-01a18848-d996-7dd2-b4a7-95394f99ac5f.jsonl",
+    "state_db": null,
+    "measurement": "rollout"
+  },
+  "limits": {
+    "token_budget": 25000000,
+    "checkpoint_interval": 25000000,
+    "candidate_limit": 1,
+    "probe_token_limit": 5000000,
+    "probe_minutes": 5.0
+  },
+  "baseline_total_tokens": 22166692,
+  "last_checkpoint_total_tokens": 30163722,
+  "last_checkpoint_candidate_count": 0,
+  "first_artifact_at": "2026-10-29T17:11:04.398061Z",
+  "artifacts": [
+    {
+      "value": "/Users/ywwl/Documents/Claude/Projects/Super memory/results/context-holdout-20261030.preregistered.json",
+      "recorded_at": "2026-10-29T17:11:04.397943Z"
+    },
+    {
+      "value": "/Users/ywwl/Documents/Claude/Projects/Super memory/results/context-holdout-20261030.jsonl",
+      "recorded_at": "2026-10-29T17:54:06.403607Z"
+    },
+    {
+      "value": "/Users/ywwl/Documents/Claude/Projects/Super memory/results/context-holdout-20261030.analysis.json",
+      "recorded_at": "2026-10-29T17:54:06.403751Z"
+    },
+    {
+      "value": "/Users/ywwl/Documents/Claude/Projects/Super memory/docs/algorithm-context-holdout-20261030.zh-CN.md",
+      "recorded_at": "2026-10-29T17:54:06.403778Z"
+    }
+  ],
+  "candidates": [],
+  "evidence_refs": [
+    {
+      "value": "Existing candidate hash and 60 development IDs verified; 410 remaining answerable IDs fixed with zero overlap before results.",
+      "recorded_at": "2026-10-29T17:11:04.398065Z"
+    },
+    {
+      "value": "410 attempted407 valid3 missing; primary all-source363 to387 of407; secondary source regressions13/7 questions; parsed frozen replay identical; user explicitly deferred online evaluation.",
+      "recorded_at": "2026-10-29T17:54:06.403781Z"
+    }
+  ],
+  "checkpoints": [
+    {
+      "recorded_at": "2026-10-29T17:54:06.414933Z",
+      "decision": "WAIT_EXTERNAL",
+      "reason": "Bounded offline validation is complete. Primary subset improved but3 cache misses and low-budget regressions remain; world-leading QA evidence requires unavailable/deferred online evaluation. Root token accounting is not a whole-agent-tree budget audit.",
+      "resume_when": "User explicitly resumes online evaluation and project answerer/extractor/judge credentials are valid; retain source and dataset fingerprints for matched QA/full-context comparison.",
+      "total_tokens": 30163722,
+      "token_delta": 7997030,
+      "candidate_count": 0,
+      "artifact_count": 4,
+      "evidence_ref_count": 2,
+      "trigger_reasons": []
+    }
+  ]
+}

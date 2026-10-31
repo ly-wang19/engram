@@ -19,7 +19,8 @@ export const qk = {
   sessionsRoot: () => ['sessions', ns()] as const,
   sessions: (params: SessionsQuery = {}) => ['sessions', ns(), params] as const,
   agentStatus: (sessionId?: string) => ['agent-status', ns(), sessionId ?? 'default'] as const,
-  sessionReport: (sessionId: string) => ['session-report', ns(), sessionId] as const,
+  sessionReport: (sessionId: string, includeSensitive = false) => ['session-report', ns(), sessionId, includeSensitive] as const,
+  factSources: (factId: string, includeSensitive: boolean, offset: number) => ['fact-sources', ns(), factId, includeSensitive, offset] as const,
   graphRoot: () => ['graph', ns()] as const,
   graph: (params: GraphQuery = {}) => ['graph', ns(), params] as const,
   focus: () => ['focus', ns()] as const,
@@ -63,7 +64,7 @@ export function useAgentStatus(sessionId?: string) {
 export function useSessionReport(sessionId: string | null | undefined, includeSensitive = false) {
   const enabled = !!useAuth((s) => s.apiKey) && !!sessionId
   return useQuery({
-    queryKey: qk.sessionReport(sessionId ?? ''),
+    queryKey: qk.sessionReport(sessionId ?? '', includeSensitive),
     queryFn: () => api.sessionReport(sessionId!, includeSensitive),
     enabled,
     retry: false,
@@ -86,6 +87,10 @@ function useInvalidateMemory() {
   return () => {
     qc.invalidateQueries({ queryKey: qk.memoriesRoot() })
     qc.invalidateQueries({ queryKey: qk.sessionsRoot() })
+    qc.invalidateQueries({ queryKey: ['agent-status', ns()] })
+    qc.invalidateQueries({ queryKey: ['session-report', ns()] })
+    qc.invalidateQueries({ queryKey: ['fact-sources', ns()] })
+    qc.invalidateQueries({ queryKey: ['working', ns()] })
     qc.invalidateQueries({ queryKey: qk.graphRoot() })
     qc.invalidateQueries({ queryKey: qk.focus() })
     qc.invalidateQueries({ queryKey: qk.profile() })
@@ -93,15 +98,20 @@ function useInvalidateMemory() {
     // showing the rows it just erased — and re-clicking its (irreversible) clear button reports
     // "the slot changed since it was checked", blaming the store for the owner's own edit.
     qc.invalidateQueries({ queryKey: qk.auditRoot() })
+    for (const prefix of ['review', 'evidence-source', 'connections', 'connection-events']) {
+      qc.invalidateQueries({ queryKey: [prefix, ns()] })
+    }
   }
 }
 
-/** Raw episodes, fetched only when something needs to resolve a fact's provenance ids to source text. */
-export function useSourceEpisodes(enabled: boolean) {
+/** Resolve the selected fact's exact provenance, including older source episodes. */
+export function useSourceEpisodes(factId: string | null, includeSensitive = false, offset = 0) {
+  const enabled = !!useAuth((s) => s.apiKey) && !!factId
   return useQuery({
-    queryKey: ['source-episodes'],
-    queryFn: () => api.memories({ facts_limit: 0, episodes_limit: 200, include_sensitive: true }),
+    queryKey: qk.factSources(factId ?? '', includeSensitive, offset),
+    queryFn: () => api.factSources(factId!, includeSensitive, offset),
     enabled,
+    retry: false,
   })
 }
 
@@ -146,7 +156,11 @@ export function useAddWorking() {
   return useMutation({
     mutationFn: ({ content, kind, ttl }: { content: string; kind?: string; ttl?: number }) =>
       api.addWorking(content, kind, ttl),
-    onSuccess: () => qc.invalidateQueries({ queryKey: qk.working() }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['working', ns()] })
+      qc.invalidateQueries({ queryKey: qk.sessionsRoot() })
+      qc.invalidateQueries({ queryKey: ['agent-status', ns()] })
+    },
   })
 }
 
@@ -154,7 +168,12 @@ export function useClearWorking() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: (session_id?: string) => api.clearWorking(session_id),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['working', ns()] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['working', ns()] })
+      qc.invalidateQueries({ queryKey: qk.sessionsRoot() })
+      qc.invalidateQueries({ queryKey: ['agent-status', ns()] })
+      qc.invalidateQueries({ queryKey: ['session-report', ns()] })
+    },
   })
 }
 

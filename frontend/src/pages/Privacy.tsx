@@ -8,6 +8,7 @@ import { api } from '../lib/api'
 import { useAuth } from '../store/auth'
 import { useForget } from '../hooks/queries'
 import { useT } from '../i18n'
+import { SelectiveForget } from '../features/forgetting/SelectiveForget'
 
 export default function Privacy() {
   const user = useAuth((s) => s.apiKey) ?? 'me'
@@ -34,6 +35,8 @@ export default function Privacy() {
   return (
     <div className="space-y-6">
       <PageHeader title={t.privacy.title} subtitle={t.privacy.subtitle} />
+
+      <SelectiveForget />
 
       <div className="grid gap-6 lg:grid-cols-2">
         <Card>

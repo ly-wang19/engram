@@ -48,7 +48,6 @@ from eval.longmemeval import (  # noqa: E402
     build_session_map,
     extract_answer,
     ingest,
-    is_abstention,
     judge_correct,
     load_data,
     looks_like_abstention,
@@ -824,11 +823,15 @@ def eval_item(item, systems, rig):
             # not the chain-of-thought, so reasoning text doesn't false-positive abstention markers.
             pred = extract_answer(pred_raw) if rig.reasoning else pred_raw
             # Verification / re-retrieval loop: the #1 failure mode is the model answering "I don't know"
-            # because the evidence fell outside the first lean slice. If it abstains (and the question is
-            # actually answerable), widen the slice (more full sessions + timeline + multi-hop) and retry
+            # because the evidence fell outside the first lean slice. If it abstains, widen the slice
+            # (more full sessions + timeline + multi-hop) and retry
             # ONCE; keep the retried answer only if it's no longer an abstention.
-            if (rig.verify_retry and looks_like_abstention(pred) and not is_abstention(item)
+            # Answerability is gold metadata: using it here would grant an oracle that production lacks
+            # and conceal false answers introduced by retrying genuinely unanswerable questions.
+            retry_attempted = False
+            if (rig.verify_retry and looks_like_abstention(pred)
                     and sysobj.name == "engram_lean"):
+                retry_attempted = True
                 ctx2 = sysobj.context(item, expand=1)
                 raw2 = rig.answerer_llm.complete(
                     ANSWER_TEMPLATE.format(qdate=qdate, context=ctx2, question=q), system=sys_prompt)
@@ -839,6 +842,9 @@ def eval_item(item, systems, rig):
             ok = judge_correct(item, pred, rig.judge_llm)
             # save the (truncated) prediction + gold so a finished run can be error-analyzed without re-running
             out["sys"][sysobj.name] = {"ok": ok, "tok": len(ctx.split()), "lat": lat, "err": None,
+                                       "tok_unit": "whitespace_words", "total_tokens": None,
+                                       "lat_scope": "context_and_answer_excluding_judge",
+                                       "retry_attempted": retry_attempted,
                                        "pred": pred[:300], "gold": str(item.get("answer", ""))[:200]}
         except Exception as e:  # noqa: BLE001
             out["sys"][sysobj.name] = {"ok": None, "tok": 0, "lat": 0, "err": f"{type(e).__name__}: {str(e)[:80]}"}

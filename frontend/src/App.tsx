@@ -17,6 +17,7 @@ import FocusPage from './pages/Focus'
 import Conversations from './pages/Conversations'
 import Settings from './pages/Settings'
 import Privacy from './pages/Privacy'
+import JobsPage from './features/jobs/JobsPage'
 
 export default function App() {
   const apiKey = useAuth((s) => s.apiKey)
@@ -50,6 +51,7 @@ export default function App() {
         <Route path="graph" element={<GraphPage />} />
         <Route path="focus" element={<FocusPage />} />
         <Route path="conversations" element={<Conversations />} />
+        <Route path="jobs" element={<JobsPage />} />
         <Route path="settings" element={<Settings />} />
         <Route path="privacy" element={<Privacy />} />
       </Route>

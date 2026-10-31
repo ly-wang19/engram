@@ -27,6 +27,25 @@ def client():
     shutil.rmtree(d, ignore_errors=True)
 
 
+
+@pytest.fixture(autouse=True)
+def restore_server_singleton_between_tests():
+    # Authentication probes create their own app lifespan and remove its temporary data directory.
+    # Restore the module client's service afterwards, including the durable management database.
+    from engram.server import app as appmod
+    previous = appmod._svc
+    environment = {k: v for k, v in os.environ.items() if k.startswith("ENGRAM_")}
+    yield
+    if appmod._svc is not previous:
+        if appmod._svc is not None:
+            appmod._svc.close()
+        appmod._svc = previous
+    for key in list(os.environ):
+        if key.startswith("ENGRAM_") and key not in environment:
+            os.environ.pop(key, None)
+    os.environ.update(environment)
+
+
 def hdr(ns: str) -> dict:
     return {"Authorization": f"Bearer {ns}"}  # open mode -> the bearer text IS the namespace
 
@@ -71,6 +90,27 @@ def test_remember_recall_roundtrip(client):
     assert dump["counts"]["episodes"] >= 1
     rec = client.post("/v1/recall", json={"query": "Where does the user live?"}, headers=h).json()
     assert "Shenzhen" in rec["context"] and rec["tokens_est"] > 0
+
+
+def test_retrieval_only_does_not_call_the_answerer(client, monkeypatch):
+    from engram.server import app as appmod
+
+    class Answerer:
+        calls = 0
+
+        def complete(self, *args, **kwargs):
+            self.calls += 1
+            return "The user lives in Example City."
+
+    h = hdr("retrieval_only")
+    client.post("/v1/remember", json={"content": "I live in Example City."}, headers=h)
+    answerer = Answerer()
+    monkeypatch.setattr(appmod.svc(), "answerer", answerer)
+    pure = client.post("/v1/recall", json={"query": "Where do I live?", "answer": False}, headers=h)
+    assert pure.status_code == 200 and "Example City" in pure.json()["context"]
+    assert "answer" not in pure.json() and answerer.calls == 0
+    default = client.post("/v1/recall", json={"query": "Where do I live?"}, headers=h)
+    assert default.json()["answer"] and answerer.calls == 1
 
 
 def test_tenant_data_rights_operations_remain_isolated(client):

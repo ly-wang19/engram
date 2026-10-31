@@ -1,0 +1,39 @@
+{
+  "release": "product-20261030-d64e86214b92",
+  "source_head": "267a850b5be6773d894219da98ad17ade5d8fae0",
+  "built_at_utc": "2026-10-29T16:56:22.088464+00:00",
+  "files": {
+    "engram/config.py": "0cba6297489351bd62faa25ed4596cc092f8320bac4ff43ee63e4d42c92e3cdf",
+    "engram/consolidate/graph_builder.py": "28f7309a3aa537f3426f73e66e2986fc05849057ff808d52219ef50b45155433",
+    "engram/consolidate/outcomes.py": "73afd9ae6ac83a654573844ec73525682273add35a234d5dcd27f505dc3c8b20",
+    "engram/llm/litellm_llm.py": "41b233a834c208716c6d0d3273d906c352811be3ca709000d1027388c11080f7",
+    "engram/management/__init__.py": "3672c2e36f1f377f69f64140efe108e8d50029e2526a334762591bc3c169ce80",
+    "engram/management/connections.py": "b1b35506caf72b9e36c31e2f35473b5ed59a495e88827a01e0d988f70237ce6a",
+    "engram/management/evidence.py": "9e1be2908e4a09a1611dd4b5a4c10bec087c3b1e40f4f6fe1681bbc71e4af658",
+    "engram/management/forgetting.py": "dca9887b040f616f208220fb9b90bb0248d8c558dc55feb4e0eee0f41c222042",
+    "engram/management/jobs.py": "8066e287b7f591f2a2061c1d6b2615413d7fbeed0f888d583a643b839a81d50e",
+    "engram/management/models.py": "ea7ff870d958c69255174e3f73c89ddea0c0c1a07e210ce52d83fbccd8370132",
+    "engram/management/review.py": "f1aa82db0d62313cae35ab092286e9e6c2e735b2d8c32d8e6d8e9241f28b49a7",
+    "engram/management/store.py": "12dac35e695792d4618b087e216a0ad92460a8bb82140b5331e2238d5bb58125",
+    "engram/memory.py": "8b9a2cb71476ff606be2b4c439d50cea9b9bb956f2ade06d1c969d502daef813",
+    "engram/server/admin_routes.py": "9a634446d83f7fe9f07cad22493b58648ba7e0acfbf102c6f3ae0fd070c232f2",
+    "engram/server/app.py": "4386e9726b9c765d9c2e9a7eeed310b3e3ccfef72903a5897df5a9e6b905c6dd",
+    "engram/server/connection_routes.py": "7d35ca5d5162fcb42468d361d200ad3f7b0dcc5933919cb63ec528cb6a4905c2",
+    "engram/server/evidence_routes.py": "11b9c516a8d02152aeede7ecefee5548dfdd1bf8bbeef8e7c692c5e2c7c6290e",
+    "engram/server/forget_routes.py": "4b3f8cc39d72ab4ea93cdd678a3b7dd58909735907ba63e8b706e9b19408e45f",
+    "engram/server/job_routes.py": "2f074315c8e70fec3bb563c01b215ea4f5431384f6858ea903a7b9114a78907a",
+    "engram/server/review_routes.py": "242a5b9113a19b88b73330728e9f89c6d7ad33645c4ecc46ff52fd34290066b6",
+    "engram/service.py": "ac7ccc90005b589e7b6e2080e1ef171e5aeefd4b32a9fba432603c8a3615c361",
+    "frontend/dist/assets/index-cP_rWgph.js": "a5a0841429df8e89db3f06bb307f9728daf248f6fee59f61f2cc75863464d823",
+    "frontend/dist/assets/index-jYmhfgsW.css": "e115e3d9cf691aaf4d12fe66ba8c02d261049df695b9b5db647417bf7f4f5dad",
+    "frontend/dist/index.html": "300cbb145560eddb8106a9c6b7a0b9117869c4d8f07d08fc5f99e2c428b5c7f2",
+    "frontend/dist/release.json": "91b3df7e944e14f2fb2648abeedc766a8f250f339f64c69ca645e212876b83e3"
+  },
+  "stable_head_files": [
+    "engram/memory.py",
+    "engram/config.py",
+    "engram/consolidate/graph_builder.py"
+  ],
+  "scope": "six_product_capabilities_and_required_dependencies",
+  "private_service": "untouched"
+}

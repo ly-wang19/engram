@@ -30,20 +30,23 @@ def main() -> None:
     ap.add_argument("--namespace", "-n", help="local memory namespace (default $ENGRAM_NAMESPACE or 'me')")
     ap.add_argument("--api-url", help="proxy a running Engram server (default $ENGRAM_API_URL); else local")
     ap.add_argument("--api-key", help="Bearer key for --api-url (default $ENGRAM_API_KEY)")
+    ap.add_argument("--api-key-file", help="read Bearer key from a file; overrides $ENGRAM_API_KEY")
     args = ap.parse_args()
 
     if args.namespace:
         os.environ["ENGRAM_NAMESPACE"] = args.namespace
     if args.api_url:
         os.environ["ENGRAM_API_URL"] = args.api_url
-    if args.api_key:
-        os.environ["ENGRAM_API_KEY"] = args.api_key
-
-    from .server import backend, mcp
+    from .backends import make_backend
+    from .server import mcp, set_backend
 
     # Build the backend up front so a misconfiguration (unreachable server, missing embedder extra)
     # surfaces here — NOT mid-tool-call. All status goes to stderr: stdout is the stdio JSON-RPC channel.
-    b = backend()
+    try:
+        b = make_backend(api_key=args.api_key, api_key_file=args.api_key_file)
+    except ValueError as exc:
+        ap.error(str(exc))
+    set_backend(b)
     print(f"engram_mcp ready · {b.describe()}", file=sys.stderr)
     if args.http:
         mcp.settings.host = args.host

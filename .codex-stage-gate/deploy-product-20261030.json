@@ -1,0 +1,72 @@
+{
+  "schema_version": 1,
+  "created_at": "2026-10-29T16:52:28.598176Z",
+  "updated_at": "2026-10-29T17:10:28.013925Z",
+  "status": "WAIT_EXTERNAL",
+  "objective": "部署六项产品能力到既有公网Engram服务",
+  "stage": "冻结兼容包、备份发布与线上回读",
+  "evidence_standard": "全部六项功能代码部署，依赖兼容通过，数据备份可恢复，health/ready及六项接口页面验证通过，私人实例保持",
+  "source": {
+    "thread_id": "01a1883d-27ee-75b3-89c5-9b8f75897ce8",
+    "rollout": "/Users/ywwl/.codex/sessions/2026/10/29/rollout-2026-10-29T23-17-51-01a1883d-27ee-75b3-89c5-9b8f75897ce8.jsonl",
+    "state_db": null,
+    "measurement": "rollout"
+  },
+  "limits": {
+    "token_budget": 25000000,
+    "checkpoint_interval": 5000000,
+    "candidate_limit": 2,
+    "probe_token_limit": 5000000,
+    "probe_minutes": 5.0
+  },
+  "baseline_total_tokens": 20267471,
+  "last_checkpoint_total_tokens": 26603018,
+  "last_checkpoint_candidate_count": 1,
+  "first_artifact_at": "2026-10-29T16:53:47.717084Z",
+  "artifacts": [
+    {
+      "value": "/private/tmp/engram-product-deploy-20261030/candidate/release-files.json",
+      "recorded_at": "2026-10-29T16:53:47.716923Z"
+    },
+    {
+      "value": "/Users/ywwl/Documents/Claude/Projects/Super memory/deploy/releases/product-20261030-d64e86214b92/README.zh-CN.md",
+      "recorded_at": "2026-10-29T17:10:27.993651Z"
+    }
+  ],
+  "candidates": [
+    {
+      "value": "compatible-product-overlay",
+      "recorded_at": "2026-10-29T16:53:47.717092Z"
+    }
+  ],
+  "evidence_refs": [
+    {
+      "value": "baseline:remote_source_snapshot_and_runtime_versions",
+      "recorded_at": "2026-10-29T16:53:47.717096Z"
+    },
+    {
+      "value": "deploy/releases/product-20261030-d64e86214b92/cleanup-verification.json",
+      "recorded_at": "2026-10-29T17:10:27.993767Z"
+    },
+    {
+      "value": "deploy/releases/product-20261030-d64e86214b92/browser-verification.json",
+      "recorded_at": "2026-10-29T17:10:27.993768Z"
+    }
+  ],
+  "checkpoints": [
+    {
+      "recorded_at": "2026-10-29T17:10:28.013918Z",
+      "decision": "WAIT_EXTERNAL",
+      "reason": "六项代码部署、数据备份及公网验证通过；现有DeepSeek凭证无效，真实模型链路待用户有效配置。",
+      "resume_when": "用户在设置页保存有效模型凭证，或指定有授权的现有模型配置后，仅重验连接、合成提炼与带引用问答。",
+      "total_tokens": 26603018,
+      "token_delta": 6335547,
+      "candidate_count": 1,
+      "artifact_count": 2,
+      "evidence_ref_count": 3,
+      "trigger_reasons": [
+        "TOKEN_CHECKPOINT_REACHED"
+      ]
+    }
+  ]
+}

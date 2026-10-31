@@ -13,8 +13,8 @@ import {
   StatCard,
 } from '../components/ui'
 import { toast } from '../components/Toast'
-import { useMemories, useRemember, useStructuredProfile } from '../hooks/queries'
-import { useT } from '../i18n'
+import { useMemories, useRemember, useSessions, useStructuredProfile } from '../hooks/queries'
+import { useLang, useT } from '../i18n'
 import { groupOutcomes, SessionOutcomes } from './Journal'
 import type { StructuredProfile } from '../types'
 
@@ -32,6 +32,8 @@ export default function Dashboard() {
     include_sensitive: true,
   })
   const profile = useStructuredProfile()
+  const recentSessions = useSessions({ limit: 3 })
+  const zh = useLang((s) => s.lang) === 'zh'
   const remember = useRemember()
   const t = useT()
   const [text, setText] = useState('')
@@ -67,6 +69,30 @@ export default function Dashboard() {
         <StatCard label={t.dashboard.statEpisodes} value={c.episodes} icon={<MessagesSquare className="h-5 w-5" />} accent="mint" />
         <StatCard label={t.dashboard.statOutcomes} value={c.facts_outcomes} icon={<Lightbulb className="h-5 w-5" />} accent="amber" />
       </div>
+
+      <Card>
+        <CardTitle hint={<Link to="/conversations" className="text-brand-cyan hover:underline">{zh ? '浏览全部会话' : 'Browse all sessions'} →</Link>}>
+          {zh ? '最近会话' : 'Recent sessions'}
+        </CardTitle>
+        {recentSessions.isLoading ? <Spinner label={zh ? '加载会话…' : 'Loading sessions…'} />
+          : recentSessions.isError ? <ErrorState message={(recentSessions.error as Error).message} />
+          : recentSessions.data?.sessions.length ? (
+            <div className="space-y-3">
+              {recentSessions.data.summary && <p className="text-xs text-ghost">{zh
+                ? `${recentSessions.data.summary.total} 个会话 · ${recentSessions.data.summary.pending} 个有待整理原文 · ${recentSessions.data.summary.with_facts} 个有记忆贡献`
+                : `${recentSessions.data.summary.total} sessions · ${recentSessions.data.summary.pending} with pending episodes · ${recentSessions.data.summary.with_facts} with memory contributions`}</p>}
+              <div className="grid gap-3 md:grid-cols-3">
+                {recentSessions.data.sessions.map((session) => (
+                  <Link key={session.id} to={`/conversations?session_id=${encodeURIComponent(session.id)}`} className="min-w-0 rounded-xl border border-line bg-white/[0.02] p-3 transition hover:border-brand-cyan/40 hover:bg-brand-cyan/5">
+                    <div className="break-all font-mono text-xs text-slate-200">{session.id}</div>
+                    <p className="mt-2 text-xs text-ghost">{zh ? `${session.episodes} 条原文 · ${session.facts_added} 条记忆` : `${session.episodes} episodes · ${session.facts_added} memories`}</p>
+                    <p className="mt-1 text-[11px] text-brand-cyan">{session.last_event_at_h ?? (zh ? '临时会话' : 'Working session')}</p>
+                  </Link>
+                ))}
+              </div>
+            </div>
+          ) : <EmptyState title={zh ? '还没有会话记录' : 'No sessions yet'} hint={zh ? '记录一条记忆，或导入已有会话，即可在这里继续浏览。' : 'Save a memory or import a conversation to start browsing here.'} />}
+      </Card>
 
       <Card>
         <CardTitle hint={t.dashboard.rememberHint}>{t.common.saveNewMemory}</CardTitle>

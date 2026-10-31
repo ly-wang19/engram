@@ -63,6 +63,15 @@ _MIN_CHARS = 15
 _MAX_CHARS = 400
 
 
+class OutcomeExtractionError(RuntimeError):
+    """A provider failure is not evidence that a session had no durable conclusions."""
+
+    def __init__(self, error_type: str) -> None:
+        self.error_type = error_type
+        # Provider exceptions can echo credentials or request text. Keep only the class name.
+        super().__init__(error_type)
+
+
 def _windowed(turns: list[str], budget: int) -> str:
     """Fit a session into the budget by keeping both ends.
 
@@ -81,7 +90,7 @@ def _windowed(turns: list[str], budget: int) -> str:
 
 def extract_outcomes(llm: LLM, episodes: list[Episode], user_id: str,
                      session_id: str = "", max_chars: int = 24000,
-                     system: Optional[str] = None) -> list[Fact]:
+                     system: Optional[str] = None, *, raise_on_error: bool = False) -> list[Fact]:
     """Distil one session's episodes into decision/finding/lesson/open_question facts.
 
     Session-level by design: a decision is visible in the arc of a conversation, not in any single turn,
@@ -106,7 +115,9 @@ def extract_outcomes(llm: LLM, episodes: list[Episode], user_id: str,
     )
     try:
         raw = llm.complete(prompt, system=system or OUTCOME_SYSTEM)
-    except Exception:  # noqa: BLE001 — a model outage must never lose the episodes themselves
+    except Exception as exc:  # noqa: BLE001 — the service persists raw episodes even on failure
+        if raise_on_error:
+            raise OutcomeExtractionError(type(exc).__name__) from None
         return []
 
     # Attribute every outcome to the whole session: a conclusion is supported by the conversation, not

@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import ast
 import json
+import os
 import shutil
 import subprocess
 import time
@@ -19,6 +20,8 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import Any
+
+from .mcp.backends import api_key_source, resolve_api_key
 
 
 CLIENTS = ("none", "codex", "claude-code", "cursor", "openai")
@@ -186,6 +189,8 @@ async def main():
     data_dir = tempfile.mkdtemp(prefix="engram_agent_doctor_stdio_")
     try:
         env = os.environ.copy()
+        for name in ("ENGRAM_API_URL", "ENGRAM_API_KEY", "ENGRAM_API_KEY_FILE", "ENGRAM_NAMESPACE"):
+            env.pop(name, None)
         env["ENGRAM_DATA_DIR"] = data_dir
         env["ENGRAM_EMBEDDER"] = "hashing"
         env["ENGRAM_LLM"] = ""
@@ -377,6 +382,7 @@ def _check_mcp_server_config(
     python_cmd: str,
     api_url: str | None,
     api_key: str | None,
+    api_key_file: str | None = None,
 ) -> dict[str, Any]:
     failures: list[str] = []
     data = {
@@ -404,8 +410,28 @@ def _check_mcp_server_config(
             data["api_url_ok"] = True
         else:
             failures.append("args do not point at the requested Engram API URL")
-        if api_key is not None:
-            if isinstance(args, list) and _arg_value(args, "--api-key") == api_key:
+        expected_key, expected_file = api_key_source(api_key, api_key_file, default="me")
+        if expected_file is not None:
+            env = dict(os.environ)
+            if isinstance(server.get("env"), dict):
+                env.update(server["env"])
+            actual_key = _arg_value(args, "--api-key") if isinstance(args, list) else None
+            actual_file = (_arg_value(args, "--api-key-file") if isinstance(args, list) else None)
+            if actual_file is None:
+                actual_file = env.get("ENGRAM_API_KEY_FILE")
+                actual_key = actual_key if actual_key is not None else env.get("ENGRAM_API_KEY") or None
+            matches = (actual_key is None and isinstance(actual_file, str)
+                       and str(Path(actual_file).expanduser().absolute()) == expected_file)
+            if matches:
+                try:
+                    resolve_api_key(api_key_file=expected_file)
+                except ValueError:
+                    matches = False
+            data["api_key_ok"] = data["api_key_file_ok"] = matches
+            if not matches:
+                failures.append("config does not select the requested readable API key file")
+        elif expected_key is not None:
+            if isinstance(args, list) and _arg_value(args, "--api-key") == expected_key:
                 data["api_key_ok"] = True
             else:
                 failures.append("args do not include the requested API key")
@@ -475,6 +501,7 @@ def _codex_config_probe(
     python_cmd: str,
     api_url: str | None,
     api_key: str | None,
+    api_key_file: str | None = None,
 ) -> dict[str, Any]:
     path = Path(config_path).expanduser()
     try:
@@ -499,6 +526,7 @@ def _codex_config_probe(
         python_cmd=python_cmd,
         api_url=api_url,
         api_key=api_key,
+        api_key_file=api_key_file,
     )
     check["data"] = {**check.get("data", {}), "path": str(path)}
     return check
@@ -511,6 +539,7 @@ def _mcp_json_config_probe(
     python_cmd: str,
     api_url: str | None,
     api_key: str | None,
+    api_key_file: str | None = None,
 ) -> dict[str, Any]:
     path = Path(config_path).expanduser()
     try:
@@ -536,6 +565,7 @@ def _mcp_json_config_probe(
         python_cmd=python_cmd,
         api_url=api_url,
         api_key=api_key,
+        api_key_file=api_key_file,
     )
     check["data"] = {
         **check.get("data", {}),
@@ -770,6 +800,7 @@ def _remote_http_probe(api_url: str, api_key: str) -> dict[str, Any]:
             "query": "What does the Engram remote doctor verify?",
             "session_id": target_session,
             "n_chunks": 3,
+            "answer": False,
         })
         closed_target = _http_json(base, api_key, "/v1/sessions/close", {
             "session_id": target_session,
@@ -916,23 +947,38 @@ def diagnose(
     client: str = "none",
     python_cmd: str = "python",
     api_url: str | None = None,
-    api_key: str = "me",
+    api_key: str | None = None,
     codex_config: str | None = None,
     mcp_json: str | None = None,
     mcp_server_name: str = "engram",
+    api_key_file: str | None = None,
 ) -> dict[str, Any]:
+    credential_error = None
+    resolved_key = api_key or "me"
+    if api_url:
+        api_key, api_key_file = api_key_source(api_key, api_key_file, default="me")
+        try:
+            resolved_key = resolve_api_key(api_key, api_key_file, default="me")
+        except ValueError as exc:
+            credential_error = str(exc)
+    else:
+        api_key = api_key or "me"  # local namespace, never an ambient remote credential
+        api_key_file = None
     python_check = _python_probe(python_cmd)
     checks = [python_check]
+    if credential_error:
+        checks.append({"name": "API key file", "status": "fail", "detail": credential_error, "command": []})
     if python_check["status"] == "ok":
         checks.append(_stdio_probe(python_cmd))
-    if api_url:
-        checks.append(_remote_http_probe(api_url, api_key))
+    if api_url and credential_error is None:
+        checks.append(_remote_http_probe(api_url, resolved_key))
     if codex_config:
         checks.append(_codex_config_probe(
             codex_config,
             python_cmd=python_cmd,
             api_url=api_url,
             api_key=api_key,
+            api_key_file=api_key_file,
         ))
     if mcp_json:
         checks.append(_mcp_json_config_probe(
@@ -941,6 +987,7 @@ def diagnose(
             python_cmd=python_cmd,
             api_url=api_url,
             api_key=api_key,
+            api_key_file=api_key_file,
         ))
     checks.extend(_client_probe(client))
     failed = [c for c in checks if c["status"] == "fail"]
@@ -996,8 +1043,10 @@ def main(argv: list[str] | None = None) -> None:
                     help="Python executable that the agent will launch for `python -m engram.mcp`")
     ap.add_argument("--api-url", default=None,
                     help="optional Engram HTTP server to verify with a remote lifecycle smoke test")
-    ap.add_argument("--api-key", default="me",
+    ap.add_argument("--api-key", default=None,
                     help="Bearer key for --api-url, or expected local namespace when --api-url is omitted")
+    ap.add_argument("--api-key-file", default=None,
+                    help="read Bearer key from a file; overrides $ENGRAM_API_KEY")
     ap.add_argument("--codex-config", default=None,
                     help="optional Codex config.toml path to verify [mcp_servers.engram]")
     ap.add_argument("--mcp-json", default=None,
@@ -1012,6 +1061,7 @@ def main(argv: list[str] | None = None) -> None:
         python_cmd=args.python,
         api_url=args.api_url,
         api_key=args.api_key,
+        api_key_file=args.api_key_file,
         codex_config=args.codex_config,
         mcp_json=args.mcp_json,
         mcp_server_name=args.mcp_server_name,

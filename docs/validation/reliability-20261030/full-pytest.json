@@ -1,0 +1,14 @@
+{
+  "command": [
+    "python3",
+    "-m",
+    "pytest",
+    "-o",
+    "addopts=",
+    "-q",
+    "-ra"
+  ],
+  "exit_code": 0,
+  "seconds": 44.76,
+  "network": "Python socket guard permits loopback only; model backends disabled"
+}

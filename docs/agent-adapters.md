@@ -34,6 +34,33 @@ export ENGRAM_API_URL=http://localhost:8000
 export ENGRAM_API_KEY=me
 ```
 
+If the workstation already runs `engram-watch`, reuse its key file so the watcher and MCP clients
+authenticate to the same service. Pass the watcher's actual URL and installed Python interpreter:
+
+```bash
+engram-agent-setup --install-mcp-json --dry-run \
+  --python /path/to/python --api-url http://localhost:8000 \
+  --api-key-file ~/.engram/watch.key
+
+engram-agent-setup --install-mcp-json --doctor \
+  --python /path/to/python --api-url http://localhost:8000 \
+  --api-key-file ~/.engram/watch.key
+
+engram-agent-doctor --python /path/to/python --api-url http://localhost:8000 \
+  --api-key-file ~/.engram/watch.key --mcp-json ./.mcp.json
+```
+
+The same option works with `--install-codex`, `engram-agent-bootstrap`, and `python -m engram.mcp`.
+Generated configs contain an absolute key-file path, never the file's contents. The file must remain
+readable to the client process; restart the MCP process after rotating its contents.
+
+Credential precedence is explicit `--api-key`, then explicit `--api-key-file`, then `ENGRAM_API_KEY`,
+then `ENGRAM_API_KEY_FILE`. A selected unreadable, non-UTF-8, or empty file fails rather than falling
+back to another identity. The older inline key mode still works; displayed recipes and installation
+reports replace inline secrets with `<API_KEY>`. The doctor removes remote routing variables from its
+temporary local stdio test, and uses the selected credential only for the explicitly requested HTTP
+probe. That probe writes synthetic diagnostic memories to the selected namespace.
+
 The intended lifecycle is:
 
 ```text

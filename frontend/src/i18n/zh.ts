@@ -42,6 +42,7 @@ export const zh: Dict = {
   },
 
   nav: {
+    jobs: '提炼任务',
     dashboard: '总览',
     journal: '会话结论',
     profile: '用户画像',

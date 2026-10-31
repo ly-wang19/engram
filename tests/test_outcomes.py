@@ -103,6 +103,36 @@ def test_model_outage_never_loses_the_session():
     assert extract_outcomes(Broken(), _episodes(), "u") == []
 
 
+def test_failed_distillation_is_distinct_from_successful_empty_output(tmp_path):
+    class Broken:
+        def complete(self, *a, **k):
+            raise RuntimeError("private-provider-request-must-not-leak")
+
+    svc = _svc(tmp_path)
+    _session(svc)
+    before = svc.stats("u")["counts"]["episodes"]
+    svc.llm = Broken()
+    failed = svc.close_session("u", "s1", summarize=False)
+    assert failed["ok"] is True  # raw data was preserved
+    assert failed["outcomes_status"] == "error"
+    assert failed["outcomes_error"] == "RuntimeError"
+    assert "private-provider" not in str(failed)
+    reopened = _svc(tmp_path)
+    assert reopened.stats("u")["counts"]["episodes"] == before
+    svc.llm = StubLLM("[]")
+    empty = svc.close_session("u", "s1", summarize=False)
+    assert empty["outcomes_status"] == "completed"
+    assert empty["outcomes"] == 0 and empty["outcomes_error"] is None
+
+
+def test_missing_llm_is_not_reported_as_completed_distillation(tmp_path):
+    svc = _svc(tmp_path)
+    _session(svc)
+    assert svc.close_session("u", "s1", summarize=False)["outcomes_status"] == "unavailable"
+    assert svc.close_session("u", "s1", outcomes=False)["outcomes_status"] == "disabled"
+    assert svc.close_session("u", "missing")["outcomes_status"] == "no_episodes"
+
+
 def test_truncated_model_output_salvages_complete_objects():
     """A reply cut off by max_tokens used to discard every extracted item — which is exactly what long
     sessions produce, since the model fills its budget."""

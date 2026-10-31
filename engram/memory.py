@@ -2146,6 +2146,74 @@ class Memory:
             return self._fit_evidence_block(blocks[0], budget)
         return sep.join(block for _, block in sorted(selected, key=lambda item: item[0]))[:budget]
 
+    def _pack_lean_blocks(
+        self,
+        blocks: list[str],
+        budget: int,
+        need,
+        detail_eps: list[Episode],
+        *,
+        default_budget: bool = False,
+    ) -> str:
+        """Pack a fixed evidence snapshot without retrieval or reinforcement side effects.
+
+        Detail selection removes summaries before packing. Only a complete rendered raw
+        session justifies that deduplication: a surviving header is not its evidence.
+        The opt-in fallback reuses existing summaries, never generates new ones. It is
+        still budget constrained and does not guarantee that a summary contains an answer.
+        """
+        def pack(parts: list[str]) -> str:
+            assembled = "\n\n".join(parts)
+            if len(assembled) > budget:
+                if self.config.evidence_budgeting:
+                    return self._fit_blocks_by_evidence_budget(parts, budget, need)
+                if default_budget:
+                    return self._fit_blocks_even(parts, budget)
+            return assembled[:budget]
+
+        packed = pack(blocks)
+        if not self.config.packing_summary_fallback or len("\n\n".join(blocks)) <= budget:
+            return packed
+        if budget <= 0:
+            return ""
+
+        raw_title = "RELEVANT CONVERSATIONS (full detail):\n"
+        candidates = {ep.id: ep for ep in detail_eps if ep.summary and ep.summary.strip()}
+        fallback_ids: set[str] = set()
+        # Adding a summary may shrink the raw block again (notably with even quotas).
+        # Grow the fallback set monotonically; each pass adds at least one source.
+        for _ in range(len(candidates)):
+            rendered_raw = packed.partition(raw_title)[2]
+            missing = set()
+            for eid, ep in candidates.items():
+                raw = (f"[{ep.metadata.get('date') or fmt_date(ep.event_time)}] "
+                       f"(session: {ep.session_id})\n{ep.content}")
+                if eid not in fallback_ids and raw not in rendered_raw:
+                    missing.add(eid)
+            if not missing:
+                break
+            fallback_ids.update(missing)
+            fallback_lines = [
+                f"- [{ep.metadata.get('date') or fmt_date(ep.event_time)}] {ep.summary}"
+                for ep in sorted((ep for eid, ep in candidates.items() if eid in fallback_ids),
+                                 key=lambda e: e.event_time)
+            ]
+            revised = list(blocks)
+            summary_idx = next((i for i, block in enumerate(revised)
+                                if self._evidence_block_kind(block) == "summaries"), None)
+            title = "SESSION SUMMARIES (relevant, with raw fallback):\n"
+            if summary_idx is not None:
+                heading, _, body = revised[summary_idx].partition("\n")
+                # Never spend an existing summary's quota on a longer fallback label.
+                # Original and fallback rows form separate groups, not one global timeline.
+                title = heading.replace(", chronological", "").replace("chronological", "dated") + "\n"
+                revised[summary_idx] = title + body + "\n" + "\n".join(fallback_lines)
+            else:
+                raw_idx = next((i for i, block in enumerate(revised) if block.startswith(raw_title)), len(revised))
+                revised.insert(raw_idx, title + "\n".join(fallback_lines))
+            packed = pack(revised)
+        return packed
+
     def lean_context(
         self,
         query: str,
@@ -2440,21 +2508,14 @@ class Memory:
             if agg:
                 blocks.append(agg)
 
-        assembled = "\n\n".join(blocks)
         default_budget = char_budget == 60_000
-        if char_budget == 60_000:
+        if default_budget:
             full_chars = sum(len(ep.content) for ep in self.episodes_doc.values() if ep.user_id == user)
             if full_chars:
                 # Tiny histories still need enough room for profile + facts + one chunk; otherwise the
                 # even block fitter can cut short durable project rules exactly where the constraint lives.
                 char_budget = min(char_budget, max(2048, full_chars * 3 - 1))
-            if len(assembled) > char_budget:
-                if self.config.evidence_budgeting:
-                    return self._fit_blocks_by_evidence_budget(blocks, char_budget, need)
-                return self._fit_blocks_even(blocks, char_budget)
-        elif len(assembled) > char_budget and self.config.evidence_budgeting:
-            return self._fit_blocks_by_evidence_budget(blocks, char_budget, need)
-        return assembled[:char_budget]
+        return self._pack_lean_blocks(blocks, char_budget, need, detail_eps, default_budget=default_budget)
 
     # --- read path ---
     def search(

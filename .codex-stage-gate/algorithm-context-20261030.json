@@ -1,0 +1,88 @@
+{
+  "schema_version": 1,
+  "created_at": "2026-10-29T16:28:51.752017Z",
+  "updated_at": "2026-10-29T17:08:27.508052Z",
+  "status": "STOP",
+  "objective": "Engram 算法达到可复现的世界领先水平",
+  "stage": "缓存重放定位最终上下文的证据损失",
+  "evidence_standard": "仅本地缓存不发起LLM请求；缓存缺失显式失败不计有效；固定选择样本和抽取产物；逐层证据可追溯，只有实测支持才改算法",
+  "source": {
+    "thread_id": "01a18848-d996-7dd2-b4a7-95394f99ac5f",
+    "rollout": "/Users/ywwl/.codex/sessions/2026/10/29/rollout-2026-10-29T23-30-41-01a18848-d996-7dd2-b4a7-95394f99ac5f.jsonl",
+    "state_db": null,
+    "measurement": "rollout"
+  },
+  "limits": {
+    "token_budget": 25000000,
+    "checkpoint_interval": 25000000,
+    "candidate_limit": 2,
+    "probe_token_limit": 5000000,
+    "probe_minutes": 5.0
+  },
+  "baseline_total_tokens": 13911506,
+  "last_checkpoint_total_tokens": 21798470,
+  "last_checkpoint_candidate_count": 2,
+  "first_artifact_at": "2026-10-29T16:35:52.310195Z",
+  "artifacts": [
+    {
+      "value": "/Users/ywwl/Documents/Claude/Projects/Super memory/results/context_cache_probe_20261030.json",
+      "recorded_at": "2026-10-29T16:35:52.309957Z"
+    },
+    {
+      "value": "/Users/ywwl/Documents/Claude/Projects/Super memory/results/context-replay-20261030.jsonl",
+      "recorded_at": "2026-10-29T16:56:20.748794Z"
+    },
+    {
+      "value": "/Users/ywwl/Documents/Claude/Projects/Super memory/results/context-replay-20261030.analysis.json",
+      "recorded_at": "2026-10-29T16:56:20.766252Z"
+    },
+    {
+      "value": "/Users/ywwl/Documents/Claude/Projects/Super memory/results/context-replay-20261030-priority.jsonl",
+      "recorded_at": "2026-10-29T17:08:27.498447Z"
+    },
+    {
+      "value": "/Users/ywwl/Documents/Claude/Projects/Super memory/docs/algorithm-context-evidence-20261030.zh-CN.md",
+      "recorded_at": "2026-10-29T17:08:27.498613Z"
+    }
+  ],
+  "candidates": [
+    {
+      "value": "source-summary-fallback-after-packing",
+      "recorded_at": "2026-10-29T16:35:52.310198Z"
+    },
+    {
+      "value": "source-summary-fallback-before-existing-summaries",
+      "recorded_at": "2026-10-29T17:08:27.498617Z"
+    }
+  ],
+  "evidence_refs": [
+    {
+      "value": "first real lean context replay: 37 cache hits / zero misses; no network; synthetic n_chunks increase deleted previously available evidence at same budget",
+      "recorded_at": "2026-10-29T16:35:52.310200Z"
+    },
+    {
+      "value": "60/60 valid; 2259 cache hits; identical frozen replay; no primary or secondary annotated-source/literal gains",
+      "recorded_at": "2026-10-29T16:56:20.766271Z"
+    },
+    {
+      "value": "Frozen60: primary annotated sources 98 to 99 of100; all-source questions58 to59 of60; no observed annotated-source or short-literal regressions. Remaining410 not used for this diagnosis.",
+      "recorded_at": "2026-10-29T17:08:27.498619Z"
+    }
+  ],
+  "checkpoints": [
+    {
+      "recorded_at": "2026-10-29T17:08:27.508048Z",
+      "decision": "STOP",
+      "reason": "Two bounded candidates completed. Append fallback rejected; prepend eval prototype frozen for separate held-out offline validation. No more tuning on this60. Root rollout token accounting is not a whole-agent-tree budget audit.",
+      "resume_when": "Start a separately bounded validation stage on remaining410 answerable items with candidate/source hashes fixed and no new algorithms.",
+      "total_tokens": 21798470,
+      "token_delta": 7886964,
+      "candidate_count": 2,
+      "artifact_count": 5,
+      "evidence_ref_count": 3,
+      "trigger_reasons": [
+        "CANDIDATE_CHECKPOINT_REACHED"
+      ]
+    }
+  ]
+}

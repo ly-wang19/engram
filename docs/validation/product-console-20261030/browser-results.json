@@ -1,0 +1,15 @@
+{
+  "checks": [
+    "job_failure_no_false_success",
+    "admin_config_test_and_no_secret_browser_storage",
+    "job_retry_success_and_durable_history",
+    "answer_citation_source_correction_reask",
+    "question_resolution_persisted",
+    "question_reopened",
+    "audit_beyond_60_type_filter_ignore_persisted",
+    "selective_forget_preview_confirm_completed",
+    "six_pages_390px_no_horizontal_overflow",
+    "no_browser_runtime_errors"
+  ],
+  "errors": []
+}

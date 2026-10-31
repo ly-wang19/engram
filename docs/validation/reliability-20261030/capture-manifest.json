@@ -1,0 +1,14 @@
+{
+  "baseline": "/var/folders/zb/ghclng_x1gvcg7sv109n5_dr0000gn/T/engram-reliability-20261030-9fw4p410/baseline",
+  "source_sha256": {
+    "engram/connectors/watch.py": {
+      "before": "512761f9ea66d8d5ff3179fd592b6d47dd8f8f926b1069fb97e71de107cc9a5f",
+      "after": "82f894f41f203117041bf1c5ceaa402a3a4cf916469e2fb473a0e91e98ce7c41"
+    },
+    "engram/connectors/session_hook.py": {
+      "before": "98edfa83f268a3bd153fae844b8c3c330e436bc69514fa87368c3878709b0e52",
+      "after": "98edfa83f268a3bd153fae844b8c3c330e436bc69514fa87368c3878709b0e52"
+    }
+  },
+  "tests_sha256": "300b66821e0863eef84819d59d402884c80941ac95594804fa108f49df63ba4c"
+}

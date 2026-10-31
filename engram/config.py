@@ -48,6 +48,7 @@ class Config:
     abstain_threshold: float = 0.45  # abstain if no attribute match AND best semantic sim below this
     evidence_planner: bool = True  # benchmark-neutral query -> evidence-shape routing for lean_context
     evidence_budgeting: bool = True  # intent-aware context packing instead of equal/raw truncation
+    packing_summary_fallback: bool = False  # experimental: restore existing summaries when raw detail is cut
     explicit_preference_extraction: bool = True  # extract I like/prefer/avoid style preference facts
     preference_object_filter: bool = True  # suppress weak explicit preference objects like "it"/"these ideas"
     preference_object_normalization: bool = True  # canonicalize "sound/idea of X" preference objects to X

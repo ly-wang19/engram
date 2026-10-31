@@ -355,6 +355,39 @@ def test_a_second_run_on_an_unchanged_transcript_is_a_no_op(tmp_path, capsys):
     assert len(server.imports) == 1
 
 
+def test_hook_does_not_accept_a_claim_from_another_target(tmp_path, monkeypatch):
+    path = _transcript(tmp_path)
+    argv, _ = _hook_args(tmp_path)
+    claims = str(tmp_path / "hook_claims.jsonl")
+    session_hook.claim(claims, path, os.stat(path).st_size,
+                       watch._target("http://127.0.0.1:9999", "other-key"))
+    server = StubServer()
+    monkeypatch.setattr(watch, "_post", server.post)
+
+    assert session_hook.run(argv, stdin=json.dumps({
+        "hook_event_name": "SessionEnd", "transcript_path": path,
+    }), roots=[str(tmp_path / "roots")]) == 0
+
+    assert len(server.imports) == len(server.closed) == 1
+    target = watch._target("http://127.0.0.1:8766", "demo-key")
+    assert watch.load_claims(claims, target=target) == {path: os.stat(path).st_size}
+
+
+def test_empty_hook_transcript_is_skipped_without_a_success_claim(tmp_path, monkeypatch, capsys):
+    path = _transcript(tmp_path)
+    with open(path, "w") as fh:
+        fh.write(json.dumps({"type": "session_meta", "padding": "x" * 2100}) + "\n")
+    argv, _ = _hook_args(tmp_path)
+    server = StubServer()
+    monkeypatch.setattr(watch, "_post", server.post)
+    assert session_hook.run(argv, stdin=json.dumps({
+        "hook_event_name": "SessionEnd", "transcript_path": path,
+    }), roots=[str(tmp_path / "roots")]) == 0
+    assert not server.imports and not server.closed
+    assert not (tmp_path / "hook_claims.jsonl").exists()
+    assert "skipped (non-conversational)" in capsys.readouterr().out
+
+
 def test_a_failed_close_claims_nothing_so_the_watcher_retries(tmp_path, capsys):
     path = _transcript(tmp_path)
     argv, _ = _hook_args(tmp_path)

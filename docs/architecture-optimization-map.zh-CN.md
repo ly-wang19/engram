@@ -1,6 +1,6 @@
 # Engram 架构优化地图
 
-最后更新：2026-09-07
+最后更新：2026-10-30
 
 用途：这是给项目负责人和后续 AI/人类贡献者看的本地中文驾驶舱。它回答四个问题：
 
@@ -11,6 +11,13 @@
 
 这不是公开营销稿。任何对外性能主张仍以 `RESULTS.md`、`README.md`、`README.zh-CN.md`
 和已提交的 `results/*.jsonl` 原始日志为准。
+
+## 2026-10-30：异常恢复与完成标记的可靠性修复
+
+- System-2：并行提炼与事实转换异常不再吞成空列表；进入事实写入阶段前失败则保留原文 pending，关闭任务返回失败，成功空结果仍能完成。此保证不覆盖冲突处理或图存储的全事务。
+- 持久化：schema 1 与根目录 JSONL/manifest 保持兼容，新增 `.snapshot-backup/ready.json` 恢复标记。保存先备份旧集合并同步，全部替换完成后清除标记；load/save 共锁，重开会恢复未提交快照，恢复中断可重试。增加全量备份 I/O 和空间；旧版读取器回退前须由本版恢复未完成事务。
+- System-1 采集：seen/close_deferred 记录尝试前文件大小，关闭期间增长的尾部保留在队列；显式关闭回执仅 `completed + ok=true` 认成功，缺字段旧协议兼容保留。
+- [固定前后验证](reliability-validation-20261030.zh-CN.md)：25例在开工快照19失败/6通过，修复后25通过；完整离线878通过/1跳过，zero-setup通过。只证明已覆盖故障路径，不更新公开QA指标，也没有部署或恢复真实provider。
 
 ## 如何使用这组架构文档
 
@@ -26,6 +33,30 @@
 2. 再回到本文件，看最近 AI/人类具体改了哪些架构层。
 3. 做算法 PR 前检查“当前重点区域”和“验收分层规则”。
 4. 合并后把改动、日志和下一步影响写回本文件；如果改了数据流或对象生命周期，也同步更新完整报告。
+
+## 2026-10-29—30：算法证据链与检索候选实验
+
+- 变更层：评测策略与指标语义。`eval/bench.py` 的 `verify_retry` 移除标准答案可回答标签，只依据输出是否弃答触发一次扩展；不可答题上的错误重试同样接受裁判。新增结果元数据说明 `tok` 是空白分词数、`total_tokens` 尚未测量、`lat` 不含裁判。旧日志不改写；`eval/report.py` 明示context单位，未记录单位显示unrecorded，混合单位拒绝求平均，不再把字数自动称为tokens。
+- 核验证据：`results/algorithm_baseline_20261029.json` 保留两份完整500题日志的哈希、正确数、上下文字数及延迟。已提交 v3 为422/500，对照394/500；更新的本地未提交 pinned main 为405/500，对照395/500。两者都是历史运行，不能当当前代码重新评分。
+- 已验证测试：`tests/test_eval_retry_neutrality.py` 覆盖相同问题更换可回答标签仍执行相同重试、不可答题重试错误正常扣分、重试仍弃答保留原回答及关闭重试。
+- 全量对照已完成：500题输入、470题计召回、30题弃答排除。k=4全部标注证据覆盖390→397，k=8为436→438；k=4检索p50为59.7→134.2ms。新增返回的dense池外gold会话为0，因此原“池外救回”机制未获支持。保留实验原型，不改生产默认；[完整结果与复现](algorithm-evidence-20261030.zh-CN.md)。
+
+## 2026-10-30：上下文裁切后的摘要回补实验
+
+- 变更层：读路径的最终 context 装配。原先按计划展示的 detail 集合提前去除摘要，但整个原文块可能被后续预算裁切，造成同一来源的原文与摘要都消失。
+- 实现：`Memory._pack_lean_blocks` 接收已冻结的 blocks、证据需求和 detail episodes，统一三个预算出口。实验开关 `Config.packing_summary_fallback` 默认关闭；开启后只为未完整保留的原文补回既有摘要，仍受原字符预算限制。它不重新检索、不重新抽取，也不声称摘要必然包含答案。
+- 评测：`eval/context_replay.py` 只读取现有模型缓存，缺失/损坏即整题无效；固定六类各 10 题和 60k/32k/16k 字符预算，同一冻结输入比较两臂。manifest 锁定数据、模型、选题及相关源码，纯装配重放不需要模型或 embedding。会话来源完整保留、短答案字面出现和真正 QA 正确分别报告。
+- 机制回归：默认关闭时保持旧输出，严格预算、完整原文去重、标题挤占、同日期稳定排序及缓存吞错等均有回归。真实样本结果见 [证据保留实验](algorithm-context-evidence-20261030.zh-CN.md)。默认开启须另有完整 QA 证据。
+- 实测决策：60 题有效、2,259 次缓存命中、0 缺失。core 中末尾回补无标注来源收益，不启用；诊断后新增的 eval-only `context_replay_priority.py` 前置既有回补摘要，60k 完整来源 98→99/100、全来源题数 58→59/60，32k 来源 37→74/100，16k 为 3→40/100，未观察到标注来源或短字面回退。第二候选保留待固定验证；这些不是 QA 分数，且开发依据来自同一批 60 题，尚需未参与诊断样本确认。
+- 固定候选后续验证：新增 `context_replay_holdout.py` 锁定其余 410 题与候选/runner 指纹，算法不变。407 有效、3 缺缓存；60k 全来源题数 363→387/407、来源 736→764/786，未观察到主预算标注来源/短字面回退。32k/16k 分别有 13/7 题丢失原先完整保留的摘要来源，不能以净增掩盖。门槛为缓存不完整下证据不足，候选保持关闭；用户选择暂不恢复在线评测。[完整验证](algorithm-context-holdout-20261030.zh-CN.md)。
+
+## 2026-10-30：控制台产品闭环与持久管理状态
+
+- 服务层：新增纯 stdlib SQLite `ManagementStore`，按 namespace 隔离任务、证据引用、问题/体检处置、来源事件和遗忘操作。全局模型配置使用独立管理员授权；秘密只写 0600 数据文件、不回显。任务以 session 文件锁及事务状态转换去重，保留失败原因和重试历史；旧同步 close 接口复用同一任务引擎。
+- 可核查问答：新增 `/v1/ask`，先冻结带 ID 的事实/原文证据集，再调用回答模型；拒绝未知引用、生成期间被修改/遗忘的证据。默认脱敏排除原文，用户关闭脱敏后启用事实与原文混合证据。保留原 recall/harness；本轮不作准确率或延迟收益声明。
+- 人工反馈：未决问题关联最终结论、重开；体检遍历完整既有规则输出再筛选分页。处理状态及历史持久化，源版本变化重新待处理。修改后的共享缓存失效覆盖新页面。
+- 数据生命周期：按会话/来源/时间预览遗忘，令牌绑定范围、租户、版本和有效期；确认后清理原文、相关冷热事实/图/工作记忆/引用/任务/同步事件。缺少完整谱系的摘要、画像缓存、问题与体检处置会重置，预览明示。持久意图和完整脱敏暂存快照处理逐文件保存中断，`get` 在返回数据前恢复；避免后台旧任务回写。
+- 证据入口：[统一验收](product-completion-validation-20261030.md)、[提炼](product-jobs-20261030.md)、[证据和遗忘](product-evidence-forgetting-20261030.md)、[问题和体检](product-review-20261030.md)、[模型和接入](product-models-connections-20261030.md)。此批次已于10月30日部署为 `product-20261030-d64e86214b92`；模型配置同步更新热内存摘要器。兼容回归159 passed / 1 skipped、远端隔离API及公网浏览器检查通过；原有DeepSeek凭证失效，真实提炼/生成待更新凭证。[部署与回滚证据](../deploy/releases/product-20261030-d64e86214b92/README.zh-CN.md)。
 
 ## 总览图
 
@@ -62,7 +93,7 @@ flowchart TD
 
   CONSOLE["控制台<br/>总览（结论卡） · 会话结论 · 记忆体检 · 事实 · 图谱 · 时间线 …"]
   MCP["MCP · HTTP · TS SDK<br/>Claude Code / Codex 共用一份记忆"]
-  BENCH["eval/bench.py · LongMemEval_S<br/>显式 --embedder bge-small · 英文<br/>84.4% vs 73.2% full-context"]
+  BENCH["eval/bench.py · LongMemEval_S<br/>显式 --embedder bge-small · 英文<br/>历史v3：84.4% vs 78.8% full-context"]
 
   SRC_A --> S1
   S1 -->|"append Episode"| CORE
@@ -139,6 +170,8 @@ flowchart TD
 
 | 日期 | 优化点 | 架构位置 | 解决的问题 | 验收证据 |
 | --- | --- | --- | --- | --- |
+| 2026-10-29 | 控制台浏览与精确来源 | Service/HTTP/React 管理面 | 会话状态筛选和真实 offset 分页；按会话读原文；事实分类/来源/排序；按事实 provenance 直接查询旧来源，显式展开原文；缓存按账号、事实和敏感显示隔离；关闭会话按真实提炼状态反馈。未修改检索算法、存储格式和基准数字。 | `tests/test_console_browse.py` 10 项；完整 pytest 649 passed / 1 skipped；前端 build 与 zero-setup 通过。浏览器操作记录见 `docs/console-browse-validation-20261029.md`。 |
+| 2026-10-25 | 真实使用闭环：同库接入、采集状态与纯召回 | MCP/setup/doctor、watcher/hook、session close、HTTP recall | MCP 支持复用 watcher 的 key file；项目级两个接入入口经实际进程回读到同一租户。无可读对话的 JSONL 按文件大小独立跳过，不占满后续批次、不算 fed；关闭失败重试耗尽进入 deferred，不标 seen。模型错误与合法空结论分离；MCP 传 `answer=false`，避免纯召回额外生成。没有调整检索排序或 benchmark 算法 | `results/real_usage_loop_2026-10-25.json`；完整离线回归 639 passed / 1 skipped；实际调度批次识别 23 个无可读对话文件、保留 2 个提炼失败状态并写入 1 个原文 episode。5 个冻结历史问题经同一代理模型隔离对照，记忆组均恢复了来源支持的回答；这是单会话定点验收，不是通用准确率。当前提炼仍受无效 provider 凭证阻塞 |
 | 2026-09-07 | `facility_metric`（L0–L4 设施性度量口径） | Evaluation harness 新增一条与 benchmark 并列的度量线（`eval/facility.py`），不触碰检索、打分或读路径 | 准确率这条线已经有 harness 兜底（84.4% vs 73.2%），但「记忆是不是一个有人依赖的设施」此前完全没有仪表：记忆在飞快变满（本机 2911 条结论 / 552 episodes / 495 个已喂会话），却没有任何数字回答它有没有被读过、读到的是不是空的、写入延迟是多少。本次把 owner 的五级目标阶梯变成一条 15–22 秒、无 LLM、只出计数与比率的命令。四个刻意的口径决定：① **closed 只认服务端**——`watch_state.json["seen"]` 会在 3 次 close 失败后记下「放弃」，把它当证据会把失败读成成功，因此唯一证据是 `GET /v1/sessions` 里出现 `_session_label(path)`；② **lag 只认 `fed` 结尾的 watch.log 区块**——日志里有 158 个区块头但只有 35 次真正 `fed`（另有 122 次 `server unreachable`），按区块头计会给从未落库的会话报延迟；③ **工具调用按结构匹配、不按子串**——名字先剥 `mcp__<server>__` 前缀再判 `engram_` 开头，且必须是 `tool_use` / `function_call` 块；本机 4531 行文本提到过 `engram_*`，子串匹配会把 61 次真实调用夸大 74 倍。字节预过滤集里 `"tool_result"` 是独立必需项——`"tool_use_id"` 不含 `"tool_use"`（少一个引号），漏掉它会让 recall reach 静默变 0 而其余数字全部正常；④ **exit 1（设施退化）与 exit 2（仪表本身坏了）分开**，并常驻打印 control 行（本机 exec 47047 / Bash 29561 / exec_command 17011，137 个工具名）——control 为 0 只可能是匹配器瞎了，不可能是事实。隐私上，输出 schema 与表格里没有任何字段能装下事实文本、查询、session id、项目名或文件路径；`/v1/memories` 一律带 `facts_limit=0`（任何正值会返回事实原文）。本次**只度量、不修**：读写目标不一致、L3 结论层不去重、Codex 无 session_end 事件三项均如实上报，不由度量脚本顺手改掉 —— 一个会修复自己所测对象的指标，对两边都不可信 | `tests/test_facility.py` 19 项（全部合成 fixture，不碰 owner 真实语料；含 74 倍子串膨胀、`mcp__` 前缀、缺 `"tool_result"` 预过滤时 reach 塌成 0、dry-run/unreachable 区块不计延迟、文件长大后不进延迟样本、放弃型 `seen` 条目算 ledger-done 但不算 closed、golden 输出不含任何 fixture 路径/事实/session id、control=0 → exit 2、coverage 掉 >5pp → exit 1）+ 全量 `pytest tests/` 614 passed / 1 skipped + `examples/quickstart.py` 无 key 通过；本机首跑日志 `results/facility.jsonl`。复现：`python eval/facility.py --days 7 --url http://127.0.0.1:8766 --key-file ~/.engram/watch.key` |
 | 2026-09-07 | 会话结束即喂：Claude Code `SessionEnd` hook + hook↔watcher 交接 | 写路径新增第二个触发点（`connectors/session_hook.py`）/ settings.json 安装器（`connectors/hook_install.py`）/ 调度层扩展（`connectors/watch.py` 的 `load_claims`、`fold_claims`、`--install-hook` / `--uninstall-hook` / `--status` hook 段） | ① 写入侧的结构性延迟：watcher = 静默 900s + tick 1800s，下限就是 15–45 min，本机实测 p50 78.7h（backlog 深于单 tick `--limit`）。hook 在会话结束后数秒内喂完同一个文件，成本仍是**每会话 1 次 LLM**（1 次 `/v1/import` + 1 次 `/v1/sessions/close`），不是每轮；② 两个写入者会互相踩：hook **不写** `watch_state.json`（`run_once` 在 `watch.lock` 下读-改-写，hook 的写会被 tick 的旧值静默覆盖），改为 `O_APPEND` 追加 `~/.engram/hook_claims.jsonl`，watcher 在自己已经持有的锁内 `fold_claims` 折算进 `seen`；③ 喂错服务器：`~/.claude.json` 的 MCP `engram` 指向公开 demo，hook 的 url/key 只从**已安装的 watcher job**解析并字面写进 settings.json 命令串，运行时再用 `_target` 与 `watch_state.json` 比对，不符即 `refused:` 退出；④ 不能碰 owner 的 settings.json：安装器先做「能否原样复现」的往返断言，不能复现就打印条目让人手贴并非零退出，能复现才先备份 `settings.json.engram-bak-<ISO8601>` 再 temp-file + `os.replace`；卸载只按命令串里的 `engram.connectors.session_hook` 认自己那一片叶子；写回时**保留原权限位并跟随 symlink**（owner 的真实文件是 0600 且 settings.json 允许带 token 的 `env` 段，按 umask 重写会把它悄悄放宽成 0644；`~/.claude/settings.json` 常是 dotfiles 仓库的软链，`os.replace` 会把软链换成普通文件——安装报成功、被版本管理的那份从未收到条目、下次 checkout 又把 hook 拿走） | `tests/test_session_hook.py`（33 项，含 4 组 settings fixture 的 `uninstall(install(x)) == x` 往返、第三方 `SessionEnd` 条目存活、目标不符零调用、`skipped (seen)` 幂等、`sk-` 密钥端到端脱敏、`test_hook_close_is_visible_to_harness` 与 harness 共用 `_session_label` 的耦合测试）；复现：`engram-watch --install-hook --dry-run --settings ~/.claude/settings.json` |
 | 2026-09-07 | `facility_metric` 复核修正：Codex 结果 join + 重放去重 | 只动 `eval/facility.py` 的统计口径，不触碰检索、写路径或服务端 | 独立复核用「另一种算法重算同一个数」的方式攻击 harness 自己的输出，抓到两个会让指标说谎的口径缺陷：① **recall reach 把 Codex 的调用算进分母却永远算不进分子**——结果 join 只认 Claude 的 `tool_result` 块，Codex 的结果是自己的 `function_call_output` payload 行（按 `call_id` 关联），而 `"function_call_output"` 并不包含 `"function_call"` 这串字节（少一个引号），所以调用被计数、结果永远读不到。本机 `--all` 因此打印 `13/50 = 26%`，看上去像「四次召回三次落空」；把 Codex 的 `function_call_output` / `custom_tool_call_output` 一并 join、并剥掉 Codex 给 MCP 结果加的 `Wall time: N seconds\nOutput:\n` 前缀（不剥就会让每条 Codex 召回只靠前缀长度过关、空召回哨兵句永远命中不到）之后，真值是 `42/42 = 100%`。错的方向最坏：它把「记忆答得出来」误报成「记忆答不出来」；② **恢复会话的重放被当成新的读**——`--resume` 会另写一个 transcript 文件，把整段历史连同 `tool_use` 块和它们的 id 一起重放，逐文件累加就把同一次调用数了多遍。本机全语料 182 次原始 engram 调用其实只有 110 次不同调用；`--all` 的 L2 因此打印 154，真值 94（虚高 64%）。按 call id 去重（两端 call id 都是每次调用唯一，本机 182 次调用无一缺 id）后与独立重算逐位一致。虚高落在 L2 —— 恰好是 owner 想做大的那一级，指标不能替它注水；③ 顺带把 `drain ETA` 改成 `>=`：它按每 tick 满额 25 个新会话算，而 watch.log 自己记录的净排空是 39 个 tick 从 2064 降到 1596（约 12/tick），原来的写法是一个被自家日志证伪的数 | `tests/test_facility.py` 新增 3 项（Codex `function_call_output` 能 join 到 reach、带 `Wall time` 前缀的空召回不算 reached、重放文件不重复计数且换 id 后仍计两次）；全量 `pytest tests/` 614 passed / 1 skipped；本机复核：`--all` L2 154→94、reach 26%→100%，两项均与独立脚本重算结果逐位相同。复现：`python eval/facility.py --all --url http://127.0.0.1:8766 --key-file ~/.engram/watch.key --no-out` |

@@ -1,0 +1,17 @@
+{
+  "status": "passed",
+  "checks": [
+    "public_assets_match_release_manifest",
+    "public_job_failure_and_retry_controls",
+    "public_question_resolution_readback",
+    "public_review_filters",
+    "provider_failure_shown_without_fake_answer",
+    "public_sources_and_admin_gate",
+    "actual_admin_unlock_over_ssh_tunnel",
+    "public_selective_forget_confirmation_synthetic_data",
+    "all_six_public_pages_390px_no_overflow",
+    "no_browser_runtime_errors"
+  ],
+  "runtime_errors": [],
+  "model_generation": "blocked_by_existing_invalid_provider_credential"
+}

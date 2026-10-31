@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 from urllib.parse import quote, urlencode
 
@@ -288,7 +289,8 @@ class RemoteBackend:
         as_of: float | None = None,
         redact_sensitive: bool = False,
     ) -> dict:
-        body = {"query": query, "lean": lean, "n_chunks": n_chunks}
+        # The calling agent generates the answer; MCP needs retrieval without a second model call.
+        body = {"query": query, "lean": lean, "n_chunks": n_chunks, "answer": False}
         if session_id is not None:
             body["session_id"] = session_id
         if as_of is not None:
@@ -409,10 +411,42 @@ class RemoteBackend:
         return f"remote Engram server at {self.api_url}"
 
 
-def make_backend() -> Backend:
+def api_key_source(api_key: str | None = None, api_key_file: str | None = None,
+                   *, default: str = "") -> tuple[str | None, str | None]:
+    """Select a credential without expanding file contents into generated client configs.
+
+    Explicit key > explicit file > environment key > environment file > default.
+    Selection and reading are separate so a selected invalid file never falls back to another tenant.
+    """
+    if api_key is not None:
+        return api_key, None
+    if api_key_file is not None:
+        return None, str(Path(api_key_file).expanduser().absolute())
+    if os.environ.get("ENGRAM_API_KEY"):
+        return os.environ["ENGRAM_API_KEY"], None
+    if os.environ.get("ENGRAM_API_KEY_FILE"):
+        return None, str(Path(os.environ["ENGRAM_API_KEY_FILE"]).expanduser().absolute())
+    return default, None
+
+
+def resolve_api_key(api_key: str | None = None, api_key_file: str | None = None,
+                    *, default: str = "") -> str:
+    key, path = api_key_source(api_key, api_key_file, default=default)
+    if path is None:
+        return key or ""
+    try:
+        key = Path(path).read_text(encoding="utf-8").strip()
+    except (OSError, UnicodeError) as exc:
+        raise ValueError(f"cannot read API key file: {path} ({type(exc).__name__})") from None
+    if not key:
+        raise ValueError(f"API key file is empty: {path}")
+    return key
+
+
+def make_backend(*, api_key: str | None = None, api_key_file: str | None = None) -> Backend:
     """Pick the backend from the environment: ENGRAM_API_URL -> remote proxy, else local in-process
     memory in the ENGRAM_NAMESPACE namespace (default 'me')."""
     api_url = os.environ.get("ENGRAM_API_URL")
     if api_url:
-        return RemoteBackend(api_url, os.environ.get("ENGRAM_API_KEY", ""))
+        return RemoteBackend(api_url, resolve_api_key(api_key, api_key_file))
     return LocalBackend(os.environ.get("ENGRAM_NAMESPACE", "me"))

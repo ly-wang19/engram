@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
+import stat
 from contextlib import contextmanager
 from dataclasses import fields
 from typing import Any, Iterable
@@ -19,6 +21,8 @@ from .memory_store import InMemoryDocStore, InMemoryGraphStore
 
 SCHEMA_VERSION = 1
 COLLECTIONS = ("episodes", "facts", "entities", "relations", "working", "conflicts")
+SNAPSHOT_FILES = tuple(f"{name}.jsonl" for name in COLLECTIONS) + ("manifest.json",)
+_BACKUP_DIR = ".snapshot-backup"
 
 
 class PersistenceError(Exception):
@@ -72,12 +76,97 @@ def _lock(path: str):
     with open(lock_path, "a", encoding="utf-8") as fh:
         try:
             import fcntl
-
-            fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
-            yield
-            fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
         except ImportError:  # pragma: no cover - fcntl exists on supported Linux/macOS targets.
             yield
+            return
+        fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+
+
+def _sync_dir(path: str) -> None:
+    fd = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def _copy_synced(source: str, target: str) -> None:
+    with open(source, "rb") as src, open(target, "wb") as dst:
+        os.fchmod(dst.fileno(), stat.S_IMODE(os.fstat(src.fileno()).st_mode))
+        shutil.copyfileobj(src, dst)
+        dst.flush()
+        os.fsync(dst.fileno())
+
+
+def _recover_snapshot(path: str) -> None:
+    backup = os.path.join(path, _BACKUP_DIR)
+    ready = os.path.join(backup, "ready.json")
+    if not os.path.exists(ready):
+        return
+    try:
+        with open(ready, "r", encoding="utf-8") as fh:
+            present = json.load(fh)
+        if not isinstance(present, list) or any(name not in SNAPSHOT_FILES for name in present):
+            raise ValueError("invalid snapshot backup file list")
+        # Check all recovery inputs before changing the live snapshot. Keep backups until recovery
+        # completes, so another interruption during recovery itself can safely retry the same work.
+        if any(not os.path.isfile(os.path.join(backup, name)) for name in present):
+            raise ValueError("snapshot backup is incomplete")
+    except (ValueError, TypeError) as exc:
+        raise StoreFormatError("cannot recover unfinished snapshot: invalid backup") from exc
+    for name in SNAPSHOT_FILES:
+        target = os.path.join(path, name)
+        if name in present:
+            tmp = target + ".recover"
+            _copy_synced(os.path.join(backup, name), tmp)
+            os.replace(tmp, target)
+        elif os.path.exists(target):
+            os.unlink(target)
+    _sync_dir(path)
+    os.unlink(ready)
+    _sync_dir(backup)
+
+
+@contextmanager
+def _snapshot_transaction(path: str):
+    _recover_snapshot(path)
+    backup = os.path.join(path, _BACKUP_DIR)
+    # An unmarked backup is either an interrupted preparation or a completed transaction.
+    if os.path.exists(backup):
+        shutil.rmtree(backup)
+    os.mkdir(backup, mode=0o700)
+    present = []
+    for name in SNAPSHOT_FILES:
+        source = os.path.join(path, name)
+        if os.path.exists(source):
+            _copy_synced(source, os.path.join(backup, name))
+            present.append(name)
+    _sync_dir(backup)
+    ready = os.path.join(backup, "ready.json")
+    ready_tmp = ready + ".tmp"
+    with open(ready_tmp, "w", encoding="utf-8") as fh:
+        json.dump(present, fh)
+        fh.flush()
+        os.fsync(fh.fileno())
+    os.replace(ready_tmp, ready)
+    _sync_dir(backup)
+    _sync_dir(path)
+    try:
+        yield
+        _sync_dir(path)
+    except Exception:
+        _recover_snapshot(path)
+        raise
+    # The backup marker is the commit boundary for all collection replacements, not just the final
+    # manifest rename. A process exit before this point is recovered by the next locked load/save.
+    os.unlink(ready)
+    _sync_dir(backup)
+    # Keep a committed save successful even if best-effort removal of its obsolete backup fails.
+    shutil.rmtree(backup, ignore_errors=True)
 
 
 def _write_jsonl(path: str, name: str, rows: Iterable[dict[str, Any]]) -> int:
@@ -149,7 +238,7 @@ def save_memory(mem: Any, path: str, backend: str = "durable") -> None:
     if os.path.exists(path) and not os.path.isdir(path):
         raise StoreFormatError(f"store path exists and is not a directory: {path}")
 
-    with _lock(path):
+    with _lock(path), _snapshot_transaction(path):
         episodes = sorted(mem.episodes_doc.values(), key=lambda e: e.id)
         hot_ids = {f.id for f in mem.fact_store.values()}
         facts = []
@@ -221,6 +310,15 @@ def load_memory(mem: Any, path: str, allow_mismatch: bool = False) -> bool:
         raise StoreFormatError(
             f"{path} is not an Engram JSONL store directory; run the explicit pickle migration first"
         )
+    if not os.path.isdir(path):
+        return False
+    # Readers must not observe any of the intermediate collection replacements of a writer.
+    with _lock(path):
+        _recover_snapshot(path)
+        return _load_memory(mem, path, allow_mismatch)
+
+
+def _load_memory(mem: Any, path: str, allow_mismatch: bool) -> bool:
     manifest_path = os.path.join(path, "manifest.json")
     if not os.path.exists(manifest_path):
         return False

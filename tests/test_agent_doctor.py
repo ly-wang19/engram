@@ -147,6 +147,7 @@ def test_diagnose_remote_http_lifecycle_success(monkeypatch):
         if path == "/v1/sessions/close":
             return {"ok": True}
         if path == "/v1/recall":
+            assert body["answer"] is False
             return {
                 "context": (
                     "Project decision: Engram remote doctor verifies cross-agent handoff.\n"
@@ -467,3 +468,64 @@ def test_render_report_is_actionable():
     assert "PASS Python MCP lifecycle" in text
     assert "FAIL Codex CLI" in text
     assert "Fix the failing check" in text
+
+
+def test_doctor_key_file_routes_http_and_validates_configs(tmp_path, monkeypatch):
+    key_file = tmp_path / "watch.key"
+    key_file.write_text("shared-doctor-secret\n")
+    monkeypatch.setenv("ENGRAM_API_KEY", "ambient-wrong-tenant")
+    config = tmp_path / ".mcp.json"
+    config.write_text(json.dumps({"mcpServers": {"engram": {
+        "command": "/opt/engram/python", "args": ["-m", "engram.mcp", "--api-url",
+        "http://engram.test", "--api-key-file", str(key_file)]}}}))
+    monkeypatch.setattr(D, "_python_probe", lambda _: {"name": "python", "status": "ok"})
+    monkeypatch.setattr(D, "_stdio_probe", lambda _: {"name": "stdio", "status": "ok"})
+    calls = []
+    monkeypatch.setattr(D, "_remote_http_probe", lambda url, key: calls.append((url, key)) or {
+        "name": "remote", "status": "ok"})
+    report = D.diagnose(python_cmd="/opt/engram/python", api_url="http://engram.test",
+                        api_key_file=str(key_file), mcp_json=str(config))
+    assert report["ok"] is True
+    assert calls == [("http://engram.test", "shared-doctor-secret")]
+    assert report["checks"][-1]["data"]["api_key_file_ok"] is True
+    rendered = D.render_report(report) + json.dumps(report)
+    assert "shared-doctor-secret" not in rendered and "ambient-wrong-tenant" not in rendered
+
+
+def test_doctor_invalid_file_blocks_remote_probe(tmp_path, monkeypatch):
+    monkeypatch.setenv("ENGRAM_API_KEY", "must-not-fallback")
+    monkeypatch.setattr(D, "_python_probe", lambda _: {"name": "python", "status": "ok"})
+    monkeypatch.setattr(D, "_stdio_probe", lambda _: {"name": "stdio", "status": "ok"})
+    calls = []
+    monkeypatch.setattr(D, "_remote_http_probe", lambda *args: calls.append(args))
+    report = D.diagnose(api_url="http://engram.test", api_key_file=str(tmp_path / "missing"))
+    assert report["ok"] is False and not calls
+    assert "must-not-fallback" not in json.dumps(report)
+
+
+def test_doctor_rejects_key_overriding_requested_file(tmp_path):
+    key_file = tmp_path / "watch.key"
+    key_file.write_text("shared-key")
+    report = D._check_mcp_server_config("test", {
+        "command": "python", "args": ["-m", "engram.mcp", "--api-url", "http://engram.test",
+        "--api-key-file", str(key_file), "--api-key", "different-key"]},
+        python_cmd="python", api_url="http://engram.test", api_key=None, api_key_file=str(key_file))
+    assert report["status"] == "fail"
+    assert "different-key" not in json.dumps(report)
+
+
+def test_stdio_doctor_ignores_ambient_remote_routing(tmp_path, monkeypatch):
+    import sys
+    import pytest
+
+    pytest.importorskip("mcp")
+    # If inherited, these fail before contacting any server. The probe must still exercise two local
+    # stdio processes and their temporary shared namespace, regardless of workstation remote config.
+    monkeypatch.setenv("ENGRAM_API_URL", "http://engram.invalid")
+    monkeypatch.setenv("ENGRAM_API_KEY", "")
+    monkeypatch.setenv("ENGRAM_API_KEY_FILE", str(tmp_path / "missing-credential"))
+    monkeypatch.setenv("ENGRAM_NAMESPACE", "ambient-other-tenant")
+    result = D._stdio_probe(sys.executable)
+    assert result["status"] == "ok", result["detail"]
+    assert result["data"]["isolated_processes"] is True
+    assert result["data"]["recalled"] is True

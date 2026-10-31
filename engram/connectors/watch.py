@@ -43,7 +43,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from . import hook_install
-from .agent_sessions import find_sessions, load_sessions
+from .agent_sessions import find_sessions, load_sessions, parse_agent_session
 
 DEFAULT_STATE = os.path.expanduser("~/.engram/watch_state.json")
 # The SessionEnd hook's side of the handshake: it appends here, this module folds it into `seen`.
@@ -68,8 +68,8 @@ QUIET_SECONDS = 15 * 60
 IMPORT_CHUNK_BYTES = 1_500_000  # under the server's 2 MiB default, with room for JSON overhead
 
 # A path whose close keeps failing (model outage, a transcript the distiller cannot digest) is retried
-# on later ticks, but not forever: after this many failures it is marked seen so one bad file cannot
-# occupy a slot of every tick's `--limit` from then on.
+# on later ticks, but not forever: after this many failures its size is deferred separately from seen
+# so one bad file cannot occupy every tick's `--limit` or be mistaken for a completed import+close.
 MAX_CLOSE_FAILURES = 3
 
 EXIT_OK = 0
@@ -201,6 +201,7 @@ def pending_sessions(state: dict, since: Optional[float] = None,
     """Transcripts worth ingesting: changed since we last saw them, and no longer being written to."""
     now = now if now is not None else time.time()
     seen = state.get("seen") or {}
+    non_conversational = state.get("non_conversational") or {}
     claimed = claims or {}
     out = []
     for path in find_sessions(since=since):
@@ -212,6 +213,10 @@ def pending_sessions(state: dict, since: Optional[float] = None,
             continue  # still live; ingesting now would only force a re-ingest later
         if seen.get(path) == st.st_size or claimed.get(path) == st.st_size:
             continue  # unchanged since the last run, or already fed by the SessionEnd hook
+        if non_conversational.get(path) == st.st_size:
+            continue  # parsed successfully but no conversation; growth makes it eligible again
+        if (state.get("close_deferred") or {}).get(path) == st.st_size:
+            continue  # retry budget exhausted; new content or clearing this entry permits another try
         # A transcript that cannot fit in one request is skipped rather than retried every tick — but the
         # record is keyed on (size, limit), so growing the file or raising the server's cap re-queues it.
         if (state.get("oversized") or {}).get(path) == f"{st.st_size}:{max_bytes}":
@@ -264,6 +269,31 @@ def _post(base_url: str, api_key: str, path: str, body: dict, timeout: int) -> d
         return json.loads(resp.read().decode("utf-8"))
 
 
+def _empty_transcript_size(path: str) -> tuple[Optional[int], Optional[str]]:
+    """Prove an empty parse is harmless before excluding that file size from future ticks.
+
+    load_sessions intentionally tolerates unreadable files and truncated JSONL. Those cases must stay
+    retryable, so only its empty results need this stricter check. Recheck the conversation too: the
+    file may have gained a real turn between the first parse and this read.
+    """
+    try:
+        with open(path, encoding="utf-8") as fh:
+            before = os.fstat(fh.fileno())
+            text = fh.read()
+        for line in text.splitlines():
+            if line.strip() and not isinstance(json.loads(line), dict):
+                return None, "invalid_jsonl_record"
+        if parse_agent_session(text):
+            return None, "changed_since_parse"
+        after = os.stat(path)
+        if ((before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns) !=
+                (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns)):
+            return None, "changed_during_read"
+        return before.st_size, None
+    except (OSError, ValueError, TypeError) as exc:
+        return None, type(exc).__name__
+
+
 def ingest(base_url: str, api_key: str, paths: list[str], timeout: int = 900,
            outcomes: bool = True, extract_facts: bool = False,
            max_bytes: int = IMPORT_CHUNK_BYTES) -> dict:
@@ -276,22 +306,36 @@ def ingest(base_url: str, api_key: str, paths: list[str], timeout: int = 900,
     Returns the import result plus `outcomes`, `closed_ok` / `close_failed` (session ids) and
     `sessions_by_path` so the caller can mark a transcript seen only once its sessions were distilled.
     """
-    # One parse per file, same cost as before — but keyed by path, because "seen" is a per-file ledger
-    # and a file is only done once every session it holds has been closed.
+    # Key by path because "seen" is a per-file ledger: every session in a file must be closed.
+    # Empty parses get a stricter read below before they can be excluded from future ticks.
     by_path: dict[str, list[str]] = {}
+    non_conversational: dict[str, int] = {}
+    unparsed: dict[str, str] = {}
     sessions = []
     known: set[str] = set()
     for p in paths:
         by_path[p] = []
-        for s in load_sessions([p]):
+        try:
+            parsed = load_sessions([p])
+        except (OSError, ValueError, TypeError) as exc:
+            unparsed[p] = type(exc).__name__
+            continue
+        if not parsed:
+            size, error = _empty_transcript_size(p)
+            if size is not None:
+                non_conversational[p] = size
+            else:
+                unparsed[p] = error or "unparsed"
+        for s in parsed:
             by_path[p].append(s.session_id)
             if s.session_id in known:
                 continue  # the same id from two files: the server dedupes, one close is enough
             known.add(s.session_id)
             sessions.append(s)
     if not sessions:
-        return {"ok": True, "sessions": 0, "episodes": 0, "note": "nothing conversational in those files",
-                "outcomes": 0, "closed_ok": [], "close_failed": [], "sessions_by_path": by_path}
+        return {"ok": True, "sessions": 0, "episodes": 0, "note": "no importable sessions",
+                "outcomes": 0, "closed_ok": [], "close_failed": [], "sessions_by_path": by_path,
+                "non_conversational_by_path": non_conversational, "unparsed_by_path": unparsed}
 
     # Session-level time only, never per-message timestamps or file paths: the wire payload is what a
     # hosted server keeps, and `metadata.source` is what routes it away from per-turn extraction.
@@ -307,7 +351,8 @@ def ingest(base_url: str, api_key: str, paths: list[str], timeout: int = 900,
     sent_ids: set[str] = set()
     first_error: Optional[BaseException] = None
     result: dict = {"ok": True, "sessions": 0, "episodes": 0, "skipped": 0,
-                    "facts_deferred": 0, "batches": len(batches), "import_failed": 0}
+                    "facts_deferred": 0, "batches": len(batches), "import_failed": 0,
+                    "non_conversational_by_path": non_conversational, "unparsed_by_path": unparsed}
     for batch in batches:
         payload: dict = {"sessions": batch}
         if extract_facts:
@@ -352,6 +397,14 @@ def ingest(base_url: str, api_key: str, paths: list[str], timeout: int = 900,
         try:
             closed = _post(base_url, api_key, "/v1/sessions/close",
                            {"session_id": s.session_id, "outcomes": True}, timeout)
+            status = closed.get("outcomes_status")
+            # Older servers omitted status entirely. Keep that compatibility, but an explicit
+            # status must positively acknowledge completion; unknown/cancelled is not success.
+            if (closed.get("ok") is False or
+                    ("outcomes_status" in closed and
+                     (status != "completed" or closed.get("ok") is not True))):
+                result["close_failed"].append(s.session_id)
+                continue  # HTTP 200 is not evidence that distillation succeeded
             distilled += int(closed.get("outcomes") or 0)
             result["closed_ok"].append(s.session_id)
         except Exception:  # noqa: BLE001 — the transcripts are already stored; a failed distil is retryable
@@ -417,7 +470,7 @@ def run_once(args) -> dict:
     state = _load_state(args.state)
     target = _target(args.url, key)
     if state.get("target") and state.get("target") != target:
-        state["seen"], state["close_failures"] = {}, {}
+        state["seen"], state["close_failures"], state["close_deferred"] = {}, {}, {}
     # `since` is only ever the explicit window. Deriving it from `last_run` stranded every session the
     # previous tick did not reach (a `--limit 25` backfill of 3000 files would have "seen" 25 and
     # silently dropped the rest); the size ledger already makes re-scanning cheap.
@@ -450,7 +503,7 @@ def run_once(args) -> dict:
                 _log(f"folded {folded} hook claim(s) into the ledger")
         return {"exit": EXIT_OK, "sessions": 0, "backlog": backlog}
 
-    seen_before = state.get("seen") or {}
+    seen_before = set(state.get("seen") or {})
     fresh = sum(1 for p in paths if p not in seen_before)
     grown = len(paths) - fresh
     detail = f"{fresh} new" + (f", {grown} grown since last run" if grown else "")
@@ -474,6 +527,14 @@ def run_once(args) -> dict:
         # Under the lock, before anything reads `seen`: a transcript the hook already fed must not be
         # re-closed here just because it was still claimed-but-not-folded when we listed the backlog.
         fold_claims(state, claims_path, target=target)
+        # A close can take minutes. Never acknowledge bytes appended while the request was in
+        # flight: they were not necessarily part of the parsed/uploaded transcript.
+        attempted_sizes: dict[str, int] = {}
+        for p in paths:
+            try:
+                attempted_sizes[p] = os.stat(p).st_size
+            except OSError:
+                pass
         try:
             result = ingest(args.url, key, paths, outcomes=not args.no_outcomes,
                             extract_facts=args.extract_facts,
@@ -495,8 +556,18 @@ def run_once(args) -> dict:
         # normal and cheap, because /v1/import fingerprints content rather than trusting the caller.
         seen = state.get("seen") or {}
         failures = state.get("close_failures") or {}
+        deferred = dict(state.get("close_deferred") or {})
         closed_ok = set(result.get("closed_ok") or [])
         by_path = result.get("sessions_by_path") or {p: [] for p in paths}
+        ignored = result.get("non_conversational_by_path") or {}
+        empty_ledger = dict(state.get("non_conversational") or {})
+        # Drop stale size records for files we reconsidered; only a new successful empty parse may
+        # replace one. This state never implies an import, a close, or a hook claim succeeded.
+        for p in paths:
+            empty_ledger.pop(p, None)
+            deferred.pop(p, None)
+        empty_ledger.update(ignored)
+        state["non_conversational"] = empty_ledger
         # Transcripts too large for one request: record (size, limit) so they stop occupying a slot every
         # tick, and say so once with the knob that would let them in.
         over_by_path = result.get("oversized_by_path") or {}
@@ -507,45 +578,68 @@ def run_once(args) -> dict:
             state["oversized"] = ledger
             _log(f"{len(over_by_path)} transcript(s) exceed the {getattr(args, 'max_bytes', IMPORT_CHUNK_BYTES):,}-byte request budget and "
                  f"were skipped; raise ENGRAM_MAX_REQUEST_BYTES on the server and --max-bytes here to include them")
-        close_failed_paths = 0
+        newly_deferred: set[str] = set()
+        completed_ids: set[str] = set()
+        completed_paths: set[str] = set()
+        resolved_paths = set(ignored) | set(over_by_path)
         for p in paths:
-            if p in over_by_path:
+            if p in over_by_path or p in ignored:
                 continue  # skipped above; not seen, not a close failure
             ids = by_path.get(p, [])
             if not ids:
                 continue  # its batch was rejected — retry exactly these next tick
             done = args.no_outcomes or all(sid in closed_ok for sid in ids)
+            completed_ids.update(sid for sid in ids if args.no_outcomes or sid in closed_ok)
+            if done:
+                completed_paths.add(p)
             if not done:
                 # Not seen: the transcript is stored but not distilled, and the next tick must retry
                 # the close. Bounded, so one undigestible file cannot hold a slot forever.
                 n = failures.get(p, 0) + 1
                 failures[p] = n
-                close_failed_paths += 1
                 if n < MAX_CLOSE_FAILURES:
                     continue
                 failures.pop(p, None)
+                try:
+                    deferred[p] = attempted_sizes[p]
+                    newly_deferred.add(p)
+                    if os.stat(p).st_size == attempted_sizes[p]:
+                        resolved_paths.add(p)
+                except (OSError, KeyError):
+                    pass
+                continue  # exhausted is deferred, never successfully seen
             else:
                 failures.pop(p, None)
             try:
-                seen[p] = os.stat(p).st_size
-            except OSError:
+                seen[p] = attempted_sizes[p]
+                if os.stat(p).st_size == attempted_sizes[p]:
+                    resolved_paths.add(p)
+            except (OSError, KeyError):
                 continue
         # Cap the ledger so it cannot grow without bound on a machine with thousands of transcripts.
         if len(seen) > 5000:
             seen = dict(sorted(seen.items())[-5000:])
         seconds = round(time.time() - started, 1)
+        fed_new = sum(p not in seen_before for p in completed_paths)
         summary = {
-            "at": started, "sessions": len(paths), "new": fresh, "grown": grown,
+            "at": started, "sessions": len(completed_ids), "new": fed_new,
+            "grown": len(completed_paths) - fed_new, "attempted": len(paths),
+            "ignored_non_conversational": len(ignored),
+            "unparsed": len(result.get("unparsed_by_path") or {}),
+            "close_deferred": len(newly_deferred),
             "episodes": int(result.get("episodes") or 0), "outcomes": int(result.get("outcomes") or 0),
             "close_failed": len(result.get("close_failed") or []), "error": None, "seconds": seconds,
         }
-        state.update({"seen": seen, "close_failures": failures, "last_run": started,
+        state.update({"seen": seen, "close_failures": failures, "close_deferred": deferred, "last_run": started,
                       "target": target, "last_result": summary})
         _save_state(args.state, state)
-        _log(f"fed {len(paths)} session(s) ({fresh} new) · {summary['episodes']} episode(s) · "
+        _log(f"fed {summary['sessions']} session(s) ({fed_new} new) · {summary['episodes']} episode(s) · "
              f"{summary['outcomes']} conclusion(s) · {summary['close_failed']} close failure(s) · "
+             f"{summary['close_deferred']} deferred after retries · "
+             f"{summary['ignored_non_conversational']} non-conversational skipped · "
+             f"{summary['unparsed']} unparsed (retry next tick) · "
              f"{seconds}s")
-        return {"exit": EXIT_OK, **summary, "result": result, "backlog": backlog - len(paths)}
+        return {"exit": EXIT_OK, **summary, "result": result, "backlog": backlog - len(resolved_paths)}
     finally:
         lock.close()
 

@@ -22,6 +22,7 @@ import { apiBaseUrl } from '../lib/api'
 import { copyText } from '../lib/clipboard'
 import { useAuth } from '../store/auth'
 import type { Policy } from '../types'
+import { ModelSettings, ConnectionSettings } from '../features/admin/ManagementSettings'
 
 export default function Settings() {
   const { data, isLoading, isError, error } = usePolicy()
@@ -92,6 +93,8 @@ export default function Settings() {
       />
 
       <CodexSetupCard />
+      <ModelSettings />
+      <ConnectionSettings />
 
       {/* headline: what to record */}
       <Card>

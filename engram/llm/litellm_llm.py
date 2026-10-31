@@ -46,6 +46,7 @@ class LiteLLMClient(LLM):
     _PERMANENT = (
         "authenticationerror", "invalid api key", "invalid_api_key", "incorrect api key",
         "permissiondenied", "permission denied", "no api key", "api key not",
+        "authentication_error", "authentication fails", "invalid_request_error: invalid api key",
     )
 
     def _run(self, messages: list, **kwargs) -> str:

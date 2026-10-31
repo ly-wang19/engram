@@ -1,0 +1,687 @@
+--- a/engram/consolidate/engine.py
++++ b/engram/consolidate/engine.py
+@@ -89,24 +89,17 @@
+                 futs = {pool.submit(self.extractor.raw_items, ep): ep for ep in chrono}
+                 for fut in as_completed(futs):
+                     ep = futs[fut]
+-                    try:
+-                        raw[ep.id] = fut.result()
+-                    except Exception:  # noqa: BLE001
+-                        raw[ep.id] = []
++                    # A failed extraction is not a successful empty result. Abort before committing
++                    # facts or completion flags so the durable pending batch can be retried.
++                    raw[ep.id] = fut.result()
+             for ep in chrono:  # chronological => canonical name is the first one actually stated
+-                try:
+-                    ep_facts[ep.id] = self.extractor.facts_from(ep, raw.get(ep.id, []))
+-                except Exception:  # noqa: BLE001
+-                    ep_facts[ep.id] = []
++                ep_facts[ep.id] = self.extractor.facts_from(ep, raw[ep.id])
+         elif len(chrono) > 1:
+             with ThreadPoolExecutor(max_workers=min(_xw, len(chrono))) as pool:
+                 futs = {pool.submit(self.extractor.extract, ep): ep for ep in chrono}
+                 for fut in as_completed(futs):
+                     ep = futs[fut]
+-                    try:
+-                        ep_facts[ep.id] = fut.result()
+-                    except Exception:  # noqa: BLE001
+-                        ep_facts[ep.id] = []  # extraction failure → no facts from this episode
++                    ep_facts[ep.id] = fut.result()
+         else:
+             for ep in chrono:
+                 ep_facts[ep.id] = self.extractor.extract(ep)
+--- a/engram/store/persist.py
++++ b/engram/store/persist.py
+@@ -7,6 +7,8 @@
+ 
+ import json
+ import os
++import shutil
++import stat
+ from contextlib import contextmanager
+ from dataclasses import fields
+ from typing import Any, Iterable
+@@ -19,6 +21,8 @@
+ 
+ SCHEMA_VERSION = 1
+ COLLECTIONS = ("episodes", "facts", "entities", "relations", "working", "conflicts")
++SNAPSHOT_FILES = tuple(f"{name}.jsonl" for name in COLLECTIONS) + ("manifest.json",)
++_BACKUP_DIR = ".snapshot-backup"
+ 
+ 
+ class PersistenceError(Exception):
+@@ -72,12 +76,97 @@
+     with open(lock_path, "a", encoding="utf-8") as fh:
+         try:
+             import fcntl
+-
+-            fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+-            yield
+-            fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+         except ImportError:  # pragma: no cover - fcntl exists on supported Linux/macOS targets.
+             yield
++            return
++        fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
++        try:
++            yield
++        finally:
++            fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
++
++
++def _sync_dir(path: str) -> None:
++    fd = os.open(path, os.O_RDONLY)
++    try:
++        os.fsync(fd)
++    finally:
++        os.close(fd)
++
++
++def _copy_synced(source: str, target: str) -> None:
++    with open(source, "rb") as src, open(target, "wb") as dst:
++        os.fchmod(dst.fileno(), stat.S_IMODE(os.fstat(src.fileno()).st_mode))
++        shutil.copyfileobj(src, dst)
++        dst.flush()
++        os.fsync(dst.fileno())
++
++
++def _recover_snapshot(path: str) -> None:
++    backup = os.path.join(path, _BACKUP_DIR)
++    ready = os.path.join(backup, "ready.json")
++    if not os.path.exists(ready):
++        return
++    try:
++        with open(ready, "r", encoding="utf-8") as fh:
++            present = json.load(fh)
++        if not isinstance(present, list) or any(name not in SNAPSHOT_FILES for name in present):
++            raise ValueError("invalid snapshot backup file list")
++        # Check all recovery inputs before changing the live snapshot. Keep backups until recovery
++        # completes, so another interruption during recovery itself can safely retry the same work.
++        if any(not os.path.isfile(os.path.join(backup, name)) for name in present):
++            raise ValueError("snapshot backup is incomplete")
++    except (ValueError, TypeError) as exc:
++        raise StoreFormatError("cannot recover unfinished snapshot: invalid backup") from exc
++    for name in SNAPSHOT_FILES:
++        target = os.path.join(path, name)
++        if name in present:
++            tmp = target + ".recover"
++            _copy_synced(os.path.join(backup, name), tmp)
++            os.replace(tmp, target)
++        elif os.path.exists(target):
++            os.unlink(target)
++    _sync_dir(path)
++    os.unlink(ready)
++    _sync_dir(backup)
++
++
++@contextmanager
++def _snapshot_transaction(path: str):
++    _recover_snapshot(path)
++    backup = os.path.join(path, _BACKUP_DIR)
++    # An unmarked backup is either an interrupted preparation or a completed transaction.
++    if os.path.exists(backup):
++        shutil.rmtree(backup)
++    os.mkdir(backup, mode=0o700)
++    present = []
++    for name in SNAPSHOT_FILES:
++        source = os.path.join(path, name)
++        if os.path.exists(source):
++            _copy_synced(source, os.path.join(backup, name))
++            present.append(name)
++    _sync_dir(backup)
++    ready = os.path.join(backup, "ready.json")
++    ready_tmp = ready + ".tmp"
++    with open(ready_tmp, "w", encoding="utf-8") as fh:
++        json.dump(present, fh)
++        fh.flush()
++        os.fsync(fh.fileno())
++    os.replace(ready_tmp, ready)
++    _sync_dir(backup)
++    _sync_dir(path)
++    try:
++        yield
++        _sync_dir(path)
++    except Exception:
++        _recover_snapshot(path)
++        raise
++    # The backup marker is the commit boundary for all collection replacements, not just the final
++    # manifest rename. A process exit before this point is recovered by the next locked load/save.
++    os.unlink(ready)
++    _sync_dir(backup)
++    # Keep a committed save successful even if best-effort removal of its obsolete backup fails.
++    shutil.rmtree(backup, ignore_errors=True)
+ 
+ 
+ def _write_jsonl(path: str, name: str, rows: Iterable[dict[str, Any]]) -> int:
+@@ -149,7 +238,7 @@
+     if os.path.exists(path) and not os.path.isdir(path):
+         raise StoreFormatError(f"store path exists and is not a directory: {path}")
+ 
+-    with _lock(path):
++    with _lock(path), _snapshot_transaction(path):
+         episodes = sorted(mem.episodes_doc.values(), key=lambda e: e.id)
+         hot_ids = {f.id for f in mem.fact_store.values()}
+         facts = []
+@@ -221,6 +310,15 @@
+         raise StoreFormatError(
+             f"{path} is not an Engram JSONL store directory; run the explicit pickle migration first"
+         )
++    if not os.path.isdir(path):
++        return False
++    # Readers must not observe any of the intermediate collection replacements of a writer.
++    with _lock(path):
++        _recover_snapshot(path)
++        return _load_memory(mem, path, allow_mismatch)
++
++
++def _load_memory(mem: Any, path: str, allow_mismatch: bool) -> bool:
+     manifest_path = os.path.join(path, "manifest.json")
+     if not os.path.exists(manifest_path):
+         return False
+--- a/engram/connectors/watch.py
++++ b/engram/connectors/watch.py
+@@ -397,7 +397,12 @@
+         try:
+             closed = _post(base_url, api_key, "/v1/sessions/close",
+                            {"session_id": s.session_id, "outcomes": True}, timeout)
+-            if closed.get("outcomes_status") in {"error", "unavailable", "disabled"}:
++            status = closed.get("outcomes_status")
++            # Older servers omitted status entirely. Keep that compatibility, but an explicit
++            # status must positively acknowledge completion; unknown/cancelled is not success.
++            if (closed.get("ok") is False or
++                    ("outcomes_status" in closed and
++                     (status != "completed" or closed.get("ok") is not True))):
+                 result["close_failed"].append(s.session_id)
+                 continue  # HTTP 200 is not evidence that distillation succeeded
+             distilled += int(closed.get("outcomes") or 0)
+@@ -522,6 +527,14 @@
+         # Under the lock, before anything reads `seen`: a transcript the hook already fed must not be
+         # re-closed here just because it was still claimed-but-not-folded when we listed the backlog.
+         fold_claims(state, claims_path, target=target)
++        # A close can take minutes. Never acknowledge bytes appended while the request was in
++        # flight: they were not necessarily part of the parsed/uploaded transcript.
++        attempted_sizes: dict[str, int] = {}
++        for p in paths:
++            try:
++                attempted_sizes[p] = os.stat(p).st_size
++            except OSError:
++                pass
+         try:
+             result = ingest(args.url, key, paths, outcomes=not args.no_outcomes,
+                             extract_facts=args.extract_facts,
+@@ -588,18 +601,20 @@
+                     continue
+                 failures.pop(p, None)
+                 try:
+-                    deferred[p] = os.stat(p).st_size
++                    deferred[p] = attempted_sizes[p]
+                     newly_deferred.add(p)
+-                    resolved_paths.add(p)
+-                except OSError:
++                    if os.stat(p).st_size == attempted_sizes[p]:
++                        resolved_paths.add(p)
++                except (OSError, KeyError):
+                     pass
+                 continue  # exhausted is deferred, never successfully seen
+             else:
+                 failures.pop(p, None)
+             try:
+-                seen[p] = os.stat(p).st_size
+-                resolved_paths.add(p)
+-            except OSError:
++                seen[p] = attempted_sizes[p]
++                if os.stat(p).st_size == attempted_sizes[p]:
++                    resolved_paths.add(p)
++            except (OSError, KeyError):
+                 continue
+         # Cap the ledger so it cannot grow without bound on a machine with thousands of transcripts.
+         if len(seen) > 5000:
+--- /dev/null
++++ b/tests/test_reliability_consolidation.py
+@@ -0,0 +1,126 @@
++"""Extraction failures must stay retryable, unlike a valid empty extraction."""
++from __future__ import annotations
++
++import pytest
++
++from engram import Memory
++from engram.types import Fact
++
++
++class ExtractionUnavailable(RuntimeError):
++    pass
++
++
++class SinglePhaseExtractor:
++    def __init__(self, failing_content="second"):
++        self.failing_content = failing_content
++
++    def extract(self, ep):
++        if ep.content == self.failing_content:
++            raise ExtractionUnavailable("synthetic extraction failure")
++        return [Fact(subject="synthetic", predicate=ep.content, object="retained",
++                     user_id=ep.user_id, provenance=[ep.id], valid_at=ep.event_time)]
++
++
++class TwoPhaseExtractor(SinglePhaseExtractor):
++    def __init__(self, stage, failing_content="second"):
++        super().__init__(failing_content)
++        self.stage = stage
++
++    def raw_items(self, ep):
++        if self.stage == "raw" and ep.content == self.failing_content:
++            raise ExtractionUnavailable("synthetic provider failure")
++        return [{}]
++
++    def facts_from(self, ep, items):
++        if self.stage == "convert" and ep.content == self.failing_content:
++            raise ExtractionUnavailable("synthetic conversion failure")
++        return SinglePhaseExtractor(None).extract(ep)
++
++    def extract(self, ep):
++        return self.facts_from(ep, self.raw_items(ep))
++
++
++@pytest.mark.parametrize("stage", ["single_phase", "raw", "convert"])
++@pytest.mark.parametrize("batch_size", [1, 2])
++def test_failed_extraction_preserves_pending_batch_and_retries_after_reopen(tmp_path, stage, batch_size):
++    mem = Memory()
++    if batch_size == 2:
++        mem.add("first", session_id="synthetic-session", event_time=1)
++    mem.add("second", session_id="synthetic-session", event_time=2)
++    mem.save(str(tmp_path))
++    mem.engine.extractor = (SinglePhaseExtractor() if stage == "single_phase"
++                            else TwoPhaseExtractor(stage))
++
++    with pytest.raises(ExtractionUnavailable):
++        mem.consolidate()
++    assert len(mem.ingestor.pending()) == batch_size
++    assert not mem.fact_store.values()
++
++    # Saving a failed pass must not make the missing facts permanently disappear from the queue.
++    mem.save(str(tmp_path))
++    recovered = Memory.open(str(tmp_path))
++    assert len(recovered.ingestor.pending()) == batch_size
++    recovered.engine.extractor = SinglePhaseExtractor(None)
++    assert recovered.consolidate()["facts_added"] == batch_size
++    assert not recovered.ingestor.pending()
++    assert recovered.consolidate()["facts_added"] == 0
++    assert len(recovered.fact_store.values()) == batch_size
++    assert {p for f in recovered.fact_store.values() for p in f.provenance} == {
++        ep.id for ep in recovered.episodes_doc.values()
++    }
++
++
++@pytest.mark.parametrize("batch_size", [1, 2])
++def test_successful_empty_extraction_is_completed(batch_size):
++    class EmptyExtractor:
++        def extract(self, ep):
++            return []
++
++    mem = Memory()
++    for i in range(batch_size):
++        mem.add(f"Synthetic greeting {i}")
++    mem.engine.extractor = EmptyExtractor()
++    assert mem.consolidate()["facts_added"] == 0
++    assert not mem.ingestor.pending()
++
++
++def test_close_job_cannot_succeed_when_batch_extraction_failed(tmp_path, monkeypatch):
++    from engram.llm import providers
++    from engram.service import MemoryService
++    from engram.consolidate import outcomes
++
++    monkeypatch.setattr(providers, "load_dotenv", lambda: None)
++    for name in ("ENGRAM_LLM", "ENGRAM_ANSWERER", "ENGRAM_VISION_LLM"):
++        monkeypatch.setenv(name, "")
++    monkeypatch.delenv("ENGRAM_SESSION_OUTCOMES", raising=False)
++    monkeypatch.delenv("ENGRAM_ASYNC_CONSOLIDATION", raising=False)
++    monkeypatch.setattr(outcomes, "extract_outcomes", lambda *a, **kw: [])
++
++    svc = MemoryService(data_dir=str(tmp_path), embedder_name="hashing", llm_name="")
++    try:
++        mem = svc.get("synthetic-user")
++        for content in ("first", "second"):
++            mem.add(content, user_id="synthetic-user", session_id="synthetic-session")
++        svc._save("synthetic-user", mem)
++        mem.engine.extractor = SinglePhaseExtractor()
++        svc.llm = object()  # only the explicitly stubbed outcome extractor can see this
++        result = svc.close_session("synthetic-user", "synthetic-session", summarize=False)
++        assert result["job_status"] == "failed"
++        assert result["outcomes_status"] == "error"
++        assert len(mem.ingestor.pending()) == 2
++    finally:
++        svc.close()
++
++    recovered = MemoryService(data_dir=str(tmp_path), embedder_name="hashing", llm_name="")
++    try:
++        mem = recovered.get("synthetic-user")
++        assert len(mem.ingestor.pending()) == 2
++        mem.engine.extractor = SinglePhaseExtractor(None)
++        recovered.llm = object()
++        result = recovered.close_session("synthetic-user", "synthetic-session", summarize=False)
++        assert result["job_status"] == "succeeded"
++        assert result["facts_added"] == 2
++        assert len(mem.fact_store.values()) == 2
++    finally:
++        recovered.close()
+--- /dev/null
++++ b/tests/test_reliability_persistence.py
+@@ -0,0 +1,160 @@
++"""Offline failure injection for repeated JSONL snapshot saves."""
++from __future__ import annotations
++
++import pytest
++
++from engram import Memory
++from engram.store import persist
++
++
++def _snapshot(mem):
++    return {
++        "episodes": sorted((e.id, e.content) for e in mem.episodes_doc.values()),
++        "facts": sorted((f.id, f.text) for f in mem.fact_store.values()),
++        "focus": mem.get_focus(),
++    }
++
++
++def _memory():
++    mem = Memory()
++    mem.add("Synthetic original episode.", user_id="synthetic-user")
++    mem.add_fact("synthetic-user", "prefers", "green", user_id="synthetic-user")
++    mem.set_focus(track=["original"])
++    return mem
++
++
++@pytest.mark.parametrize("failure", [OSError, SystemExit], ids=["io-error", "process-exit"])
++def test_interrupted_resave_recovers_last_committed_snapshot(tmp_path, monkeypatch, failure):
++    mem = _memory()
++    path = str(tmp_path / "store")
++    mem.save(path)
++    committed = _snapshot(mem)
++    mem.episodes_doc.values()[0].content = "Synthetic replacement episode."
++    mem.set_focus(track=["replacement"])
++    write = persist._write_jsonl
++
++    def fail_after_first_collection(target, name, rows):
++        if name == "facts":
++            raise failure("injected failure after episodes replacement")
++        return write(target, name, rows)
++
++    with monkeypatch.context() as patch:
++        patch.setattr(persist, "_write_jsonl", fail_after_first_collection)
++        with pytest.raises(failure):
++            mem.save(path)
++
++    # A fresh open must never expose new episodes alongside the old manifest/state.
++    assert _snapshot(Memory.open(path)) == committed
++    # Retrying the complete snapshot remains safe and does not duplicate records.
++    mem.save(path)
++    mem.save(path)
++    assert _snapshot(Memory.open(path)) == _snapshot(mem)
++
++
++def test_failed_shrinking_snapshot_keeps_committed_records_readable(tmp_path, monkeypatch):
++    mem = _memory()
++    mem.add("Synthetic second episode.", user_id="synthetic-user")
++    path = str(tmp_path / "store")
++    mem.save(path)
++    committed = _snapshot(mem)
++    mem.episodes_doc.delete(mem.episodes_doc.values()[0].id)
++    write = persist._write_jsonl
++
++    def fail_after_first_collection(target, name, rows):
++        if name == "facts":
++            raise OSError("injected failure after shortened episodes replacement")
++        return write(target, name, rows)
++
++    with monkeypatch.context() as patch:
++        patch.setattr(persist, "_write_jsonl", fail_after_first_collection)
++        with pytest.raises(OSError):
++            mem.save(path)
++    assert _snapshot(Memory.open(path)) == committed
++
++
++def test_interrupted_first_save_recovers_empty_store(tmp_path, monkeypatch):
++    mem = _memory()
++    path = tmp_path / "store"
++    write = persist._write_jsonl
++
++    def fail_after_first_collection(target, name, rows):
++        if name == "facts":
++            raise SystemExit("injected first-save process exit")
++        return write(target, name, rows)
++
++    with monkeypatch.context() as patch:
++        patch.setattr(persist, "_write_jsonl", fail_after_first_collection)
++        with pytest.raises(SystemExit):
++            mem.save(str(path))
++    assert _snapshot(Memory.open(str(path)))["episodes"] == []
++    assert not (path / "episodes.jsonl").exists()
++    mem.save(str(path))
++    assert _snapshot(Memory.open(str(path))) == _snapshot(mem)
++
++
++def test_interrupted_recovery_remains_retryable_and_preserves_permissions(tmp_path, monkeypatch):
++    import os
++    import stat
++
++    mem = _memory()
++    path = tmp_path / "store"
++    mem.save(str(path))
++    (path / "episodes.jsonl").chmod(0o600)
++    committed = _snapshot(mem)
++    mem.episodes_doc.values()[0].content = "Synthetic interrupted replacement."
++    write = persist._write_jsonl
++
++    def fail_after_first_collection(target, name, rows):
++        if name == "facts":
++            raise SystemExit("injected writer exit")
++        return write(target, name, rows)
++
++    with monkeypatch.context() as patch:
++        patch.setattr(persist, "_write_jsonl", fail_after_first_collection)
++        with pytest.raises(SystemExit):
++            mem.save(str(path))
++
++    replace = os.replace
++
++    def fail_during_recovery(source, target):
++        if str(source).endswith("facts.jsonl.recover"):
++            raise OSError("injected recovery interruption")
++        return replace(source, target)
++
++    with monkeypatch.context() as patch:
++        patch.setattr(os, "replace", fail_during_recovery)
++        with pytest.raises(OSError, match="recovery interruption"):
++            Memory.open(str(path))
++
++    assert _snapshot(Memory.open(str(path))) == committed
++    assert stat.S_IMODE((path / "episodes.jsonl").stat().st_mode) == 0o600
++    mem.save(str(path))
++    assert _snapshot(Memory.open(str(path))) == _snapshot(mem)
++
++
++def test_hard_process_exit_during_resave_recovers_snapshot(tmp_path):
++    import subprocess
++    import sys
++
++    mem = _memory()
++    path = str(tmp_path / "store")
++    mem.save(path)
++    committed = _snapshot(mem)
++    script = """
++import os
++import sys
++from engram import Memory
++from engram.store import persist
++mem = Memory.open(sys.argv[1])
++mem.episodes_doc.values()[0].content = 'Synthetic hard-exit replacement.'
++write = persist._write_jsonl
++def interrupted(path, name, rows):
++    if name == 'facts':
++        os._exit(31)
++    return write(path, name, rows)
++persist._write_jsonl = interrupted
++mem.save(sys.argv[1])
++"""
++    result = subprocess.run([sys.executable, "-c", script, path], capture_output=True, text=True)
++    assert result.returncode == 31, result.stderr
++    assert _snapshot(Memory.open(path)) == committed
+--- /dev/null
++++ b/tests/test_reliability_capture.py
+@@ -0,0 +1,155 @@
++"""Synthetic capture/retry regressions; only a loopback HTTP stub is contacted."""
++from __future__ import annotations
++
++import argparse
++from contextlib import contextmanager
++from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
++import json
++from pathlib import Path
++import threading
++import urllib.request
++
++import pytest
++
++from engram.connectors import session_hook, watch
++from engram.service import MemoryService
++
++
++@pytest.fixture(autouse=True)
++def _only_loopback_http(monkeypatch):
++    # Do not let a developer's configured proxy turn a deliberate dropped reply into HTTP 502.
++    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
++    monkeypatch.setattr(urllib.request, "urlopen", opener.open)
++
++
++def _append(path: Path, content: str) -> None:
++    with path.open("a", encoding="utf-8") as fh:
++        fh.write(json.dumps({"type": "user", "message": {"role": "user", "content": content}}) + "\n")
++
++
++def _source(tmp_path: Path) -> Path:
++    path = tmp_path / "synthetic-session.jsonl"
++    _append(path, "Initial synthetic conversation material. " * 70)
++    return path
++
++
++def _args(tmp_path: Path, url: str):
++    return argparse.Namespace(url=url, key="synthetic-key", key_file="", since="", limit=25,
++                              quiet_seconds=0, state=str(tmp_path / "watch_state.json"),
++                              claims=str(tmp_path / "hook_claims.jsonl"), no_outcomes=False,
++                              extract_facts=False, dry_run=False)
++
++
++@contextmanager
++def _server(service, close_reply=None, after_close=None, lose_import_reply=False):
++    """Use the real HTTP client and real offline import/persistence, with a fake close provider."""
++    calls = {"imports": 0, "closes": 0}
++
++    class Handler(BaseHTTPRequestHandler):
++        def log_message(self, *_args):
++            pass
++
++        def do_POST(self):
++            body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
++            if self.path == "/v1/import":
++                calls["imports"] += 1
++                reply = {"ok": True, **service.import_("capture-fixture", sessions=body["sessions"])}
++                if lose_import_reply and calls["imports"] == 1:
++                    # Server committed the import but the caller did not receive its receipt.
++                    self.close_connection = True
++                    return
++            else:
++                assert self.path == "/v1/sessions/close"
++                calls["closes"] += 1
++                reply = close_reply or {"ok": True, "outcomes": 0, "outcomes_status": "completed"}
++                if after_close and calls["closes"] == 1:
++                    after_close()
++            data = json.dumps(reply).encode()
++            self.send_response(200)
++            self.send_header("Content-Type", "application/json")
++            self.send_header("Content-Length", str(len(data)))
++            self.end_headers()
++            self.wfile.write(data)
++
++    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
++    thread = threading.Thread(target=server.serve_forever, daemon=True)
++    thread.start()
++    try:
++        yield f"http://127.0.0.1:{server.server_port}", calls
++    finally:
++        server.shutdown()
++        server.server_close()
++        thread.join(timeout=2)
++
++
++@pytest.mark.parametrize("close_status", ["completed", "error"])
++def test_growth_during_close_stays_pending_after_restart(tmp_path, monkeypatch, close_status):
++    path = _source(tmp_path)
++    before_size = path.stat().st_size
++    service = MemoryService(data_dir=str(tmp_path / "data"), embedder_name="hashing", llm_name="")
++    monkeypatch.setattr(watch, "find_sessions", lambda **_kw: [str(path)])
++    tail = "The synthetic final decision arrived while close was running."
++    with _server(service, {"ok": True, "outcomes": 0, "outcomes_status": close_status},
++                 after_close=lambda: _append(path, tail)) as (url, _calls):
++        args = _args(tmp_path, url)
++        if close_status == "error":
++            watch._save_state(args.state, {"target": watch._target(url, args.key),
++                                          "close_failures": {str(path): watch.MAX_CLOSE_FAILURES - 1}})
++        first = watch.run_once(args)
++        assert tail not in "\n".join(ep.content for ep in service.get("capture-fixture").episodes_doc.values())
++        # Freshly loaded state is the next process's only knowledge of the failed/successful close.
++        state = watch._load_state(args.state)
++        ledger = state["seen"] if close_status == "completed" else state["close_deferred"]
++        assert ledger[str(path)] == before_size
++        assert watch.pending_sessions(state, quiet_seconds=0) == [str(path)]
++        assert first["backlog"] == 1
++        second = watch.run_once(args)
++        assert tail in "\n".join(ep.content for ep in service.get("capture-fixture").episodes_doc.values())
++        assert second["episodes"] == 1
++
++
++def test_lost_import_receipt_retries_after_restart_without_duplicate_episode(tmp_path, monkeypatch):
++    path = _source(tmp_path)
++    data = str(tmp_path / "data")
++    service = MemoryService(data_dir=data, embedder_name="hashing", llm_name="")
++    monkeypatch.setattr(watch, "find_sessions", lambda **_kw: [str(path)])
++    with _server(service, lose_import_reply=True) as (url, _calls):
++        args = _args(tmp_path, url)
++        assert watch.run_once(args)["exit"] == watch.EXIT_UNREACHABLE
++        assert str(path) not in watch._load_state(args.state).get("seen", {})
++    restarted = MemoryService(data_dir=data, embedder_name="hashing", llm_name="")
++    with _server(restarted) as (url, calls):
++        args.url = url
++        resumed = watch.run_once(args)
++        assert resumed["episodes"] == 0
++        assert resumed["result"]["skipped"] == 1
++        assert len(list(restarted.get("capture-fixture").episodes_doc.values())) == 1
++        assert watch.run_once(args)["sessions"] == 0
++        assert calls == {"imports": 1, "closes": 1}
++
++
++@pytest.mark.parametrize("receipt", [
++    {"ok": True, "outcomes_status": "no_episodes"},
++    {"ok": False, "outcomes_status": "cancelled"},
++    {"ok": True, "outcomes_status": "unknown"},
++    {"ok": True, "outcomes_status": None},
++    {"ok": False, "outcomes_status": "completed"},
++    {"outcomes_status": "completed"},
++    {"ok": False},
++])
++def test_non_success_close_receipt_does_not_claim_transcript(tmp_path, monkeypatch, receipt):
++    path = _source(tmp_path)
++    service = MemoryService(data_dir=str(tmp_path / "data"), embedder_name="hashing", llm_name="")
++    monkeypatch.setattr(session_hook, "_setsid", lambda: None)
++    key_file = tmp_path / "synthetic.key"
++    key_file.write_text("synthetic-key")
++    with _server(service, {"outcomes": 0, **receipt}) as (url, _calls):
++        result = watch.ingest(url, "synthetic-key", [str(path)])
++        assert result["closed_ok"] == []
++        assert result["close_failed"] == result["sessions_by_path"][str(path)]
++        args = _args(tmp_path, url)
++        session_hook.run(["--url", url, "--key-file", str(key_file), "--state", args.state,
++                          "--claims", args.claims],
++                         stdin=json.dumps({"hook_event_name": "SessionEnd", "transcript_path": str(path)}),
++                         roots=[str(tmp_path)])
++        assert watch.load_claims(args.claims) == {}

@@ -1,0 +1,8 @@
+{
+  "public_browser": "passed",
+  "locale": "zh",
+  "facts_filter_controls": true,
+  "session_status_filter": true,
+  "mobile_no_overflow": true,
+  "runtime_errors": 0
+}

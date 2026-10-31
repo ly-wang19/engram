@@ -1,6 +1,7 @@
 import { NavLink } from 'react-router-dom'
 import {
   Clock,
+  ListChecks,
   Database,
   HeartPulse,
   LayoutDashboard,
@@ -30,6 +31,7 @@ const NAV: Array<{ to: string; key: keyof Dict['nav']; icon: typeof LayoutDashbo
   { to: '/graph', key: 'graph', icon: Share2 },
   { to: '/focus', key: 'focus', icon: Target },
   { to: '/conversations', key: 'conversations', icon: MessagesSquare },
+  { to: '/jobs', key: 'jobs', icon: ListChecks },
   { to: '/settings', key: 'settings', icon: SlidersHorizontal },
   { to: '/privacy', key: 'privacy', icon: ShieldCheck },
 ]
@@ -52,7 +54,7 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
           </button>
         </div>
 
-        <nav className="flex-1 space-y-1 px-3">
+        <nav className="flex-1 overflow-y-auto space-y-1 px-3">
           {NAV.map((item) => (
             <NavLink
               key={item.to}

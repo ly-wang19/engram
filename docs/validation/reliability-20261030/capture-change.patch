@@ -1,0 +1,58 @@
+--- /var/folders/zb/ghclng_x1gvcg7sv109n5_dr0000gn/T/engram-reliability-20261030-9fw4p410/baseline/engram/connectors/watch.py	2026-10-25 13:07:10
++++ engram/connectors/watch.py	2026-10-30 02:13:52
+@@ -397,7 +397,12 @@
+         try:
+             closed = _post(base_url, api_key, "/v1/sessions/close",
+                            {"session_id": s.session_id, "outcomes": True}, timeout)
+-            if closed.get("outcomes_status") in {"error", "unavailable", "disabled"}:
++            status = closed.get("outcomes_status")
++            # Older servers omitted status entirely. Keep that compatibility, but an explicit
++            # status must positively acknowledge completion; unknown/cancelled is not success.
++            if (closed.get("ok") is False or
++                    ("outcomes_status" in closed and
++                     (status != "completed" or closed.get("ok") is not True))):
+                 result["close_failed"].append(s.session_id)
+                 continue  # HTTP 200 is not evidence that distillation succeeded
+             distilled += int(closed.get("outcomes") or 0)
+@@ -522,6 +527,14 @@
+         # Under the lock, before anything reads `seen`: a transcript the hook already fed must not be
+         # re-closed here just because it was still claimed-but-not-folded when we listed the backlog.
+         fold_claims(state, claims_path, target=target)
++        # A close can take minutes. Never acknowledge bytes appended while the request was in
++        # flight: they were not necessarily part of the parsed/uploaded transcript.
++        attempted_sizes: dict[str, int] = {}
++        for p in paths:
++            try:
++                attempted_sizes[p] = os.stat(p).st_size
++            except OSError:
++                pass
+         try:
+             result = ingest(args.url, key, paths, outcomes=not args.no_outcomes,
+                             extract_facts=args.extract_facts,
+@@ -588,18 +601,20 @@
+                     continue
+                 failures.pop(p, None)
+                 try:
+-                    deferred[p] = os.stat(p).st_size
++                    deferred[p] = attempted_sizes[p]
+                     newly_deferred.add(p)
+-                    resolved_paths.add(p)
+-                except OSError:
++                    if os.stat(p).st_size == attempted_sizes[p]:
++                        resolved_paths.add(p)
++                except (OSError, KeyError):
+                     pass
+                 continue  # exhausted is deferred, never successfully seen
+             else:
+                 failures.pop(p, None)
+             try:
+-                seen[p] = os.stat(p).st_size
+-                resolved_paths.add(p)
+-            except OSError:
++                seen[p] = attempted_sizes[p]
++                if os.stat(p).st_size == attempted_sizes[p]:
++                    resolved_paths.add(p)
++            except (OSError, KeyError):
+                 continue
+         # Cap the ledger so it cannot grow without bound on a machine with thousands of transcripts.
+         if len(seen) > 5000:

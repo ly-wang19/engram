@@ -406,7 +406,7 @@ async def test_remote_backend_forwards_as_of():
     backend = RemoteBackend("http://engram.test", key="sk-test", client=client)
     await backend.recall(
         "Where does Wei work?",
-        lean=False,
+        lean=True,
         session_id="s1",
         as_of=1_700_864_000.0,
         redact_sensitive=True,
@@ -417,6 +417,7 @@ async def test_remote_backend_forwards_as_of():
     assert body["session_id"] == "s1"
     assert body["as_of"] == 1_700_864_000.0
     assert body["redact_sensitive"] is True
+    assert body["answer"] is False
     assert headers["Authorization"] == "Bearer sk-test"
 
 

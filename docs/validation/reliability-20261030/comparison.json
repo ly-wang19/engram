@@ -1,0 +1,54 @@
+{
+  "scope": "synthetic offline failure/recovery regression, not QA accuracy",
+  "tests": {
+    "tests/test_reliability_consolidation.py": "8f61e55651396e1e79a218f065eb7261f7c8751f35faf0634debe7ba8913c611",
+    "tests/test_reliability_persistence.py": "b1739767fb93dee1ad6514403b78760a106213501e9231ead062c75a52427dc7",
+    "tests/test_reliability_capture.py": "300b66821e0863eef84819d59d402884c80941ac95594804fa108f49df63ba4c"
+  },
+  "sources": {
+    "engram/consolidate/engine.py": {
+      "before": "8ff7db44296b9ae1fc0980af0f54e7a473b0e35a18635e0e489a5c45ec63a559",
+      "after": "99fd60045d7a81d605cdbc5ea56ab87650b1a2db24bf949ba85f29203b48f6c4"
+    },
+    "engram/store/persist.py": {
+      "before": "4be472ccf6db924e3cdb95eba02847dfbfd9878e98219b266f054fa9befa8e62",
+      "after": "28a43b0c3064c9769f67a9432ba0d577548ad090371fbc399c665ff2a5ba2b71"
+    },
+    "engram/connectors/watch.py": {
+      "before": "512761f9ea66d8d5ff3179fd592b6d47dd8f8f926b1069fb97e71de107cc9a5f",
+      "after": "82f894f41f203117041bf1c5ceaa402a3a4cf916469e2fb473a0e91e98ce7c41"
+    }
+  },
+  "runs": {
+    "before": {
+      "exit_code": 1,
+      "command": [
+        "python3",
+        "-m",
+        "pytest",
+        "tests/test_reliability_consolidation.py",
+        "tests/test_reliability_persistence.py",
+        "tests/test_reliability_capture.py",
+        "-o",
+        "addopts=",
+        "-q",
+        "--junitxml=/Users/ywwl/Documents/Claude/Projects/Super memory/docs/validation/reliability-20261030/combined-before.xml"
+      ]
+    },
+    "after": {
+      "exit_code": 0,
+      "command": [
+        "python3",
+        "-m",
+        "pytest",
+        "tests/test_reliability_consolidation.py",
+        "tests/test_reliability_persistence.py",
+        "tests/test_reliability_capture.py",
+        "-o",
+        "addopts=",
+        "-q",
+        "--junitxml=/Users/ywwl/Documents/Claude/Projects/Super memory/docs/validation/reliability-20261030/combined-after.xml"
+      ]
+    }
+  }
+}

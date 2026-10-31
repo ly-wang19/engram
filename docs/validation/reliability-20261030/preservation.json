@@ -1,0 +1,13 @@
+{
+  "baseline_files": 185,
+  "unexpected_changes": [],
+  "allowed_changes": [
+    "HANDOFF.md",
+    "docs/architecture-optimization-map.zh-CN.md",
+    "docs/engram-full-architecture-report.zh-CN.md",
+    "engram/connectors/watch.py",
+    "engram/consolidate/engine.py",
+    "engram/store/persist.py"
+  ],
+  "recovery_dir": "/Users/ywwl/.codex/recovery/super-memory/engram-reliability-20261030-9fw4p410"
+}

@@ -1,0 +1,32 @@
+{
+  "date": "2026-10-30",
+  "status": "PASS",
+  "kind": "offline-reliability-regression",
+  "publishable_qa_benchmark": false,
+  "fixed_cases": {
+    "before": {
+      "tests": 25,
+      "failures": 19,
+      "errors": 0,
+      "skipped": 0
+    },
+    "after": {
+      "tests": 25,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    }
+  },
+  "full_suite": {
+    "passed": 878,
+    "skipped": 1,
+    "warnings": 1,
+    "exit_code": 0
+  },
+  "zero_setup": "PASS",
+  "independent_review_rounds": 1,
+  "implementation_candidates": 1,
+  "production_changed": false,
+  "paid_model_evaluation": false,
+  "recovery_dir": "/Users/ywwl/.codex/recovery/super-memory/engram-reliability-20261030-9fw4p410"
+}

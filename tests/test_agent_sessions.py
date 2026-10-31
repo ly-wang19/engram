@@ -328,6 +328,7 @@ def _args(tmp_path, **over):
     import argparse
     base = dict(url="http://127.0.0.1:9", key="k", key_file="", since="", limit=25, quiet_seconds=0,
                 state=str(tmp_path / "state" / "watch_state.json"), no_outcomes=False,
+                claims=str(tmp_path / "state" / "hook_claims.jsonl"),
                 extract_facts=False, dry_run=False, once=True, every="")
     base.update(over)
     return argparse.Namespace(**base)
@@ -396,7 +397,7 @@ def test_watcher_does_not_strand_sessions_older_than_last_run(tmp_path, monkeypa
     assert old in json.loads(state_path.read_text())["seen"]
 
 
-def test_failed_close_is_not_marked_seen_until_third_failure(tmp_path, monkeypatch):
+def test_failed_close_is_deferred_after_three_failures_without_being_marked_seen(tmp_path, monkeypatch):
     """A stored-but-not-distilled transcript must be retried, or the memory keeps raw turns and no
     conclusions — bounded, so one undigestible file cannot hold a slot of every tick's --limit."""
     from engram.connectors import watch
@@ -419,9 +420,15 @@ def test_failed_close_is_not_marked_seen_until_third_failure(tmp_path, monkeypat
         assert path not in state["seen"], state
         assert state["close_failures"][path] == n
         assert state["last_result"]["close_failed"] == 1
-    watch.run_once(args)
+    last = watch.run_once(args)
     state = watch._load_state(args.state)
-    assert path in state["seen"] and path not in state["close_failures"], state
+    assert path not in state["seen"] and path not in state["close_failures"], state
+    assert state["close_deferred"] == {path: os.stat(path).st_size}
+    assert last["sessions"] == 0 and last["close_deferred"] == 1
+    assert watch.pending_sessions(state, quiet_seconds=0) == []
+    with open(path, "a") as fh:
+        fh.write("new content")
+    assert watch.pending_sessions(state, quiet_seconds=0) == [path]
 
 
 def test_unreachable_server_exits_75_and_leaves_state_untouched(tmp_path, monkeypatch):
@@ -521,3 +528,149 @@ def test_a_session_too_large_to_send_is_named_not_retried_forever():
 
     assert [r["session_id"] for r in oversized] == ["huge"]
     assert [r["session_id"] for b in batches for r in b] == ["small"]
+
+
+def test_empty_transcripts_do_not_starve_later_sessions_and_growth_requeues(tmp_path, monkeypatch, capsys):
+    from engram.connectors import watch
+
+    shell = tmp_path / "shell.jsonl"
+    shell.write_text(_cc([
+        {"type": "session_meta", "payload": {"id": "shell", "padding": "x" * 2100}},
+        {"type": "response_item", "payload": {"type": "message", "role": "developer",
+                                                 "content": "Harness instructions only."}},
+        {"type": "event_msg", "payload": {"type": "task_complete"}},
+    ]) + "\n")
+    real = tmp_path / "real.jsonl"
+    turn = {"type": "user", "message": {"role": "user", "content": "Keep the project database local."}}
+    real.write_text(_cc([turn]))
+    paths = [str(shell), str(real)]
+    monkeypatch.setattr(watch, "find_sessions", lambda **kw: paths)
+    calls = []
+
+    def post(base, key, route, body, timeout):
+        calls.append((route, body))
+        return {"ok": True, "sessions": 1, "episodes": 1, "outcomes": 1}
+
+    monkeypatch.setattr(watch, "_post", post)
+    args = _args(tmp_path, limit=1, claims=str(tmp_path / "claims.jsonl"))
+    first = watch.run_once(args)
+    assert first["sessions"] == 0 and first["new"] == 0 and first["attempted"] == 1
+    assert first["ignored_non_conversational"] == 1 and first["backlog"] == 1
+    assert first["episodes"] == first["outcomes"] == first["close_failed"] == 0
+    assert calls == []
+    state = watch._load_state(args.state)
+    assert state["non_conversational"] == {str(shell): shell.stat().st_size}
+    assert str(shell) not in state["seen"] and not state["close_failures"]
+    assert "fed 0 session(s) (0 new)" in capsys.readouterr().out
+
+    second = watch.run_once(args)
+    assert second["sessions"] == 1 and second["backlog"] == 0
+    assert [route for route, _ in calls] == ["/v1/import", "/v1/sessions/close"]
+    assert str(real) in watch._load_state(args.state)["seen"]
+    assert watch.run_once(args)["sessions"] == 0
+
+    with shell.open("a") as fh:
+        fh.write(json.dumps(turn) + "\n")
+    grown = watch.run_once(args)
+    assert grown["sessions"] == 1 and len(calls) == 4
+    assert str(shell) in watch._load_state(args.state)["seen"]
+    assert str(shell) not in watch._load_state(args.state)["non_conversational"]
+
+
+def test_invalid_empty_parse_is_retryable_and_never_marked_non_conversational(tmp_path, monkeypatch):
+    from engram.connectors import watch
+
+    bad = tmp_path / "broken.jsonl"
+    bad.write_text('{"type":"session_meta"}\n{"type":"response_item",')
+    monkeypatch.setattr(watch, "find_sessions", lambda **kw: [str(bad)])
+    posts = []
+    monkeypatch.setattr(watch, "_post", lambda *a, **k: posts.append(a) or {})
+    args = _args(tmp_path, claims=str(tmp_path / "claims.jsonl"))
+    for _ in range(2):
+        out = watch.run_once(args)
+        assert out["attempted"] == 1 and out["sessions"] == 0 and out["backlog"] == 1
+        assert out["unparsed"] == 1 and out["ignored_non_conversational"] == 0
+        state = watch._load_state(args.state)
+        assert not state.get("seen") and not state.get("non_conversational")
+    assert posts == []
+
+
+def test_unreadable_transcript_is_not_recorded_as_empty(tmp_path, monkeypatch):
+    import builtins
+    from engram.connectors import watch
+
+    path = _quiet_file(tmp_path)
+    original_open = builtins.open
+
+    def denied(file, *args, **kwargs):
+        if os.fspath(file) == path:
+            raise PermissionError("fixture denied")
+        return original_open(file, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "open", denied)
+    result = watch.ingest("http://unused", "synthetic", [path])
+    assert not result["non_conversational_by_path"]
+    assert result["unparsed_by_path"] == {path: "PermissionError"}
+    assert not result["closed_ok"]
+
+
+def test_close_status_receipts_keep_success_and_failure_distinct(monkeypatch):
+    from engram.connectors import watch
+
+    monkeypatch.setattr(watch, "load_sessions", lambda *a, **k: [_session("s")])
+    for status in ("error", "unavailable", "disabled", "completed", None):
+        def post(base, key, route, body, timeout):
+            if route == "/v1/import":
+                return {"ok": True, "sessions": 1, "episodes": 1}
+            reply = {"ok": True, "outcomes": 0}
+            if status is not None:
+                reply["outcomes_status"] = status
+            return reply
+
+        monkeypatch.setattr(watch, "_post", post)
+        result = watch.ingest("http://unused", "synthetic", ["p"])
+        if status in {"completed", None}:
+            assert result["closed_ok"] == ["s"] and result["close_failed"] == []
+        else:
+            assert result["closed_ok"] == []
+            assert result["close_failed"] == ["s"] and result["distil_failed"] == 1
+
+
+def test_empty_files_and_rejected_batches_keep_independent_retry_state(tmp_path, monkeypatch):
+    import urllib.error
+    from engram.connectors import watch
+
+    empty = tmp_path / "empty.jsonl"
+    empty.write_text('{"type":"session_meta"}\n')
+    good = _quiet_file(tmp_path, "good.jsonl")
+    bad = _quiet_file(tmp_path, "bad.jsonl")
+    paths = [str(empty), bad, good]
+    parsed = {str(empty): [], bad: [_session("bad")], good: [_session("good")]}
+    monkeypatch.setattr(watch, "find_sessions", lambda **kw: paths)
+    monkeypatch.setattr(watch, "load_sessions", lambda ps: parsed[ps[0]])
+    reject_bad = True
+    imports = []
+
+    def post(base, key, route, body, timeout):
+        if route == "/v1/import":
+            ids = [row["session_id"] for row in body["sessions"]]
+            imports.append(ids)
+            if reject_bad and "bad" in ids:
+                raise urllib.error.URLError("synthetic batch rejection")
+            return {"ok": True, "sessions": len(ids), "episodes": len(ids)}
+        return {"ok": True, "outcomes": 1}
+
+    monkeypatch.setattr(watch, "_post", post)
+    args = _args(tmp_path, max_bytes=250)
+    first = watch.run_once(args)
+    assert imports == [["bad"], ["good"]]
+    assert first["sessions"] == 1 and first["ignored_non_conversational"] == 1
+    assert first["backlog"] == 1 and first["result"]["import_failed"] == 1
+    state = watch._load_state(args.state)
+    assert set(state["seen"]) == {good}
+    assert set(state["non_conversational"]) == {str(empty)}
+    assert not state["close_failures"]
+    reject_bad = False
+    second = watch.run_once(args)
+    assert second["sessions"] == 1 and second["backlog"] == 0
+    assert imports == [["bad"], ["good"], ["bad"]]

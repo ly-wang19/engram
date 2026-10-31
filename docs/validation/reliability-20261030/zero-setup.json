@@ -1,0 +1,9 @@
+{
+  "command": [
+    "python3",
+    "scripts/check_zero_setup.py"
+  ],
+  "exit_code": 0,
+  "seconds": 2.603,
+  "network": "Python socket guard permits loopback only; model backends disabled"
+}

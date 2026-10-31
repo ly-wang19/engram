@@ -7,6 +7,7 @@ import type { AuditReport,
   Focus,
   FactEdit,
   FactSource,
+  FactSources,
   FactWrite,
   GraphData,
   Health,
@@ -42,7 +43,7 @@ export class ApiError extends Error {
   }
 }
 
-async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+export async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const key = currentKey()
   const headers = new Headers(init.headers)
   headers.set('Content-Type', 'application/json')
@@ -80,6 +81,10 @@ const qs = (params: object) => {
 }
 
 export interface MemoriesQuery {
+  session_id?: string
+  category?: string
+  source?: FactSource
+  sort?: 'newest' | 'oldest' | 'salience'
   facts_limit?: number
   facts_offset?: number
   episodes_limit?: number
@@ -106,6 +111,8 @@ export interface GraphQuery {
 }
 
 export interface SessionsQuery {
+  status?: 'all' | 'pending' | 'with_facts' | 'working'
+  sort?: 'newest' | 'oldest' | 'most_facts'
   limit?: number
   offset?: number
   q?: string
@@ -120,6 +127,8 @@ export const api = {
   health: () => request<Health>('/health'),
 
   memories: (params: MemoriesQuery = {}) => request<MemoryDump>(`/v1/memories${qs(params)}`),
+  factSources: (factId: string, includeSensitive = false, offset = 0) =>
+    request<FactSources>(`/v1/facts/${encodeURIComponent(factId)}/sources${qs({ include_sensitive: includeSensitive, offset, limit: 20 })}`),
   audit: (limit = 60) => request<AuditReport>(`/v1/audit?limit=${limit}`),
   sessions: (params: SessionsQuery = {}) => request<SessionsIndex>(`/v1/sessions${qs(params)}`),
   agentStatus: (sessionId?: string) =>

@@ -1,0 +1,249 @@
+FF.FFFFFF                                                                [100%]
+=================================== FAILURES ===================================
+_______ test_growth_during_close_stays_pending_after_restart[completed] ________
+
+tmp_path = PosixPath('/private/var/folders/zb/ghclng_x1gvcg7sv109n5_dr0000gn/T/pytest-of-ywwl/pytest-456/test_growth_during_close_stays0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x107279b80>
+close_status = 'completed'
+
+    @pytest.mark.parametrize("close_status", ["completed", "error"])
+    def test_growth_during_close_stays_pending_after_restart(tmp_path, monkeypatch, close_status):
+        path = _source(tmp_path)
+        before_size = path.stat().st_size
+        service = MemoryService(data_dir=str(tmp_path / "data"), embedder_name="hashing", llm_name="")
+        monkeypatch.setattr(watch, "find_sessions", lambda **_kw: [str(path)])
+        tail = "The synthetic final decision arrived while close was running."
+        with _server(service, {"ok": True, "outcomes": 0, "outcomes_status": close_status},
+                     after_close=lambda: _append(path, tail)) as (url, _calls):
+            args = _args(tmp_path, url)
+            if close_status == "error":
+                watch._save_state(args.state, {"target": watch._target(url, args.key),
+                                              "close_failures": {str(path): watch.MAX_CLOSE_FAILURES - 1}})
+            first = watch.run_once(args)
+            assert tail not in "\n".join(ep.content for ep in service.get("capture-fixture").episodes_doc.values())
+            # Freshly loaded state is the next process's only knowledge of the failed/successful close.
+            state = watch._load_state(args.state)
+            ledger = state["seen"] if close_status == "completed" else state["close_deferred"]
+>           assert ledger[str(path)] == before_size
+E           assert 3053 == 2931
+
+tests/test_reliability_capture.py:103: AssertionError
+----------------------------- Captured stdout call -----------------------------
+1 session(s) to ingest (1 new; backlog 1):
+  test_growth_during_close_stays0/synthetic-session.jsonl
+2026-10-30T02:12:51+08:00 fed 1 session(s) (1 new) · 1 episode(s) · 0 conclusion(s) · 0 close failure(s) · 0 deferred after retries · 0 non-conversational skipped · 0 unparsed (retry next tick) · 0.1s
+_________ test_growth_during_close_stays_pending_after_restart[error] __________
+
+tmp_path = PosixPath('/private/var/folders/zb/ghclng_x1gvcg7sv109n5_dr0000gn/T/pytest-of-ywwl/pytest-456/test_growth_during_close_stays1')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x1072a3f20>
+close_status = 'error'
+
+    @pytest.mark.parametrize("close_status", ["completed", "error"])
+    def test_growth_during_close_stays_pending_after_restart(tmp_path, monkeypatch, close_status):
+        path = _source(tmp_path)
+        before_size = path.stat().st_size
+        service = MemoryService(data_dir=str(tmp_path / "data"), embedder_name="hashing", llm_name="")
+        monkeypatch.setattr(watch, "find_sessions", lambda **_kw: [str(path)])
+        tail = "The synthetic final decision arrived while close was running."
+        with _server(service, {"ok": True, "outcomes": 0, "outcomes_status": close_status},
+                     after_close=lambda: _append(path, tail)) as (url, _calls):
+            args = _args(tmp_path, url)
+            if close_status == "error":
+                watch._save_state(args.state, {"target": watch._target(url, args.key),
+                                              "close_failures": {str(path): watch.MAX_CLOSE_FAILURES - 1}})
+            first = watch.run_once(args)
+            assert tail not in "\n".join(ep.content for ep in service.get("capture-fixture").episodes_doc.values())
+            # Freshly loaded state is the next process's only knowledge of the failed/successful close.
+            state = watch._load_state(args.state)
+            ledger = state["seen"] if close_status == "completed" else state["close_deferred"]
+>           assert ledger[str(path)] == before_size
+E           assert 3053 == 2931
+
+tests/test_reliability_capture.py:103: AssertionError
+----------------------------- Captured stdout call -----------------------------
+1 session(s) to ingest (1 new; backlog 1):
+  test_growth_during_close_stays1/synthetic-session.jsonl
+2026-10-30T02:12:51+08:00 fed 0 session(s) (0 new) · 1 episode(s) · 0 conclusion(s) · 1 close failure(s) · 1 deferred after retries · 0 non-conversational skipped · 0 unparsed (retry next tick) · 0.0s
+______ test_non_success_close_receipt_does_not_claim_transcript[receipt0] ______
+
+tmp_path = PosixPath('/private/var/folders/zb/ghclng_x1gvcg7sv109n5_dr0000gn/T/pytest-of-ywwl/pytest-456/test_non_success_close_receipt0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10743c920>
+receipt = {'ok': True, 'outcomes_status': 'no_episodes'}
+
+    @pytest.mark.parametrize("receipt", [
+        {"ok": True, "outcomes_status": "no_episodes"},
+        {"ok": False, "outcomes_status": "cancelled"},
+        {"ok": True, "outcomes_status": "unknown"},
+        {"ok": False, "outcomes_status": "completed"},
+        {"outcomes_status": "completed"},
+        {"ok": False},
+    ])
+    def test_non_success_close_receipt_does_not_claim_transcript(tmp_path, monkeypatch, receipt):
+        path = _source(tmp_path)
+        service = MemoryService(data_dir=str(tmp_path / "data"), embedder_name="hashing", llm_name="")
+        monkeypatch.setattr(session_hook, "_setsid", lambda: None)
+        key_file = tmp_path / "synthetic.key"
+        key_file.write_text("synthetic-key")
+        with _server(service, {"outcomes": 0, **receipt}) as (url, _calls):
+            result = watch.ingest(url, "synthetic-key", [str(path)])
+>           assert result["closed_ok"] == []
+E           AssertionError: assert ['claude-code...pt0:syntheti'] == []
+E             
+E             Left contains one more item: 'claude-code:test_non_success_close_receipt0:syntheti'
+E             Use -v to get more diff
+
+tests/test_reliability_capture.py:147: AssertionError
+______ test_non_success_close_receipt_does_not_claim_transcript[receipt1] ______
+
+tmp_path = PosixPath('/private/var/folders/zb/ghclng_x1gvcg7sv109n5_dr0000gn/T/pytest-of-ywwl/pytest-456/test_non_success_close_receipt1')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10743fda0>
+receipt = {'ok': False, 'outcomes_status': 'cancelled'}
+
+    @pytest.mark.parametrize("receipt", [
+        {"ok": True, "outcomes_status": "no_episodes"},
+        {"ok": False, "outcomes_status": "cancelled"},
+        {"ok": True, "outcomes_status": "unknown"},
+        {"ok": False, "outcomes_status": "completed"},
+        {"outcomes_status": "completed"},
+        {"ok": False},
+    ])
+    def test_non_success_close_receipt_does_not_claim_transcript(tmp_path, monkeypatch, receipt):
+        path = _source(tmp_path)
+        service = MemoryService(data_dir=str(tmp_path / "data"), embedder_name="hashing", llm_name="")
+        monkeypatch.setattr(session_hook, "_setsid", lambda: None)
+        key_file = tmp_path / "synthetic.key"
+        key_file.write_text("synthetic-key")
+        with _server(service, {"outcomes": 0, **receipt}) as (url, _calls):
+            result = watch.ingest(url, "synthetic-key", [str(path)])
+>           assert result["closed_ok"] == []
+E           AssertionError: assert ['claude-code...pt1:syntheti'] == []
+E             
+E             Left contains one more item: 'claude-code:test_non_success_close_receipt1:syntheti'
+E             Use -v to get more diff
+
+tests/test_reliability_capture.py:147: AssertionError
+______ test_non_success_close_receipt_does_not_claim_transcript[receipt2] ______
+
+tmp_path = PosixPath('/private/var/folders/zb/ghclng_x1gvcg7sv109n5_dr0000gn/T/pytest-of-ywwl/pytest-456/test_non_success_close_receipt2')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10743d370>
+receipt = {'ok': True, 'outcomes_status': 'unknown'}
+
+    @pytest.mark.parametrize("receipt", [
+        {"ok": True, "outcomes_status": "no_episodes"},
+        {"ok": False, "outcomes_status": "cancelled"},
+        {"ok": True, "outcomes_status": "unknown"},
+        {"ok": False, "outcomes_status": "completed"},
+        {"outcomes_status": "completed"},
+        {"ok": False},
+    ])
+    def test_non_success_close_receipt_does_not_claim_transcript(tmp_path, monkeypatch, receipt):
+        path = _source(tmp_path)
+        service = MemoryService(data_dir=str(tmp_path / "data"), embedder_name="hashing", llm_name="")
+        monkeypatch.setattr(session_hook, "_setsid", lambda: None)
+        key_file = tmp_path / "synthetic.key"
+        key_file.write_text("synthetic-key")
+        with _server(service, {"outcomes": 0, **receipt}) as (url, _calls):
+            result = watch.ingest(url, "synthetic-key", [str(path)])
+>           assert result["closed_ok"] == []
+E           AssertionError: assert ['claude-code...pt2:syntheti'] == []
+E             
+E             Left contains one more item: 'claude-code:test_non_success_close_receipt2:syntheti'
+E             Use -v to get more diff
+
+tests/test_reliability_capture.py:147: AssertionError
+______ test_non_success_close_receipt_does_not_claim_transcript[receipt3] ______
+
+tmp_path = PosixPath('/private/var/folders/zb/ghclng_x1gvcg7sv109n5_dr0000gn/T/pytest-of-ywwl/pytest-456/test_non_success_close_receipt3')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10743ff50>
+receipt = {'ok': False, 'outcomes_status': 'completed'}
+
+    @pytest.mark.parametrize("receipt", [
+        {"ok": True, "outcomes_status": "no_episodes"},
+        {"ok": False, "outcomes_status": "cancelled"},
+        {"ok": True, "outcomes_status": "unknown"},
+        {"ok": False, "outcomes_status": "completed"},
+        {"outcomes_status": "completed"},
+        {"ok": False},
+    ])
+    def test_non_success_close_receipt_does_not_claim_transcript(tmp_path, monkeypatch, receipt):
+        path = _source(tmp_path)
+        service = MemoryService(data_dir=str(tmp_path / "data"), embedder_name="hashing", llm_name="")
+        monkeypatch.setattr(session_hook, "_setsid", lambda: None)
+        key_file = tmp_path / "synthetic.key"
+        key_file.write_text("synthetic-key")
+        with _server(service, {"outcomes": 0, **receipt}) as (url, _calls):
+            result = watch.ingest(url, "synthetic-key", [str(path)])
+>           assert result["closed_ok"] == []
+E           AssertionError: assert ['claude-code...pt3:syntheti'] == []
+E             
+E             Left contains one more item: 'claude-code:test_non_success_close_receipt3:syntheti'
+E             Use -v to get more diff
+
+tests/test_reliability_capture.py:147: AssertionError
+______ test_non_success_close_receipt_does_not_claim_transcript[receipt4] ______
+
+tmp_path = PosixPath('/private/var/folders/zb/ghclng_x1gvcg7sv109n5_dr0000gn/T/pytest-of-ywwl/pytest-456/test_non_success_close_receipt4')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10749fb90>
+receipt = {'outcomes_status': 'completed'}
+
+    @pytest.mark.parametrize("receipt", [
+        {"ok": True, "outcomes_status": "no_episodes"},
+        {"ok": False, "outcomes_status": "cancelled"},
+        {"ok": True, "outcomes_status": "unknown"},
+        {"ok": False, "outcomes_status": "completed"},
+        {"outcomes_status": "completed"},
+        {"ok": False},
+    ])
+    def test_non_success_close_receipt_does_not_claim_transcript(tmp_path, monkeypatch, receipt):
+        path = _source(tmp_path)
+        service = MemoryService(data_dir=str(tmp_path / "data"), embedder_name="hashing", llm_name="")
+        monkeypatch.setattr(session_hook, "_setsid", lambda: None)
+        key_file = tmp_path / "synthetic.key"
+        key_file.write_text("synthetic-key")
+        with _server(service, {"outcomes": 0, **receipt}) as (url, _calls):
+            result = watch.ingest(url, "synthetic-key", [str(path)])
+>           assert result["closed_ok"] == []
+E           AssertionError: assert ['claude-code...pt4:syntheti'] == []
+E             
+E             Left contains one more item: 'claude-code:test_non_success_close_receipt4:syntheti'
+E             Use -v to get more diff
+
+tests/test_reliability_capture.py:147: AssertionError
+______ test_non_success_close_receipt_does_not_claim_transcript[receipt5] ______
+
+tmp_path = PosixPath('/private/var/folders/zb/ghclng_x1gvcg7sv109n5_dr0000gn/T/pytest-of-ywwl/pytest-456/test_non_success_close_receipt5')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10749e5d0>
+receipt = {'ok': False}
+
+    @pytest.mark.parametrize("receipt", [
+        {"ok": True, "outcomes_status": "no_episodes"},
+        {"ok": False, "outcomes_status": "cancelled"},
+        {"ok": True, "outcomes_status": "unknown"},
+        {"ok": False, "outcomes_status": "completed"},
+        {"outcomes_status": "completed"},
+        {"ok": False},
+    ])
+    def test_non_success_close_receipt_does_not_claim_transcript(tmp_path, monkeypatch, receipt):
+        path = _source(tmp_path)
+        service = MemoryService(data_dir=str(tmp_path / "data"), embedder_name="hashing", llm_name="")
+        monkeypatch.setattr(session_hook, "_setsid", lambda: None)
+        key_file = tmp_path / "synthetic.key"
+        key_file.write_text("synthetic-key")
+        with _server(service, {"outcomes": 0, **receipt}) as (url, _calls):
+            result = watch.ingest(url, "synthetic-key", [str(path)])
+>           assert result["closed_ok"] == []
+E           AssertionError: assert ['claude-code...pt5:syntheti'] == []
+E             
+E             Left contains one more item: 'claude-code:test_non_success_close_receipt5:syntheti'
+E             Use -v to get more diff
+
+tests/test_reliability_capture.py:147: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_reliability_capture.py::test_growth_during_close_stays_pending_after_restart[completed]
+FAILED tests/test_reliability_capture.py::test_growth_during_close_stays_pending_after_restart[error]
+FAILED tests/test_reliability_capture.py::test_non_success_close_receipt_does_not_claim_transcript[receipt0]
+FAILED tests/test_reliability_capture.py::test_non_success_close_receipt_does_not_claim_transcript[receipt1]
+FAILED tests/test_reliability_capture.py::test_non_success_close_receipt_does_not_claim_transcript[receipt2]
+FAILED tests/test_reliability_capture.py::test_non_success_close_receipt_does_not_claim_transcript[receipt3]
+FAILED tests/test_reliability_capture.py::test_non_success_close_receipt_does_not_claim_transcript[receipt4]
+FAILED tests/test_reliability_capture.py::test_non_success_close_receipt_does_not_claim_transcript[receipt5]

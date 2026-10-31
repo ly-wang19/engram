@@ -1,6 +1,6 @@
 # Engram 全链路架构与数据流报告
 
-最后更新：2026-09-01
+最后更新：2026-10-30
 
 本文是 Engram 当前实现的中文工程说明书，目标是让项目负责人不用逐行读代码，也能完整掌握：
 
@@ -14,6 +14,34 @@
 和已提交的 `results/*.jsonl` 原始日志为准。
 
 ## 0. 阅读入口
+
+### 2026-10-29：评测读路径的标签隔离
+
+`eval/bench.py` 的扩展重试决策只接收实际模型输出和运行开关，不能使用 `question_id` 的 `_abs` 后缀或标准答案是否为空来决定是否重试。标准答案与题型仅用于评测与分析，不能成为生产无法获得的重试条件。新日志保持旧字段兼容，并以 `tok_unit=whitespace_words`、`total_tokens=null` 和 `lat_scope=context_and_answer_excluding_judge` 明示计量边界；尚未获得provider usage时不声称总tokens成本。
+
+`eval/evidence_coverage.py` 将当前单步episode检索与独立正分BM25/RRF原型置于同缓存向量下对照，并用数据/选择器/参数指纹锁定续跑。470题实测k=4完整覆盖390→397，但耗时增加，且池外gold返回增量为0；生产默认保持原逻辑。详细边界见 [离线实验](algorithm-evidence-20261030.zh-CN.md)。
+
+离线检索诊断独立检查必要会话的全部覆盖，而非将任一会话命中写成完整证据召回。最终回答仍须通过固定模型、固定裁判的完整QA对照；基于源码或局部召回的发现不直接改变公开数字。
+
+### 2026-10-30：冻结上下文装配与原文裁切兜底
+
+`lean_context` 完成 facts、summary、raw、provenance 和聚合证据选择后，将 `blocks / need / detail_eps` 交给 `_pack_lean_blocks`。默认仍使用已有按证据或均分预算策略；`packing_summary_fallback=False` 保持旧路径。开启实验后，完整 raw 记录在装配结果中仍然存在才足以去掉同来源摘要；仅有来源 header 不算完整。已裁掉或只显示一部分的 raw 可以回补其现有摘要，最多按 detail 数迭代，所有输出仍遵守字符预算。摘要复用不产生新的模型调用或数据库写入。
+
+这一兜底不能保证语义答案保留，也可能因共享预算挤占其他证据，所以仅作为实验开关。`eval/context_replay.py` 在一次真实缓存读后截获装配前输入，将公开基准原文放在本地 `data/` 冻结目录；结果日志只保存计数、来源 ID、指纹和诊断值。每次缓存请求记录 key/response hash，任何未命中都使整题无效。纯重放验证源码与 manifest 身份后，直接比较固定输入的两臂，不调用检索、embedding 或 LLM。真实结果与边界见 [证据保留实验](algorithm-context-evidence-20261030.zh-CN.md)。
+
+60 题实测显示，core 的末尾回补会再次被配额裁掉，没有来源收益。第二版仅在 eval 原型 `context_replay_priority.py` 中前置同样的回补摘要；父运行 manifest、冻结输入哈希及 baseline 输出哈希锁定对照。60k 下完整来源 98→99/100，短字面 20/33 不变；它尚未接入生产默认，也不能据此推断真实 QA 准确率。下一步应固定该候选，在未参与本轮诊断的样本验证，不能继续在同一 60 题调参。
+
+该固定验证现由 `context_replay_holdout.py` 完成：410 题全部尝试，407 有效、3 缺缓存；每题冻结后两臂共享输入，缓存失败不补题，纯重放不加载模型。60k 全来源覆盖 363→387/407，但小预算出现摘要来源回退。`context_replay_report.py` 的判定拒绝用净增抵消单题回退，缺缓存也不能把有效子集写成完整通过。重放 411 条 JSON 解析后一致；3 条 invalid 只改变字段顺序，其余有效输入/context 哈希均一致。详见 [固定验证报告](algorithm-context-holdout-20261030.zh-CN.md)，生产默认及公开 QA 数字不变。
+
+### 2026-10-25：真实采集与接入的状态契约
+
+- 项目级 MCP 与 watcher 可共享同一个 `--api-key-file`。显式 key、显式 key file、环境 key、环境 key file 依次选择；选中的文件不可读或为空即失败，不静默切换身份。实际租户仍由服务端鉴权映射决定，配置相似不能代替进程回读。
+- watcher 的 `seen` 只表示成功完成；无可读对话且 JSONL 校验通过的文件进入 `non_conversational[path]=size`，文件增长后重新排队。损坏或不可读文件保持可重试。连续关闭失败进入独立 `close_deferred`，不标成已蒸馏；凭证修复后需重新排入相关条目。仅含加密压缩记录的文件没有可供提取的正文，跳过不等于已保存其历史内容。
+- `close_session` 分开返回原文处理 `ok` 与 `outcomes_status`：`completed`、`error`、`unavailable`、`disabled`、`no_episodes`。调用成功但返回空数组属于 `completed`；provider 异常只回传安全的异常类别。服务始终保留原文，不能把 `ok=true` 当成提炼成功。
+- HTTP `/v1/recall` 新增可选 `answer`，默认 `true` 保留控制台行为；远端 MCP 与 doctor 明确传 `false`。生成答案由调用 Agent 承担，不再因为纯召回额外请求服务端 answerer。此开关不改变检索排序，也不承诺所有查询规划完全无模型调用。
+- 真实验证分为配置读取、实际 MCP 进程、定时采集执行、历史证据回答四层。已启动聊天不自动等于加载了新工具；新进程通过与当前聊天热加载状态分别报告。公开 benchmark 数字不因此更新。
+
+本轮内容不含原始会话、密钥或个人配置；去标识验证摘要见 `results/real_usage_loop_2026-10-25.json`。
 
 | 你想看什么 | 入口 |
 | --- | --- |
@@ -30,6 +58,13 @@
 1. 先读本文的 1 到 5 节，建立完整数据流。
 2. 再读 `docs/architecture-optimization-map.zh-CN.md`，看最近 AI 改了哪里。
 3. 做算法改动前读第 9 节和第 12 节，确认怎么开关、怎么验收、怎么留日志。
+
+## 2026-10-30：异常恢复与完成标记的可靠性修复
+
+- System-2：并行提炼与事实转换异常不再吞成空列表；进入事实写入阶段前失败则保留原文 pending，关闭任务返回失败，成功空结果仍能完成。此保证不覆盖冲突处理或图存储的全事务。
+- 持久化：schema 1 与根目录 JSONL/manifest 保持兼容，新增 `.snapshot-backup/ready.json` 恢复标记。保存先备份旧集合并同步，全部替换完成后清除标记；load/save 共锁，重开会恢复未提交快照，恢复中断可重试。增加全量备份 I/O 和空间；旧版读取器回退前须由本版恢复未完成事务。
+- System-1 采集：seen/close_deferred 记录尝试前文件大小，关闭期间增长的尾部保留在队列；显式关闭回执仅 `completed + ok=true` 认成功，缺字段旧协议兼容保留。
+- [固定前后验证](reliability-validation-20261030.zh-CN.md)：25例在开工快照19失败/6通过，修复后25通过；完整离线878通过/1跳过，zero-setup通过。只证明已覆盖故障路径，不更新公开QA指标，也没有部署或恢复真实provider。
 
 ## 1. 当前架构一句话
 
@@ -650,6 +685,18 @@ flowchart TD
    删除集与 `audit()` 的分组集必须描述同一批行——两侧都对 `user_id` 走 `resolver.resolve`，否则
    `expect_count` 这个乐观并发守卫会在两个不同人群之间比大小、放行一次删错对象的操作。
 
+### 10.0 控制台浏览链路（2026-10-29）
+
+历史部署：10月29日管理面发布为 `console-20261029-684b334d59c7`，当时保留旧核心导入默认值。10月30日六项产品发布已取代该版本，并部署稳定HEAD的None导入分流和来源metadata；精确范围及当前模型限制见下节10.1和 `deploy/releases/product-20261030-d64e86214b92/`。
+
+控制台从概览最近会话进入会话浏览器；`GET /v1/sessions` 在搜索之后计算 summary，再按 `status`（pending / with_facts / working）筛选与 `sort` 排序，最后使用 limit/offset 分页。事实 provenance 以 episode→session 反向映射统计，避免逐条事实遍历所有会话。
+
+`GET /v1/memories` 增加 session_id 精确关联原文与对应事实，category/source 精确筛选，newest/oldest/salience 排序；fact_facets 在权限、事实类型、状态、搜索及会话筛选后生成。原文与事实分别使用 offset 翻页，不再依赖不断扩大 limit。旧调用默认行为保持。
+
+`GET /v1/facts/{fact_id}/sources` 从当前租户热/冷事实存储定位事实，再按 provenance ID 直接读取 episode；不再下载最近 200 条原文后匹配。默认隐藏原文，用户明确展开时传 include_sensitive=true；返回分页和 missing_count。其它租户与不存在的来源均不暴露正文或元数据。来源可以跳转到对应会话。
+
+React Query 查询键覆盖账号、事实、分页与敏感显示条件；写入和关闭会话刷新会话索引、报告、工作记忆和状态。关闭结果仅在 outcomes_status=completed 时显示提炼完成，其它状态显示未提炼或失败。以上均属于管理面，不改变 recall、多跳排序、事实生命周期或持久化格式。
+
 ### 10.1 商业自托管请求与落盘数据流
 
 ```mermaid
@@ -676,6 +723,39 @@ flowchart LR
 
 这条链路没有改变 `Memory` 内部的抽取、冲突、图构建或检索算法。工程发布结果记录到
 `results/commercial_release_0_1_0_validation.jsonl`，不能被当作算法效果提升证据。
+
+### 10.1 持久产品管理层（2026-10-30）
+
+`MemoryService` 现在组合 `ManagementStore`、`DistillationJobs`、`ModelManager` 和 `ConnectionTracker`。领域状态保存在数据目录 `.management.sqlite3`，既有 Episode/Fact/Graph JSONL 快照仍是记忆存储。SQLite 是标准库，无新增核心硬依赖。HTTP router 工厂注入当前服务与鉴权，不反向导入 app；新增界面共享原 Bearer request、账号隔离 Query key 和双语 UI。
+
+```mermaid
+flowchart LR
+  UI[控制台] --> JOB[持久提炼任务]
+  OLD[同步 close / MCP] --> JOB
+  JOB --> CLOSE[原会话提炼实现 + 锁内任务守卫]
+  UI --> ASK[冻结证据 → 回答 → 引用校验]
+  ASK --> SRC[精确事实/原文 → 人工更正]
+  UI --> REV[未决问题与完整体检队列]
+  UI --> ADM[独立管理员模型配置/探测]
+  UI --> PRE[选择范围 → 预览令牌 → 确认]
+  PRE --> INTENT[持久删除意图]
+  INTENT --> CLEAN[取消旧任务 + 清理记忆及派生状态]
+  CLEAN --> STAGE[完整脱敏快照暂存 → 保存 → 完成]
+  JOB --> DB[(租户隔离 SQLite)]
+  ASK --> DB
+  REV --> DB
+  ADM --> DB
+  INTENT --> DB
+```
+
+- 任务：pending/running/succeeded/failed；只有真实 `outcomes_status=completed` 且 ok 才成功。服务启动恢复 pending，孤立 running 标 interrupted。文件锁确认同机执行权，事务 CAS 阻止已遗忘任务复活。同步接口附加 job_id/status/reason，保留原字段。无跨主机 exactly-once 承诺。
+- 问答：`/v1/ask` 只引用送入本次回答上下文的 ID。事实、原文、敏感开关与 as_of 一起约束证据读取；纠错或遗忘使旧引用失效。生成途中数据变化会丢弃旧上下文。原 `/v1/recall` 与评测读路径保留。
+- Review：服务端筛选分页；问题解答关联检查同租户、有效结论和版本；体检忽略/处理与历史保存，来源变化自动重开。隐藏敏感内容时也隐藏相关处理备注。
+- 管理：`ENGRAM_ADMIN_KEYS` 加当前业务身份保护模型配置。三角色独立继承/自定义/禁用；配置秘密不回显。来源页只陈述收到的入库/提炼与客户端上报事件，500 条事件保留，不推断在线状态。
+- 遗忘：会话/来源/有限时间取交集；预览版本含原文、事实、工作记忆、review 和来源事件。共享来源事实整体删除；无完整谱系的自动事实、摘要、画像缓存、问题/体检记录按预览说明清理。先写固定 ID 删除意图，再写完整脱敏暂存快照，再覆盖已有快照；重启时先从暂存恢复完整文件，后重放未完成意图。`get` 的同租户可重入写锁屏障覆盖 HTTP/MCP 的读入口，向量重建使用同一锁以避免重复 flock。完成后清除暂存和旧引用/预览。
+
+边界验证和命令：[六项产品统一验收](product-completion-validation-20261030.md)。六项产品层已部署为 `product-20261030-d64e86214b92`；配置切换会同步热内存的 `summarizer.llm`。稳定HEAD的memory/config/graph_builder只补必需兼容，不包含当前检索算法实验。兼容回归159 passed / 1 skipped，服务器实际运行时隔离API与公网页面回读通过。原有DeepSeek凭证经实际请求被拒绝，真实提炼/生成仍须更新有效凭证。[部署与回滚说明](../deploy/releases/product-20261030-d64e86214b92/README.zh-CN.md)。未改变基准日志或公开性能数字。
+
 
 ## 11. Eval harness 数据流
 

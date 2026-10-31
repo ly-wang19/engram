@@ -1,0 +1,90 @@
+{
+  "schema_version": 1,
+  "created_at": "2026-10-29T15:18:45.976527Z",
+  "updated_at": "2026-10-29T15:29:10.428599Z",
+  "status": "PASS",
+  "objective": "Engram 前后端功能与体验优化",
+  "stage": "控制台功能贯通与验证",
+  "evidence_standard": "新增功能通过后端测试、前端构建与浏览器实际操作，离线 quickstart 保持可用，架构文档更新",
+  "source": {
+    "thread_id": "01a1883d-27ee-75b3-89c5-9b8f75897ce8",
+    "rollout": "/Users/ywwl/.codex/sessions/2026/10/29/rollout-2026-10-29T23-17-51-01a1883d-27ee-75b3-89c5-9b8f75897ce8.jsonl",
+    "state_db": null,
+    "measurement": "rollout"
+  },
+  "limits": {
+    "token_budget": 3000000,
+    "checkpoint_interval": 1000000,
+    "candidate_limit": 2,
+    "probe_token_limit": 500000,
+    "probe_minutes": 5.0
+  },
+  "baseline_total_tokens": 95919,
+  "last_checkpoint_total_tokens": 3126195,
+  "last_checkpoint_candidate_count": 1,
+  "first_artifact_at": "2026-10-29T15:20:14.987081Z",
+  "artifacts": [
+    {
+      "value": "/Users/ywwl/Documents/Claude/Projects/Super memory/HANDOFF.md",
+      "recorded_at": "2026-10-29T15:20:14.986145Z"
+    },
+    {
+      "value": "/Users/ywwl/Documents/Claude/Projects/Super memory/tests/test_console_browse.py",
+      "recorded_at": "2026-10-29T15:25:34.933198Z"
+    },
+    {
+      "value": "/Users/ywwl/Documents/Claude/Projects/Super memory/docs/console-browse-validation-20261029.md",
+      "recorded_at": "2026-10-29T15:29:10.413315Z"
+    }
+  ],
+  "candidates": [
+    {
+      "value": "console-integration",
+      "recorded_at": "2026-10-29T15:20:14.987098Z"
+    }
+  ],
+  "evidence_refs": [
+    {
+      "value": "source:Conversations.tsx latest-12; queries.ts latest-200 provenance",
+      "recorded_at": "2026-10-29T15:20:14.987105Z"
+    },
+    {
+      "value": "test:10 targeted backend tests passed; frontend build passed; zero-setup passed",
+      "recorded_at": "2026-10-29T15:25:34.933412Z"
+    },
+    {
+      "value": "test:pytest649+skip1; build; zero-setup; Playwright9 checks desktop/mobile",
+      "recorded_at": "2026-10-29T15:29:10.413599Z"
+    }
+  ],
+  "checkpoints": [
+    {
+      "recorded_at": "2026-10-29T15:25:34.939032Z",
+      "decision": "BLOCK",
+      "reason": "实现已贯通，待一次完整回归与浏览器集成验收，不扩大功能范围",
+      "resume_when": null,
+      "total_tokens": 2288599,
+      "token_delta": 2192680,
+      "candidate_count": 1,
+      "artifact_count": 2,
+      "evidence_ref_count": 2,
+      "trigger_reasons": [
+        "TOKEN_CHECKPOINT_REACHED"
+      ]
+    },
+    {
+      "recorded_at": "2026-10-29T15:29:10.428587Z",
+      "decision": "PASS",
+      "reason": "四条验收全部通过，停止本轮功能扩展",
+      "resume_when": null,
+      "total_tokens": 3126195,
+      "token_delta": 3030276,
+      "candidate_count": 1,
+      "artifact_count": 3,
+      "evidence_ref_count": 3,
+      "trigger_reasons": [
+        "TOKEN_BUDGET_EXHAUSTED"
+      ]
+    }
+  ]
+}

@@ -45,6 +45,7 @@ export const en = {
   },
 
   nav: {
+    jobs: 'Distillation jobs',
     dashboard: 'Overview',
     journal: 'Journal',
     profile: 'Profile',

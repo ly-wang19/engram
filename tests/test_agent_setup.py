@@ -258,7 +258,8 @@ def test_render_openai_setup_contains_memory_extension_and_close_call():
     assert "'session_id': session_id" in out
     assert "'scope': 'auto'" in out
     assert "/v1/sessions/close" in out
-    assert "Authorization: Bearer sk-test" in out
+    assert "Authorization: Bearer <API_KEY>" in out
+    assert "sk-test" not in out
 
 
 def test_install_codex_config_creates_file(tmp_path):
@@ -354,8 +355,9 @@ def test_render_codex_config_result_verify_command_matches_remote_mode(tmp_path)
 
     assert (
         "engram-agent-doctor --client codex --python /opt/engram/bin/python "
-        "--api-url http://engram.test --api-key sk-test"
+        "--api-url http://engram.test --api-key '<API_KEY>'"
     ) in report
+    assert "sk-test" not in report
 
 
 def test_render_codex_config_result_verify_command_matches_local_namespace(tmp_path):
@@ -928,3 +930,58 @@ def test_codex_config_backups_do_not_overwrite_within_same_second(tmp_path, monk
     assert uninstalled["backup"].endswith("config.toml.engram-bak-20260626235959-1")
     assert (tmp_path / installed["backup"]).exists()
     assert (tmp_path / uninstalled["backup"]).exists()
+
+
+def test_key_file_bootstrap_shares_path_without_copying_secret(tmp_path, monkeypatch, capsys):
+    from engram import agent_setup as A
+
+    key_file = tmp_path / "watch.key"
+    key_file.write_text("synthetic-shared-secret\n")
+    monkeypatch.setenv("ENGRAM_API_KEY", "ambient-other-tenant")
+    codex = tmp_path / "config.toml"
+    mcp_json = tmp_path / ".mcp.json"
+    calls = []
+    monkeypatch.setattr(A, "run_codex_doctor", lambda **kw: calls.append(kw) or {"ok": True})
+    A.main(["--bootstrap", "--api-url", "http://engram.test", "--api-key-file", str(key_file),
+            "--codex-config", str(codex), "--mcp-json", str(mcp_json)])
+    installed = codex.read_text() + mcp_json.read_text()
+    output = capsys.readouterr().out
+    assert '"--api-key-file"' in installed and str(key_file) in installed
+    assert '"--api-key"' not in installed
+    assert "synthetic-shared-secret" not in installed + output
+    assert "ambient-other-tenant" not in installed + output
+    assert "--api-key-file" in output
+    assert calls[0]["api_key"] is None
+    assert calls[0]["api_key_file"] == str(key_file)
+
+
+def test_setup_env_key_file_and_explicit_key_precedence(tmp_path, monkeypatch):
+    from engram import agent_setup as A
+
+    key_file = tmp_path / "watch.key"
+    key_file.write_text("file-tenant")
+    monkeypatch.delenv("ENGRAM_API_KEY", raising=False)
+    monkeypatch.setenv("ENGRAM_API_KEY_FILE", str(key_file))
+    args = A.mcp_args(api_url="http://engram.test", api_key=None, namespace=None)
+    assert args[-2:] == ["--api-key-file", str(key_file)]
+    args = A.mcp_args(api_url="http://engram.test", api_key="explicit", namespace=None,
+                      api_key_file=str(tmp_path / "missing"))
+    assert args[-2:] == ["--api-key", "explicit"]
+    out = A.render_markdown("all", api_url="http://engram.test", api_key_file=str(key_file))
+    assert "file-tenant" not in out
+    assert "--api-key-file" in out and "Path(" in out
+
+
+@pytest.mark.parametrize("contents", [None, " \n"])
+def test_invalid_key_file_refuses_setup_before_config_write(tmp_path, monkeypatch, contents):
+    from engram import agent_setup as A
+
+    key_file = tmp_path / "watch.key"
+    if contents is not None:
+        key_file.write_text(contents)
+    config = tmp_path / "config.toml"
+    monkeypatch.setenv("ENGRAM_API_KEY", "must-not-fallback")
+    with pytest.raises(SystemExit) as exc:
+        A.main(["--install-codex", "--api-key-file", str(key_file), "--codex-config", str(config)])
+    assert exc.value.code == 2
+    assert not config.exists()

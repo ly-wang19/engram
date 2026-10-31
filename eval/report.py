@@ -88,6 +88,7 @@ def format_bench_report(path: str, rows: list[dict]) -> str:
     # accuracy needs a non-None ok; tokens/latency averaged over scored items only
     acc: dict[str, dict[str, list[bool]]] = {s: defaultdict(list) for s in systems}
     toks: dict[str, list[int]] = {s: [] for s in systems}
+    units: dict[str, set[str]] = {s: set() for s in systems}
     lats: dict[str, list[float]] = {s: [] for s in systems}
     errs: dict[str, int] = {s: 0 for s in systems}
     for r in rows:
@@ -103,11 +104,12 @@ def format_bench_report(path: str, rows: list[dict]) -> str:
             elif res.get("ok") is not None:
                 acc[s][cat].append(bool(res["ok"]))
                 toks[s].append(res.get("tok", 0))
+                units[s].add(res.get("tok_unit", "unrecorded"))
                 lats[s].append(res.get("lat", 0.0))
 
     cats = sorted({c for s in systems for c in acc[s]})
     cat_w = max(26, *(len(c) for c in cats), len("avg context tokens")) + 2
-    w = max(14, *(len(s) for s in systems)) if systems else 14
+    w = max(16, *(len(s) for s in systems)) if systems else 16
     lines = [f"\nFILE: {path}   ({len(rows)} items written)\n"]
     header = "  " + "category".ljust(cat_w) + "".join(s.ljust(w + 2) for s in systems)
     lines.append(header)
@@ -132,10 +134,16 @@ def format_bench_report(path: str, rows: list[dict]) -> str:
     for s in systems:
         line += (f"{scored_counts[s]}/{len(rows)}" if rows else "-").ljust(w + 2)
     lines.append(line)
-    line = "  " + "avg context tokens".ljust(cat_w)
+    # The historical `tok` field is not a reliable token unit: bench.py used whitespace words.
+    # Preserve raw values, expose their units, and never average unlike units into a cost claim.
+    line = "  " + "avg context size (tok)".ljust(cat_w)
     for s in systems:
-        line += (f"{sum(toks[s])//len(toks[s])}" if toks[s] else "-").ljust(w + 2)
+        line += (f"{sum(toks[s])//len(toks[s])}" if toks[s] and len(units[s]) == 1 else "-").ljust(w + 2)
     lines.append(line)
+    lines.append("  " + "context unit".ljust(cat_w) + "".join(
+        (next(iter(units[s])) if len(units[s]) == 1 else "mixed/unknown").ljust(w + 2)
+        for s in systems))
+    lines.append("  Context size excludes other model calls; total token usage is not reported here.")
     line = "  " + "p50 latency ms".ljust(cat_w)
     for s in systems:
         if lats[s]:

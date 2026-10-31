@@ -1,0 +1,15 @@
+{
+  "release": "console-20261029-684b334d59c7",
+  "files": {
+    "engram/service.py": "ddd61e63b2ddaef7a6f990003c9b4f67c6b13aba56c945075e5e94a29d7ecbb2",
+    "engram/consolidate/outcomes.py": "73afd9ae6ac83a654573844ec73525682273add35a234d5dcd27f505dc3c8b20",
+    "engram/server/app.py": "db8e0f12fc6db67b3f51474ee71c75ce8151421b22a755e84bf98627bf6a8a28",
+    "frontend/dist/index.html": "c1946ed3fb9d9f87dd18cd5a40cbec22c8dc8e00856c60af033f6ca3e6b5c007",
+    "frontend/dist/assets/index-C4nJ3QQk.css": "b49776ab09cda015846f2317542ebf4b35c9e77ea2455981d024b745f348dd7f",
+    "frontend/dist/assets/index-BW2-gjue.js": "7c854f2862ee8b102ce22963ddf3bf9ddec0c6663c3232bf554299b1f378b6bf"
+  },
+  "source_head": "267a850b5be6773d894219da98ad17ade5d8fae0",
+  "source_dirty": true,
+  "compatibility": "remote core retained; legacy default import extraction preserved",
+  "test_result": "38 passed, 1 skipped with remote core; prior full local 649 passed, 1 skipped"
+}

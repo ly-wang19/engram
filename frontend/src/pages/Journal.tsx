@@ -1,13 +1,18 @@
 import { useEffect, useRef, useState } from 'react'
-import { HelpCircle, Lock, Search, Trash2 } from 'lucide-react'
+import { Lock, Search, Trash2 } from 'lucide-react'
 
-import { Button, Card, CardTitle, ErrorState, PageHeader, Spinner } from '../components/ui'
+import { Card, CardTitle, ErrorState, PageHeader, Spinner } from '../components/ui'
 import { ConfirmDialog } from '../components/Modal'
 import { toast } from '../components/Toast'
-import { useCloseSession, useDeleteFact, useEditFact, useMemories, useSessions } from '../hooks/queries'
+import { useDeleteFact, useEditFact, useSessions } from '../hooks/queries'
 import { useT } from '../i18n'
 import { splitStamp } from '../lib/format'
 import type { MemoryFact } from '../types'
+import { useOutcomeReview, useInvalidateReview } from '../features/review/api'
+import { Questions } from '../features/review/Questions'
+import { ReviewPager, useReviewText } from '../features/review/components'
+import { SessionDistillButton } from '../features/jobs/SessionDistillButton'
+import { useAuth } from '../store/auth'
 
 /** The archive of what sessions concluded.
  *
@@ -53,33 +58,29 @@ export function groupOutcomes(facts: MemoryFact[]): OutcomeGroup[] {
 }
 
 export default function Journal() {
+  const apiKey = useAuth(s => s.apiKey)
+  return <JournalContent key={apiKey} />
+}
+
+function JournalContent() {
   const t = useT()
+  const tr = useReviewText()
   const [q, setQ] = useState('')
   const [showSuperseded, setShowSuperseded] = useState(false)
   const [kindChip, setKindChip] = useState<OutcomeKind | 'all'>('all')
-  const [limit, setLimit] = useState(60)
+  const [offset, setOffset] = useState(0)
+  const [includeSensitive, setIncludeSensitive] = useState(false)
 
   useEffect(() => {
-    setLimit(60)
-  }, [q, showSuperseded, kindChip])
+    setOffset(0)
+  }, [q, showSuperseded, kindChip, includeSensitive])
 
-  const { data, isLoading, isError, error } = useMemories({
-    kind: 'outcomes',
-    facts_limit: limit,
-    episodes_limit: 0,
-    q,
-    status: showSuperseded ? undefined : 'live',
-    include_sensitive: true,
+  const { data, isLoading, isError, error } = useOutcomeReview({
+    kind: kindChip, limit: 30, offset, q,
+    status: showSuperseded ? 'all' : 'live', include_sensitive: includeSensitive,
   })
-
-  if (isLoading) return <Spinner label={t.journal.loading} />
-  if (isError) return <ErrorState message={(error as Error).message} />
-
-  const facts = data?.facts ?? []
-  const rows = kindChip === 'all' ? facts : facts.filter((f) => f.predicate.toLowerCase() === kindChip)
+  const rows = data?.items ?? []
   const groups = groupOutcomes(rows)
-  const hasMore = data?.facts_page?.has_more ?? false
-  const open = facts.filter((f) => f.status === 'live' && f.predicate.toLowerCase() === 'open_question').slice(0, 8)
 
   let lastDate = ''
 
@@ -87,7 +88,11 @@ export default function Journal() {
     <div className="space-y-6">
       <PageHeader title={t.journal.title} subtitle={t.journal.subtitle} />
 
-      {open.length > 0 && <OpenQuestionsCard items={open} />}
+      <label className="flex items-center gap-2 text-sm text-ghost">
+        <input type="checkbox" checked={includeSensitive} onChange={e => setIncludeSensitive(e.target.checked)} />
+        {tr('显示敏感内容与处理备注', 'Show sensitive content and handling notes')}
+      </label>
+      <Questions key={String(includeSensitive)} includeSensitive={includeSensitive} />
 
       <Card className="!p-3">
         <div className="flex flex-wrap items-center gap-3">
@@ -125,7 +130,8 @@ export default function Journal() {
         </div>
       </Card>
 
-      {rows.length ? (
+      {isError && <ErrorState message={(error as Error).message} />}
+      {isLoading ? <Spinner label={t.journal.loading} /> : rows.length ? (
         <>
           <div className="space-y-4">
             {groups.map((g, i) => {
@@ -144,16 +150,13 @@ export default function Journal() {
               )
             })}
           </div>
-          {hasMore && (
-            <div className="flex justify-center">
-              <Button variant="ghost" onClick={() => setLimit((n) => n + 60)}>
-                {t.journal.loadMore}
-              </Button>
-            </div>
-          )}
+          {data && <ReviewPager page={data.page} onOffset={setOffset} />}
         </>
       ) : (
-        <JournalEmpty />
+        !isError && <>
+          <JournalEmpty />
+          {data && <ReviewPager page={data.page} onOffset={setOffset} />}
+        </>
       )}
 
       {/* Deliberately not empty-state-only: one distilled session does not mean the backlog is done,
@@ -190,30 +193,6 @@ function KindChip({
     >
       {label}
     </button>
-  )
-}
-
-function OpenQuestionsCard({ items }: { items: MemoryFact[] }) {
-  const t = useT()
-  return (
-    <Card className="!border-brand-amber/30 !bg-brand-amber/[0.06]">
-      <CardTitle>
-        <span className="inline-flex items-center gap-2 text-brand-amber">
-          <HelpCircle className="h-4 w-4" /> {t.journal.openQuestionsTitle(items.length)}
-        </span>
-      </CardTitle>
-      <ul className="space-y-2">
-        {items.map((f) => {
-          const { date } = splitStamp(f.valid_at)
-          return (
-            <li key={f.id} className="flex items-baseline gap-2.5 text-sm">
-              <time className="shrink-0 text-[11px] tabular-nums text-ghost">{date}</time>
-              <span className="min-w-0 break-words leading-relaxed text-slate-100">{f.display || f.text}</span>
-            </li>
-          )
-        })}
-      </ul>
-    </Card>
   )
 }
 
@@ -259,6 +238,7 @@ function OutcomeRow({
 }) {
   const t = useT()
   const editFact = useEditFact()
+  const invalidateReview = useInvalidateReview()
   const deleteFact = useDeleteFact()
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState('')
@@ -291,6 +271,7 @@ function OutcomeRow({
         onSuccess: (r) => {
           // The edit marks the fact user-authored — that is what tells the owner the correction will
           // survive the next distillation instead of being quietly re-extracted over.
+          invalidateReview()
           setMine(r.source === 'user')
           toast.success(t.journal.saved)
           setEditing(false)
@@ -365,7 +346,7 @@ function OutcomeRow({
         onClose={() => setConfirming(false)}
         onConfirm={() =>
           deleteFact.mutate(fact.id, {
-            onSuccess: () => setConfirming(false),
+            onSuccess: () => { invalidateReview(); setConfirming(false) },
             onError: (e) => toast.error(String((e as Error).message)),
           })
         }
@@ -428,23 +409,6 @@ function JournalEmpty() {
 function BackfillSessions({ className }: { className?: string }) {
   const t = useT()
   const sessions = useSessions({ limit: 8 })
-  const closeSession = useCloseSession()
-  const [pending, setPending] = useState<string | null>(null)
-
-  const distil = (id: string) => {
-    setPending(id)
-    closeSession.mutate(id, {
-      onSuccess: (r) => {
-        setPending(null)
-        toast.success(t.journal.backfillDone(r.outcomes))
-      },
-      onError: (e) => {
-        setPending(null)
-        toast.error(String((e as Error).message))
-      },
-    })
-  }
-
   if (!sessions.data?.sessions.length) return null
 
   return (
@@ -462,15 +426,7 @@ function BackfillSessions({ className }: { className?: string }) {
               </div>
               {s.last_event_at_h && <div className="mt-1 text-[11px] text-ghost">{s.last_event_at_h}</div>}
             </div>
-            <Button
-              variant="ghost"
-              className="px-2 py-1 text-xs"
-              loading={pending === s.id}
-              disabled={!!pending}
-              onClick={() => distil(s.id)}
-            >
-              {t.journal.backfillButton}
-            </Button>
+            <SessionDistillButton sessionId={s.id} label={t.journal.backfillButton} />
           </li>
         ))}
       </ul>

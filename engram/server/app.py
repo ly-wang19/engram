@@ -24,10 +24,10 @@ from __future__ import annotations
 import hmac
 import os
 from contextlib import asynccontextmanager
-from typing import Optional
+from typing import Literal, Optional
 
 try:
-    from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Request
+    from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Query, Request
     from fastapi.responses import JSONResponse
     from pydantic import BaseModel, ConfigDict, Field
 except Exception as exc:  # noqa: BLE001
@@ -106,7 +106,7 @@ def svc() -> MemoryService:
 
 @asynccontextmanager
 async def _lifespan(_app: FastAPI):
-    svc()  # load the embedder (and LLM) once at boot, so the first request doesn't race on it
+    svc().jobs.start()  # recover durable jobs after service/model initialization
     yield
     # Drain any queued async System-2 consolidation, then stop the worker, so a graceful shutdown doesn't
     # drop pending consolidation. No-op in the default synchronous mode.
@@ -229,6 +229,23 @@ def auth_principal(authorization: str = Header(default="")) -> Principal:
     return Principal.single(auth(authorization))
 
 
+from .admin_routes import create_router as create_admin_router
+
+app.include_router(create_admin_router(svc, auth))
+from .connection_routes import create_router as create_connection_router
+
+app.include_router(create_connection_router(svc, auth))
+from .job_routes import create_router as create_job_router
+from .review_routes import create_router as create_review_router
+from .evidence_routes import create_router as create_evidence_router
+from .forget_routes import create_router as create_forget_router
+
+app.include_router(create_job_router(svc, auth))
+app.include_router(create_review_router(svc, auth))
+app.include_router(create_evidence_router(svc, auth))
+app.include_router(create_forget_router(svc, auth))
+
+
 @app.get("/metrics")
 def metrics():
     """Live service metrics (CLAUDE.md Bet D online): p50/p95 latency per operation, request counters,
@@ -247,6 +264,7 @@ class RememberReq(BaseModel):
 class RecallReq(BaseModel):
     query: str = Field(min_length=1, max_length=32_768)
     lean: bool = True
+    answer: bool = True  # console compatibility; agents can request retrieval without generation
     n_chunks: int = Field(default=6, ge=0, le=50)
     session_id: Optional[str] = Field(default=None, max_length=512)
     as_of: Optional[float] = None  # epoch seconds: point-in-time memory view
@@ -431,11 +449,10 @@ def recall(req: RecallReq, principal: Principal = Depends(auth_principal)):
         # Cross-space read: fuse each space's lean context (agent + team + user memory), source-tagged.
         return svc().recall_multi(spaces, req.query, n_chunks=req.n_chunks, session_id=req.session_id,
                                   as_of=req.as_of, redact_sensitive=req.redact_sensitive)
-    # answer=True: also generate a real answer over the lean context + report the full-context baseline
-    # token count, so the console's 问答 view can show the answer AND the token saving.
+    # The console keeps answer generation by default. MCP callers already have an answering model.
     return svc().recall(spaces[0], req.query, lean=req.lean, n_chunks=req.n_chunks,
                         session_id=req.session_id, as_of=req.as_of,
-                        redact_sensitive=req.redact_sensitive, answer=True)
+                        redact_sensitive=req.redact_sensitive, answer=req.answer)
 
 
 @app.post("/v1/sessions/close")
@@ -456,9 +473,11 @@ def close_session(req: CloseSessionReq, user: str = Depends(auth)):
 
 @app.get("/v1/sessions")
 def sessions(
-    limit: Optional[int] = None,
-    offset: int = 0,
+    limit: Optional[int] = Query(None, ge=0, le=500),
+    offset: int = Query(0, ge=0),
     q: str = "",
+    status: Optional[Literal["all", "pending", "with_facts", "working"]] = None,
+    sort: Literal["newest", "oldest", "most_facts"] = "newest",
     user: str = Depends(auth),
 ):
     """Content-free session index: session ids, counts, timestamps, and backlog state.
@@ -466,7 +485,7 @@ def sessions(
     Use this to show a user which Codex/Claude/app sessions touched their memory before drilling into a
     specific `/v1/sessions/report`.
     """
-    return svc().sessions(user, limit=limit, offset=offset, q=q)
+    return svc().sessions(user, limit=limit, offset=offset, q=q, status=status, sort=sort)
 
 
 @app.get("/v1/sessions/report")
@@ -505,6 +524,10 @@ def memories(
     kind: Optional[str] = None,
     q: str = "",
     include_sensitive: bool = False,
+    session_id: Optional[str] = None,
+    category: Optional[str] = None,
+    source: Optional[Literal["user", "extracted"]] = None,
+    sort: Literal["newest", "oldest", "salience"] = "newest",
     user: str = Depends(auth),
 ):
     """Browse stored memory.
@@ -525,6 +548,10 @@ def memories(
         kind=kind,
         q=q,
         include_sensitive=include_sensitive,
+        session_id=session_id,
+        category=category,
+        source=source,
+        sort=sort,
     )
 
 
@@ -709,6 +736,21 @@ def add_fact(req: FactReq, user: str = Depends(auth)):
         sensitive=req.sensitive,
         category=req.category,
     )
+
+
+@app.get("/v1/facts/{fact_id}/sources")
+def fact_sources(
+    fact_id: str,
+    include_sensitive: bool = False,
+    limit: int = Query(20, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    user: str = Depends(auth),
+):
+    result = svc().fact_sources(user, fact_id, include_sensitive=include_sensitive,
+                               limit=limit, offset=offset)
+    if result is None:
+        raise HTTPException(404, "fact not found")
+    return result
 
 
 @app.patch("/v1/facts/{fact_id}")

@@ -1,0 +1,80 @@
+{
+  "schema_version": 1,
+  "created_at": "2026-10-29T16:08:32.542513Z",
+  "updated_at": "2026-10-29T16:38:33.184407Z",
+  "status": "PASS",
+  "objective": "完成六项前后端产品能力",
+  "stage": "六项功能贯通与统一验收",
+  "evidence_standard": "提炼任务、问答证据、模型接入、未决问题、体检队列、选择性遗忘全部具备持久化/权限/界面/测试证据，统一浏览器与离线回归通过",
+  "source": {
+    "thread_id": "01a1883d-27ee-75b3-89c5-9b8f75897ce8",
+    "rollout": "/Users/ywwl/.codex/sessions/2026/10/29/rollout-2026-10-29T23-17-51-01a1883d-27ee-75b3-89c5-9b8f75897ce8.jsonl",
+    "state_db": null,
+    "measurement": "rollout"
+  },
+  "limits": {
+    "token_budget": 25000000,
+    "checkpoint_interval": 5000000,
+    "candidate_limit": 2,
+    "probe_token_limit": 5000000,
+    "probe_minutes": 5.0
+  },
+  "baseline_total_tokens": 11319180,
+  "last_checkpoint_total_tokens": 19278631,
+  "last_checkpoint_candidate_count": 1,
+  "first_artifact_at": "2026-10-29T16:10:01.090567Z",
+  "artifacts": [
+    {
+      "value": "/Users/ywwl/Documents/Claude/Projects/Super memory/docs/product-completion-contract-20261030.md",
+      "recorded_at": "2026-10-29T16:10:01.090112Z"
+    },
+    {
+      "value": "/Users/ywwl/Documents/Claude/Projects/Super memory/engram/management/models.py",
+      "recorded_at": "2026-10-29T16:25:49.994421Z"
+    },
+    {
+      "value": "/Users/ywwl/Documents/Claude/Projects/Super memory/docs/product-completion-validation-20261030.md",
+      "recorded_at": "2026-10-29T16:38:33.168872Z"
+    }
+  ],
+  "candidates": [
+    {
+      "value": "six-feature-integration",
+      "recorded_at": "2026-10-29T16:10:01.090575Z"
+    }
+  ],
+  "evidence_refs": [
+    {
+      "value": "source:current frontend and backend gaps verified",
+      "recorded_at": "2026-10-29T16:10:01.090581Z"
+    },
+    {
+      "value": "test:tests/test_management_settings.py:7_passed",
+      "recorded_at": "2026-10-29T16:25:49.994623Z"
+    },
+    {
+      "value": "docs/validation/product-console-20261030/browser-results.json",
+      "recorded_at": "2026-10-29T16:38:33.168997Z"
+    },
+    {
+      "value": "docs/validation/product-console-20261030/restart-results.json",
+      "recorded_at": "2026-10-29T16:38:33.168999Z"
+    }
+  ],
+  "checkpoints": [
+    {
+      "recorded_at": "2026-10-29T16:38:33.184403Z",
+      "decision": "PASS",
+      "reason": "六项能力均已贯通；全量744通过、末次67相关回归通过、浏览器10组操作和7组进程重启回读通过，构建与zero-setup通过。",
+      "resume_when": null,
+      "total_tokens": 19278631,
+      "token_delta": 7959451,
+      "candidate_count": 1,
+      "artifact_count": 3,
+      "evidence_ref_count": 4,
+      "trigger_reasons": [
+        "TOKEN_CHECKPOINT_REACHED"
+      ]
+    }
+  ]
+}

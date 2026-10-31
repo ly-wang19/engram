@@ -235,7 +235,10 @@ def run(argv: Optional[list[str]] = None, *, stdin: Optional[str] = None,
     if (state.get("seen") or {}).get(path) == st.st_size:
         _say(f"hook {key12} skipped (seen)")
         return 0
-    if watch.load_claims(args.claims).get(path) == st.st_size:
+    if (state.get("non_conversational") or {}).get(path) == st.st_size:
+        _say(f"hook {key12} skipped (non-conversational)")
+        return 0
+    if watch.load_claims(args.claims, target=target).get(path) == st.st_size:
         _say(f"hook {key12} skipped (seen)")
         return 0
 
@@ -262,6 +265,9 @@ def run(argv: Optional[list[str]] = None, *, stdin: Optional[str] = None,
     # like success, so importing is not evidence on its own.
     ids = (result.get("sessions_by_path") or {}).get(path) or []
     closed = set(result.get("closed_ok") or [])
+    if path in (result.get("non_conversational_by_path") or {}):
+        _say(f"hook {key12} skipped (non-conversational) — nothing claimed")
+        return 0
     if not ids or not set(ids) <= closed:
         _say(f"hook {key12} failed: import or close did not complete — nothing claimed")
         return 0

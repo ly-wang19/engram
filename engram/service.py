@@ -147,10 +147,14 @@ class MemoryService:
         self._outcomes_forced_off = os.environ.get("ENGRAM_SESSION_OUTCOMES") == "0"
         if self._outcomes_forced_off:
             self.config.session_outcomes = False
+        from .management.store import ManagementStore
+
+        self.management_store = ManagementStore(self.data_dir)
         self._hot: "OrderedDict[str, Memory]" = OrderedDict()
         self._hot_versions: dict[str, tuple[int, int] | None] = {}
         self._locks: dict[str, threading.Lock] = {}
         self._g = threading.Lock()
+        self._held_writes = threading.local()
         # Live service metrics (Bet D online): latency percentiles on the SLO-bearing paths + the token-
         # savings ratio, exposed aggregate-only at GET /metrics. See engram/metrics.py.
         self.metrics = Metrics()
@@ -166,6 +170,16 @@ class MemoryService:
             self._queue = queue.Queue()
             self._worker = threading.Thread(target=self._consume, name="engram-system2", daemon=True)
             self._worker.start()
+
+        from .management.models import ModelManager
+
+        self.models = ModelManager(self)
+        from .management.connections import ConnectionTracker
+
+        self.connections = ConnectionTracker(self)
+        from .management.jobs import DistillationJobs
+
+        self.jobs = DistillationJobs(self)
 
     # --- namespace lifecycle ------------------------------------------------
     def _safe_user(self, user: str) -> str:
@@ -246,9 +260,17 @@ class MemoryService:
     @contextmanager
     def write_lock(self, user: str):
         """Serialize local read-modify-save transactions across threads and MCP stdio processes."""
+        held = getattr(self._held_writes, "users", set())
+        if user in held:
+            yield
+            return
         with self.lock(user):
             with self._user_file_lock(user):
-                yield
+                self._held_writes.users = held | {user}
+                try:
+                    yield
+                finally:
+                    self._held_writes.users = held
 
     def _store_version(self, user: str) -> tuple[int, int] | None:
         manifest = os.path.join(self._path(user), "manifest.json")
@@ -269,6 +291,18 @@ class MemoryService:
             return self._locks.setdefault(user, threading.Lock())
 
     def get(self, user: str) -> Memory:
+        # A durable erasure intent must finish before ANY surface can read this namespace,
+        # including a fresh MCP process after a crash between snapshot and status writes.
+        from .management.forgetting import SelectiveForgetting
+
+        with self.write_lock(user):
+            forgetting = SelectiveForgetting(self)
+            forgetting.restore_pending_snapshot_locked(user)
+            mem = self._get_unchecked(user)
+            forgetting.recover_locked(user, mem)
+            return mem
+
+    def _get_unchecked(self, user: str) -> Memory:
         """The hot Memory for `user`, reloading when another local process saved a newer snapshot.
 
         Agent clients often run as separate MCP stdio processes (Codex, Claude Code, Cursor) that share
@@ -293,7 +327,7 @@ class MemoryService:
             # the manifest matches the new embedder.
             if os.environ.get("ENGRAM_REEMBED_ON_MISMATCH") != "1":
                 raise
-            with self._user_file_lock(user):
+            with self.write_lock(user):
                 mem = Memory.open(self._path(user), allow_mismatch=True,
                                   embedder=self.embedder, llm=self.llm, config=self.config)
                 mem.reembed()
@@ -310,6 +344,8 @@ class MemoryService:
 
     def forget(self, user: str) -> dict:
         with self.write_lock(user):
+            self.jobs.scrub(user)
+            self.management_store.clear_namespace(user)
             with self._g:
                 self._hot.pop(user, None)
                 self._hot_versions.pop(user, None)
@@ -385,6 +421,7 @@ class MemoryService:
 
     def close(self) -> None:
         """Stop the background worker (best-effort). Safe to call when async is off."""
+        self.jobs.close()
         if self._worker is not None and self._queue is not None:
             self._queue.put(None)  # sentinel
             self._worker.join(timeout=5)
@@ -393,6 +430,22 @@ class MemoryService:
     # --- write path ---------------------------------------------------------
     @timed("remember")
     def remember(self, user: str, content: str, session_id: str = "default",
+                 scope: str = "auto") -> dict:
+        with self.write_lock(user):
+            from .management.connections import session_source
+
+            try:
+                result = self._remember_impl(user, content, session_id, scope)
+            except Exception as exc:
+                self.connections.record(user, session_source(session_id), "failed", "remember",
+                                        session_id, type(exc).__name__)
+                raise
+            self.connections.record(user, session_source(session_id),
+                                    "failed" if result.get("degraded") else "stored", "remember",
+                                    session_id, result.get("degraded"))
+            return result
+
+    def _remember_impl(self, user: str, content: str, session_id: str = "default",
                  scope: str = "auto") -> dict:
         """Store a message + run System-2 consolidation/summarization (best-effort: a transient model
         outage never loses the raw episode). `scope` (auto|long|working) routes by ephemerality —
@@ -426,6 +479,27 @@ class MemoryService:
 
     @timed("import")
     def import_(self, user: str, sessions: Optional[list] = None, format: str = "auto",
+                data: Any = None, consolidate: Optional[bool] = None, summarize: bool = True,
+                session_id: str = "imported", dedupe: bool = True) -> dict:
+        with self.write_lock(user):
+            source = "import:" + format
+            if sessions:
+                sources = set()
+                for item in sessions:
+                    meta = item.get("metadata", {}) if isinstance(item, dict) else getattr(item, "metadata", {})
+                    sources.add(str(meta.get("source", "import:" + format)) if isinstance(meta, dict) else "import:" + format)
+                if len(sources) == 1:
+                    source = sources.pop()
+            try:
+                result = self._import_impl(user, sessions, format, data, consolidate, summarize, session_id, dedupe)
+            except Exception as exc:
+                self.connections.record(user, source, "failed", "import", session_id, type(exc).__name__)
+                raise
+            self.connections.record(user, source, "deferred" if result.get("facts_deferred") else "stored",
+                                    "import", session_id, counts=result)
+            return result
+
+    def _import_impl(self, user: str, sessions: Optional[list] = None, format: str = "auto",
                 data: Any = None, consolidate: Optional[bool] = None, summarize: bool = True,
                 session_id: str = "imported", dedupe: bool = True) -> dict:
         """Bulk import: either pre-parsed `sessions` (list of ImportSession/dicts) OR raw `data` to parse
@@ -723,13 +797,18 @@ class MemoryService:
             self._save(user, mem)
             return {"ok": True, "cleared": n}
 
-    def close_session(
+    def close_session(self, user: str, session_id: str, summarize: bool = True,
+                      clear_working: bool = True, outcomes: Optional[bool] = None) -> dict:
+        return self.jobs.run_sync(user, session_id, summarize, clear_working, outcomes)
+
+    def _close_session_impl(
         self,
         user: str,
         session_id: str,
         summarize: bool = True,
         clear_working: bool = True,
         outcomes: Optional[bool] = None,
+        *, _job_guard=None,
     ) -> dict:
         """End-of-session grooming for agent clients.
 
@@ -739,7 +818,11 @@ class MemoryService:
         Claude Code / Codex / Cursor-style clients can call when a thread closes or switches tasks.
         """
         with self.write_lock(user):
+            if _job_guard is not None:
+                _job_guard()
             mem = self.get(user)
+            if _job_guard is not None:
+                _job_guard()
             canonical = mem.resolver.resolve(user)
             episodes = [
                 ep for ep in mem.episodes_doc.values()
@@ -759,12 +842,16 @@ class MemoryService:
             # progress. This is the write that keeps a personal memory fed — the per-turn extractor
             # yields biographical triples, which a working session simply does not contain.
             outcome_facts = 0
+            outcome_status = "disabled"
+            outcome_error = None
             want = self.config.session_outcomes if outcomes is None else outcomes
             if self._outcomes_forced_off:
                 want = False  # ENGRAM_SESSION_OUTCOMES=0 is the operator's ceiling; no request body lifts it
+            if want:
+                outcome_status = "no_episodes" if not episodes else "unavailable"
             if want and self.llm is not None and episodes:
                 from .consolidate.outcomes import (
-                    OUTCOME_PREDICATES, extract_outcomes, split_outcome_text,
+                    OUTCOME_PREDICATES, OutcomeExtractionError, extract_outcomes, split_outcome_text,
                 )
 
                 # Closing the same session twice must not double the conclusions. extract_outcomes only
@@ -776,7 +863,15 @@ class MemoryService:
                     if f.is_live() and f.user_id == canonical
                     and f.predicate.lower() in OUTCOME_PREDICATES and f.subject == session_id
                 }
-                for fact in extract_outcomes(self.llm, episodes, canonical, session_id=session_id):
+                try:
+                    extracted = extract_outcomes(
+                        self.llm, episodes, canonical, session_id=session_id, raise_on_error=True,
+                    )
+                    outcome_status = "completed"
+                except OutcomeExtractionError as exc:
+                    extracted = []
+                    outcome_status, outcome_error = "error", exc.error_type
+                for fact in extracted:
                     if split_outcome_text(fact.text)[0].lower()[:120] in seen_keys:
                         continue
                     fact.embedding = mem.embedder.embed(fact.text)
@@ -794,6 +889,8 @@ class MemoryService:
                 "pending_consolidated": len(pending),
                 "facts_added": stats.get("facts_added", 0),
                 "outcomes": outcome_facts,
+                "outcomes_status": outcome_status,
+                "outcomes_error": outcome_error,
                 "duplicates": stats.get("duplicates", 0),
                 "invalidated": stats.get("invalidated", 0),
                 "summaries": summaries,
@@ -960,6 +1057,8 @@ class MemoryService:
         limit: Optional[int] = None,
         offset: int = 0,
         q: str = "",
+        status: Optional[str] = None,
+        sort: str = "newest",
     ) -> dict:
         """Content-free session index for cross-agent memory management.
 
@@ -989,7 +1088,7 @@ class MemoryService:
                 }
             return sessions[sid]
 
-        episode_ids_by_session: dict[str, set[str]] = {}
+        session_by_episode: dict[str, str] = {}
         for ep in mem.episodes_doc.values():
             if ep.user_id != canonical:
                 continue
@@ -1009,37 +1108,51 @@ class MemoryService:
             if last is None or ep.event_time > last:
                 row["last_event_at"] = ep.event_time
                 row["last_event_at_h"] = fmt_datetime(ep.event_time)
-            episode_ids_by_session.setdefault(ep.session_id, set()).add(ep.id)
+            session_by_episode[ep.id] = ep.session_id
 
         for w in mem.working_mem.values():
             if w.user_id == canonical and w.is_live():
                 ensure(w.session_id)["working_live"] += 1
 
-        if episode_ids_by_session:
-            for f in _all_facts(mem):
-                if f.user_id != canonical:
-                    continue
-                provenance = set(f.provenance)
-                if not provenance:
-                    continue
-                for sid, episode_ids in episode_ids_by_session.items():
-                    if provenance.intersection(episode_ids):
-                        row = ensure(sid)
-                        row["facts_added"] += 1
-                        if getattr(f, "sensitive", False):
-                            row["facts_sensitive"] += 1
+        # Each fact contributes once per originating session, even when it cites multiple turns.
+        # Reverse lookup avoids scanning every session for every fact in a large import.
+        for f in _all_facts(mem):
+            if f.user_id != canonical:
+                continue
+            for sid in {session_by_episode[ep_id] for ep_id in f.provenance
+                        if ep_id in session_by_episode}:
+                row = ensure(sid)
+                row["facts_added"] += 1
+                if getattr(f, "sensitive", False):
+                    row["facts_sensitive"] += 1
 
         needle = q.strip().lower()
         rows = list(sessions.values())
         if needle:
             rows = [row for row in rows if needle in row["id"].lower()]
-        rows.sort(key=lambda row: row["last_event_at"] or 0, reverse=True)
+        summary = {
+            "total": len(rows),
+            "pending": sum(row["episodes_pending"] > 0 for row in rows),
+            "with_facts": sum(row["facts_added"] > 0 for row in rows),
+            "working": sum(row["working_live"] > 0 for row in rows),
+        }
+        field = {"pending": "episodes_pending", "with_facts": "facts_added",
+                 "working": "working_live"}.get(status)
+        if field:
+            rows = [row for row in rows if row[field] > 0]
+        if sort == "oldest":
+            rows.sort(key=lambda row: (row["last_event_at"] or 0, row["id"]))
+        elif sort == "most_facts":
+            rows.sort(key=lambda row: (-row["facts_added"], -(row["last_event_at"] or 0), row["id"]))
+        else:
+            rows.sort(key=lambda row: (-(row["last_event_at"] or 0), row["id"]))
         lim = _clamp_limit(limit, default=None, max_value=500)
         page_items, page = _page(rows, offset, lim)
         return {
             "ok": True,
             "user": user,
             "sessions": page_items,
+            "summary": summary,
             "page": {**page, "items": page_items},
             "next_offset": page["next_offset"],
         }
@@ -1074,6 +1187,10 @@ class MemoryService:
         kind: Optional[str] = None,
         q: str = "",
         include_sensitive: bool = False,
+        session_id: Optional[str] = None,
+        category: Optional[str] = None,
+        source: Optional[str] = None,
+        sort: str = "newest",
     ) -> dict:
         """Browse stored memory.
 
@@ -1089,8 +1206,11 @@ class MemoryService:
         from .localize import display_of  # localized rendering for Chinese-recorded facts
 
         mem = self.get(user)
-        all_facts = sorted(_all_facts(mem), key=lambda f: f.valid_at, reverse=True)
-        episodes_all = sorted(mem.episodes_doc.values(), key=lambda ep: ep.event_time, reverse=True)
+        canonical = mem.resolver.resolve(user)
+        all_facts = sorted((f for f in _all_facts(mem) if f.user_id == canonical),
+                           key=lambda f: (-f.valid_at, f.id))
+        episodes_all = sorted((ep for ep in mem.episodes_doc.values() if ep.user_id == canonical),
+                              key=lambda ep: (-ep.event_time, ep.id))
 
         needle = q.strip().lower()
 
@@ -1128,6 +1248,11 @@ class MemoryService:
             }
 
         filtered_facts = all_facts
+        session_episodes = episodes_all
+        if session_id is not None:
+            session_episodes = [ep for ep in episodes_all if ep.session_id == session_id]
+            session_episode_ids = {ep.id for ep in session_episodes}
+            filtered_facts = [f for f in filtered_facts if session_episode_ids.intersection(f.provenance)]
         if status in {"live", "current"}:
             filtered_facts = [f for f in filtered_facts if f.is_live()]
         elif status in {"superseded", "old", "history"}:
@@ -1153,7 +1278,24 @@ class MemoryService:
                 return needle in haystack
             filtered_facts = [f for f in filtered_facts if matches_fact(f)]
 
-        filtered_episodes = [] if not include_sensitive else episodes_all
+        # Facets describe the current search/privacy scope, not just the current page or facet choice.
+        fact_facets = {
+            "categories": sorted({getattr(f, "category", "") for f in filtered_facts
+                                  if getattr(f, "category", "")}),
+            "sources": sorted({f.source for f in filtered_facts}),
+        }
+        if category is not None:
+            filtered_facts = [f for f in filtered_facts if getattr(f, "category", "") == category]
+        if source is not None:
+            filtered_facts = [f for f in filtered_facts if f.source == source]
+        if sort == "oldest":
+            filtered_facts.sort(key=lambda f: (f.valid_at, f.id))
+        elif sort == "salience":
+            filtered_facts.sort(key=lambda f: (-f.salience, -f.valid_at, f.id))
+
+        filtered_episodes = [] if not include_sensitive else session_episodes
+        if sort == "oldest":
+            filtered_episodes.sort(key=lambda ep: (ep.event_time, ep.id))
         if needle and include_sensitive:
             filtered_episodes = [
                 ep for ep in filtered_episodes
@@ -1178,6 +1320,7 @@ class MemoryService:
                                              if f.is_live() and f.predicate.lower() in OUTCOME_PREDICATES),
                        "summaries": len(mem.summary_vec.values())},
             "facts": facts_payload,
+            "fact_facets": fact_facets,
             "episodes": episodes_payload,
             "facts_page": {**facts_page, "items": facts_payload},
             "episodes_page": {**episodes_page, "items": episodes_payload},
@@ -1185,6 +1328,47 @@ class MemoryService:
                 "facts": facts_page["next_offset"],
                 "episodes": episodes_page["next_offset"],
             },
+        }
+
+    def fact_sources(
+        self,
+        user: str,
+        fact_id: str,
+        include_sensitive: bool = False,
+        limit: int = 20,
+        offset: int = 0,
+    ) -> Optional[dict]:
+        """Resolve a fact's actual provenance, including sources older than any browsing page.
+
+        Raw conversations can contain private material even for a non-sensitive fact. This endpoint
+        therefore requires the same explicit owner-visible opt-in as the raw memory browser.
+        """
+        mem = self.get(user)
+        canonical = mem.resolver.resolve(user)
+        fact = mem.fact_store.get(fact_id) or mem.cold_store.get(fact_id)
+        if fact is None or fact.user_id != canonical:
+            return None
+        source_ids = set(fact.provenance)
+        episodes = [ep for ep_id in source_ids
+                    if (ep := mem.episodes_doc.get(ep_id)) is not None and ep.user_id == canonical]
+        missing_count = len(source_ids) - len(episodes)
+        episodes.sort(key=lambda ep: (ep.event_time, ep.id))
+        visible = episodes if include_sensitive else []
+        page_items, page = _page(visible, offset, _clamp_limit(limit, default=20, max_value=200))
+        payload = [{
+            "id": ep.id,
+            "date": ep.metadata.get("date") or fmt_date(ep.event_time),
+            "session": ep.session_id,
+            "content": ep.content,
+            "chars": len(ep.content),
+            "summary": ep.summary,
+        } for ep in page_items]
+        return {
+            "fact_id": fact.id,
+            "episodes": payload,
+            "page": {**page, "items": payload},
+            "missing_count": missing_count,
+            "redacted": not include_sensitive,
         }
 
     def _embedder_blindness(self, mem: Memory, canonical: str) -> Optional[dict]:

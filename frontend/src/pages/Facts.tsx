@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { Link } from 'react-router-dom'
 import { FileSearch, GitMerge, Lock, Pencil, Plus, Search, ShieldAlert, Trash2 } from 'lucide-react'
 
 import { Badge, Button, Card, CardTitle, EmptyState, ErrorState, Field, PageHeader, Spinner } from '../components/ui'
@@ -13,9 +14,9 @@ import {
   useSourceEpisodes,
   useResolveConflict,
 } from '../hooks/queries'
-import { useT } from '../i18n'
+import { useLang, useT } from '../i18n'
 import { splitStamp } from '../lib/format'
-import type { MemoryEpisode, MemoryFact } from '../types'
+import type { FactSource, MemoryEpisode, MemoryFact } from '../types'
 
 export default function Facts() {
   const addFact = useAddFact()
@@ -26,33 +27,46 @@ export default function Facts() {
   const [q, setQ] = useState('')
   const [showOld, setShowOld] = useState(true)
   const [hideSensitive, setHideSensitive] = useState(false)
-  const [limit, setLimit] = useState(40)
+  const zh = useLang((s) => s.lang) === 'zh'
+  const [draft, setDraft] = useState('')
+  const [offset, setOffset] = useState(0)
+  const [category, setCategory] = useState('')
+  const [source, setSource] = useState<FactSource | ''>('')
+  const [sort, setSort] = useState<'newest' | 'oldest' | 'salience'>('newest')
+  const [sourceOffset, setSourceOffset] = useState(0)
+  const [sourceRevealed, setSourceRevealed] = useState(false)
   const [editing, setEditing] = useState<MemoryFact | null>(null)
   const [sourceOf, setSourceOf] = useState<MemoryFact | null>(null)
   const [adding, setAdding] = useState(false)
   const [confirmFact, setConfirmFact] = useState<MemoryFact | null>(null)
 
   useEffect(() => {
-    setLimit(40)
-  }, [q, showOld, hideSensitive])
+    setOffset(0)
+  }, [q, showOld, hideSensitive, category, source, sort])
+  useEffect(() => {
+    setSourceOffset(0)
+    setSourceRevealed(false)
+  }, [sourceOf?.id])
 
   const { data, isLoading, isError, error } = useMemories({
     // Attributes only — session conclusions have their own page, and mixing them means the newer,
     // bulkier family buries the older one in both directions.
     kind: 'attributes',
-    facts_limit: limit,
+    facts_limit: 40,
+    facts_offset: offset,
+    category,
+    source: source || undefined,
+    sort,
     episodes_limit: 0,
     q,
     status: showOld ? undefined : 'live',
     include_sensitive: !hideSensitive,
   })
   const facts = data?.facts ?? []
-  const sourceQuery = useSourceEpisodes(!!sourceOf)
+  const sourceQuery = useSourceEpisodes(sourceOf?.id ?? null, sourceRevealed, sourceOffset)
   const factsPage = data?.facts_page
   const hasMore = factsPage?.has_more ?? false
 
-  if (isLoading) return <Spinner label={t.facts.loading} />
-  if (isError) return <ErrorState message={(error as Error).message} />
 
   return (
     <div className="space-y-6">
@@ -71,16 +85,17 @@ export default function Facts() {
 
       <Card className="!p-3">
         <div className="flex flex-wrap items-center gap-3">
-          <div className="flex flex-1 items-center gap-2 rounded-xl border border-line bg-white/[0.05] px-3">
+          <form onSubmit={(e) => { e.preventDefault(); setQ(draft.trim()); setOffset(0) }} className="flex min-w-0 flex-1 items-center gap-2 rounded-xl border border-line bg-white/[0.05] px-3">
             <Search className="h-4 w-4 text-ghost" />
             <input
               aria-label={t.facts.searchPlaceholder}
               className="w-full bg-transparent py-2 text-sm outline-none placeholder:text-ghost/70"
               placeholder={t.facts.searchPlaceholder}
-              value={q}
-              onChange={(e) => setQ(e.target.value)}
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
             />
-          </div>
+            <button type="submit" className="shrink-0 text-xs text-brand-cyan">{zh ? '搜索' : 'Search'}</button>
+          </form>
           <label className="flex select-none items-center gap-2 px-1 text-sm text-ghost">
             <input type="checkbox" checked={showOld} onChange={(e) => setShowOld(e.target.checked)} className="accent-brand-cyan" />
             {t.facts.showOld}
@@ -90,10 +105,36 @@ export default function Facts() {
             {t.facts.hideSensitive}
           </label>
         </div>
+        <div className="mt-3 grid gap-3 sm:grid-cols-3">
+          <Field label={zh ? '分类' : 'Category'}>
+            <select className="input" value={category} onChange={(e) => setCategory(e.target.value)}>
+              <option value="">{zh ? '全部分类' : 'All categories'}</option>
+              {[...new Set([...(data?.fact_facets?.categories ?? []), ...(category ? [category] : [])])].map((c) => <option key={c} value={c}>{c}</option>)}
+            </select>
+          </Field>
+          <Field label={zh ? '记忆来源' : 'Memory source'}>
+            <select className="input" value={source} onChange={(e) => setSource(e.target.value as FactSource | '')}>
+              <option value="">{zh ? '全部来源' : 'All sources'}</option>
+              <option value="user">{zh ? '手动确认' : 'User confirmed'}</option>
+              <option value="extracted">{zh ? '自动提取' : 'Extracted'}</option>
+            </select>
+          </Field>
+          <Field label={zh ? '排序' : 'Sort'}>
+            <select className="input" value={sort} onChange={(e) => setSort(e.target.value as typeof sort)}>
+              <option value="newest">{zh ? '最新优先' : 'Newest first'}</option>
+              <option value="oldest">{zh ? '最早优先' : 'Oldest first'}</option>
+              <option value="salience">{zh ? '重要程度' : 'Importance'}</option>
+            </select>
+          </Field>
+        </div>
+        <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-xs text-ghost">
+          <span aria-live="polite">{isLoading ? (zh ? '正在筛选…' : 'Filtering…') : (zh ? `共 ${factsPage?.total ?? 0} 条记忆` : `${factsPage?.total ?? 0} memories`)}</span>
+          <button className="text-brand-cyan hover:underline" onClick={() => { setDraft(''); setQ(''); setCategory(''); setSource(''); setSort('newest'); setShowOld(true); setHideSensitive(false); setOffset(0) }}>{zh ? '重置筛选' : 'Reset filters'}</button>
+        </div>
       </Card>
 
       <Card>
-        {facts.length ? (
+        {isLoading ? <Spinner label={t.facts.loading} /> : isError ? <ErrorState message={(error as Error).message} /> : facts.length ? (
           <>
           <ul className="divide-y divide-line">
             {facts.map((f) => {
@@ -161,16 +202,19 @@ export default function Facts() {
               )
             })}
           </ul>
-          {hasMore && (
-            <div className="mt-4 flex justify-center">
-              <Button variant="ghost" onClick={() => setLimit((n) => n + 40)}>
-                {t.facts.loadMore}
-              </Button>
+          <div className="mt-4 flex flex-wrap items-center justify-between gap-3 text-xs text-ghost">
+            <span>{offset + 1}–{offset + facts.length} / {factsPage?.total ?? facts.length}</span>
+            <div className="flex gap-2">
+              <Button variant="ghost" disabled={offset === 0} onClick={() => setOffset(Math.max(0, offset - 40))}>{zh ? '上一页' : 'Previous'}</Button>
+              <Button variant="ghost" disabled={!hasMore} onClick={() => setOffset(factsPage?.next_offset ?? offset)}>{zh ? '下一页' : 'Next'}</Button>
             </div>
-          )}
+          </div>
           </>
         ) : (
-          <EmptyState title={t.facts.emptyTitle} hint={t.facts.emptyHint} />
+          <div className="space-y-3">
+            <EmptyState title={t.facts.emptyTitle} hint={t.facts.emptyHint} />
+            {offset > 0 && <Button variant="ghost" onClick={() => setOffset(0)}>{zh ? '返回第一页' : 'Back to first page'}</Button>}
+          </div>
         )}
       </Card>
 
@@ -184,32 +228,35 @@ export default function Facts() {
                 {sourceOf.source === 'user' ? t.facts.sourceUser : t.facts.sourceExtracted}
               </p>
             </div>
-            {sourceQuery.isLoading ? (
-              <Spinner label={t.facts.sourceLoading} />
-            ) : (
-              (() => {
-                const eps = (sourceQuery.data?.episodes ?? []).filter((e: MemoryEpisode) =>
-                  sourceOf.provenance?.includes(e.id),
-                )
-                if (!eps.length) return <p className="text-sm text-ghost">{t.facts.sourceMissing}</p>
-                return (
-                  <div className="space-y-3">
-                    <p className="text-xs text-ghost">{t.facts.sourceFrom(eps.length)}</p>
-                    {eps.map((e: MemoryEpisode) => (
-                      <div key={e.id} className="rounded-xl border border-line bg-ink-900/50 p-3">
-                        <div className="mb-1 flex flex-wrap items-center gap-2 text-[11px] text-ghost">
-                          <span className="text-brand-cyan">{e.date}</span>
-                          <span className="rounded bg-white/5 px-1.5 py-px font-mono">{e.session}</span>
-                        </div>
-                        <p className="whitespace-pre-wrap break-words text-xs leading-relaxed text-slate-300">
-                          {e.content}
-                        </p>
+            {!sourceRevealed ? (
+              <div className="space-y-3">
+                <p className="text-sm text-ghost">{zh ? '原文可能包含私人信息，展开后仅在当前页面显示。' : 'Source text may contain private information. Reveal it to inspect this memory.'}</p>
+                <Button onClick={() => setSourceRevealed(true)}>{zh ? '查看来源原文' : 'Reveal source text'}</Button>
+              </div>
+            ) : sourceQuery.isLoading ? <Spinner label={t.facts.sourceLoading} />
+              : sourceQuery.isError ? <ErrorState message={(sourceQuery.error as Error).message} />
+              : sourceQuery.data?.redacted ? <p className="text-sm text-ghost">{zh ? '来源原文已隐藏。' : 'Source text is hidden.'}</p>
+              : (
+                <div className="space-y-3">
+                  {!!sourceQuery.data?.missing_count && <p className="text-xs text-brand-amber">{zh ? `有 ${sourceQuery.data.missing_count} 条来源已不可用。` : `${sourceQuery.data.missing_count} source records are unavailable.`}</p>}
+                  {!sourceQuery.data?.episodes.length && <p className="text-sm text-ghost">{t.facts.sourceMissing}</p>}
+                  {(sourceQuery.data?.episodes ?? []).map((e: MemoryEpisode) => (
+                    <div key={e.id} className="rounded-xl border border-line bg-ink-900/50 p-3">
+                      <div className="mb-2 flex flex-wrap items-center gap-2 text-[11px] text-ghost">
+                        <span className="text-brand-cyan">{e.date}</span>
+                        <Link to={`/conversations?session_id=${encodeURIComponent(e.session)}`} className="min-w-0 break-all text-brand-cyan hover:underline">{e.session} ↗</Link>
                       </div>
-                    ))}
-                  </div>
-                )
-              })()
-            )}
+                      <p className="max-h-80 overflow-auto whitespace-pre-wrap break-words text-xs leading-relaxed text-slate-300">{e.content}</p>
+                    </div>
+                  ))}
+                  {(sourceOffset > 0 || sourceQuery.data?.page.has_more) && (
+                    <div className="flex justify-between gap-2">
+                      <Button variant="ghost" disabled={sourceOffset === 0} onClick={() => setSourceOffset(Math.max(0, sourceOffset - 20))}>{zh ? '上一页' : 'Previous'}</Button>
+                      <Button variant="ghost" disabled={!sourceQuery.data?.page.has_more} onClick={() => setSourceOffset(sourceQuery.data?.page.next_offset ?? sourceOffset)}>{zh ? '下一页' : 'Next'}</Button>
+                    </div>
+                  )}
+                </div>
+              )}
           </div>
         )}
       </Modal>

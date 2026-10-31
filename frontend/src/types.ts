@@ -139,6 +139,15 @@ export interface SessionsIndex {
   sessions: SessionIndexItem[]
   page: Page<SessionIndexItem>
   next_offset: number | null
+  summary?: { total: number; pending: number; with_facts: number; working: number }
+}
+
+export interface FactSources {
+  fact_id: string
+  episodes: MemoryEpisode[]
+  page: Page<MemoryEpisode>
+  missing_count: number
+  redacted: boolean
 }
 
 export interface MemoryDump {
@@ -147,6 +156,7 @@ export interface MemoryDump {
   counts: MemoryCounts
   facts: MemoryFact[]
   episodes: MemoryEpisode[]
+  fact_facets?: { categories: string[]; sources: string[] }
   facts_page?: Page<MemoryFact>
   episodes_page?: Page<MemoryEpisode>
   next_offsets?: {
@@ -236,6 +246,8 @@ export interface RememberResult {
 }
 
 export interface CloseSessionResult {
+  outcomes_status?: 'completed' | 'error' | 'unavailable' | 'no_episodes' | 'disabled'
+  outcomes_error?: string | null
   ok: boolean
   session_id: string
   episodes: number

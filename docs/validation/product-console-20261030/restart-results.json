@@ -1,0 +1,12 @@
+{
+  "checks": [
+    "jobs_and_retry_history_survive_process_restart",
+    "linked_resolution_survives_process_restart",
+    "ignored_finding_survives_process_restart",
+    "model_configuration_and_test_survive_process_restart",
+    "forgotten_content_absent_retained_content_present_after_restart",
+    "corrected_cited_answer_after_restart",
+    "source_event_history_after_restart"
+  ],
+  "status": "passed"
+}

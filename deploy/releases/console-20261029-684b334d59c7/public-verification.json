@@ -1,0 +1,11 @@
+{
+  "release": "console-20261029-684b334d59c7",
+  "public_health": true,
+  "ready": true,
+  "assets_match_manifest": true,
+  "existing_demo_counts_unchanged": true,
+  "session_filter_summary": true,
+  "fact_filter_facets": true,
+  "source_route_redacted": true,
+  "invalid_filter_422": true
+}

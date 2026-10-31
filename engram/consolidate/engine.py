@@ -89,24 +89,17 @@ class ConsolidationEngine:
                 futs = {pool.submit(self.extractor.raw_items, ep): ep for ep in chrono}
                 for fut in as_completed(futs):
                     ep = futs[fut]
-                    try:
-                        raw[ep.id] = fut.result()
-                    except Exception:  # noqa: BLE001
-                        raw[ep.id] = []
+                    # A failed extraction is not a successful empty result. Abort before committing
+                    # facts or completion flags so the durable pending batch can be retried.
+                    raw[ep.id] = fut.result()
             for ep in chrono:  # chronological => canonical name is the first one actually stated
-                try:
-                    ep_facts[ep.id] = self.extractor.facts_from(ep, raw.get(ep.id, []))
-                except Exception:  # noqa: BLE001
-                    ep_facts[ep.id] = []
+                ep_facts[ep.id] = self.extractor.facts_from(ep, raw[ep.id])
         elif len(chrono) > 1:
             with ThreadPoolExecutor(max_workers=min(_xw, len(chrono))) as pool:
                 futs = {pool.submit(self.extractor.extract, ep): ep for ep in chrono}
                 for fut in as_completed(futs):
                     ep = futs[fut]
-                    try:
-                        ep_facts[ep.id] = fut.result()
-                    except Exception:  # noqa: BLE001
-                        ep_facts[ep.id] = []  # extraction failure → no facts from this episode
+                    ep_facts[ep.id] = fut.result()
         else:
             for ep in chrono:
                 ep_facts[ep.id] = self.extractor.extract(ep)

@@ -1,0 +1,86 @@
+{
+  "schema_version": 1,
+  "created_at": "2026-10-29T15:32:33.571167Z",
+  "updated_at": "2026-10-29T16:25:22.637172Z",
+  "status": "STOP",
+  "objective": "Engram 算法达到可复现的世界领先水平",
+  "stage": "核验基线并交付首个有证据的算法改进",
+  "evidence_standard": "完整日志口径核验；冻结可重放对照；最多两个机制候选；代码变更有实际数据对照与离线回归；未验证指标不宣称提升",
+  "source": {
+    "thread_id": "01a18848-d996-7dd2-b4a7-95394f99ac5f",
+    "rollout": "/Users/ywwl/.codex/sessions/2026/10/29/rollout-2026-10-29T23-30-41-01a18848-d996-7dd2-b4a7-95394f99ac5f.jsonl",
+    "state_db": null,
+    "measurement": "rollout"
+  },
+  "limits": {
+    "token_budget": 25000000,
+    "checkpoint_interval": 25000000,
+    "candidate_limit": 2,
+    "probe_token_limit": 5000000,
+    "probe_minutes": 5.0
+  },
+  "baseline_total_tokens": 162162,
+  "last_checkpoint_total_tokens": 13067503,
+  "last_checkpoint_candidate_count": 1,
+  "first_artifact_at": "2026-10-29T15:33:31.239800Z",
+  "artifacts": [
+    {
+      "value": "/Users/ywwl/Documents/Claude/Projects/Super memory/HANDOFF.md",
+      "recorded_at": "2026-10-29T15:33:31.239541Z"
+    },
+    {
+      "value": "/Users/ywwl/Documents/Claude/Projects/Super memory/results/algorithm_baseline_20261029.json",
+      "recorded_at": "2026-10-29T15:42:52.195991Z"
+    },
+    {
+      "value": "/Users/ywwl/Documents/Claude/Projects/Super memory/eval/evidence_coverage.py",
+      "recorded_at": "2026-10-29T15:44:08.105285Z"
+    },
+    {
+      "value": "/Users/ywwl/Documents/Claude/Projects/Super memory/docs/algorithm-evidence-20261030.zh-CN.md",
+      "recorded_at": "2026-10-29T16:25:22.627574Z"
+    },
+    {
+      "value": "/Users/ywwl/Documents/Claude/Projects/Super memory/results/evidence_coverage_full500_20261029.analysis.json",
+      "recorded_at": "2026-10-29T16:25:22.627797Z"
+    }
+  ],
+  "candidates": [
+    {
+      "value": "independent-positive-bm25-rrf",
+      "recorded_at": "2026-10-29T15:44:08.105558Z"
+    }
+  ],
+  "evidence_refs": [
+    {
+      "value": "repository:HEAD=267a850b; dirty changes preserved; baseline and mechanism probes dispatched",
+      "recorded_at": "2026-10-29T15:33:31.239807Z"
+    },
+    {
+      "value": "python3 eval/validate_results.py: two 500-row logs complete; historical scoring and metrics decoded",
+      "recorded_at": "2026-10-29T15:42:52.196894Z"
+    },
+    {
+      "value": "test:tests/test_evidence_coverage.py; fixed full500 same-k comparison registered in HANDOFF.md",
+      "recorded_at": "2026-10-29T15:44:08.105565Z"
+    },
+    {
+      "value": "full500:500 unique qids; 470 scored + 30 abs; fixed selector hashes; complete resume readback; 23 probe tests, full offline suite and final 13 reporting regressions passed",
+      "recorded_at": "2026-10-29T16:25:22.627804Z"
+    }
+  ],
+  "checkpoints": [
+    {
+      "recorded_at": "2026-10-29T16:25:22.637164Z",
+      "decision": "STOP",
+      "reason": "按用户最新要求完成离线阶段；候选小幅覆盖增益伴随更高时延，池外救回假设未获支持，保留原型不启用默认；世界领先及最终QA收益未证明。本台账仅报告协调线程用量，不以其充当全目标树PASS计量。",
+      "resume_when": null,
+      "total_tokens": 13067503,
+      "token_delta": 12905341,
+      "candidate_count": 1,
+      "artifact_count": 5,
+      "evidence_ref_count": 4,
+      "trigger_reasons": []
+    }
+  ]
+}
