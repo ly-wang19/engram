@@ -79,7 +79,8 @@ def test_forget_never_targets_data_root_or_parent(tmp_path, monkeypatch):
     svc = MemoryService(data_dir=str(data), embedder_name="hashing")
     removed: list[Path] = []
 
-    monkeypatch.setattr(shutil, "rmtree", lambda path: removed.append(Path(path).resolve()))
+    # **kw: on Windows forget also clears the lock it held afterwards, with ignore_errors=True
+    monkeypatch.setattr(shutil, "rmtree", lambda path, **kw: removed.append(Path(path).resolve()))
     monkeypatch.setattr(os, "remove", lambda path: removed.append(Path(path).resolve()))
 
     assert svc.forget("..") == {"ok": True, "message": "all memory for '..' erased"}
