@@ -19,7 +19,7 @@
 - 持久化：episodes.jsonl 改为追加写，只有删除或失效行超过四分之一时才重写；备份只覆盖要替换的文件，manifest 记录已提交字节数（`sizes.episodes`），读取时同 id 后一行生效。加载时同值浮点数共享一个对象。
 - 平台：新增 `engram/filelock.py`（POSIX 用 fcntl，Windows 用 msvcrt），去掉 Windows 上的三处硬阻塞；CI 增加 windows-latest。
 - 引擎与嵌入：`ENGRAM_LLM=codex` 交给宿主提供的 runner 执行（`llm/codex_llm.py`：全进程一次一个回合、每日上限、限流冷却、宿主忙时让路）；`python -m engram.embedded` 作为宿主托管的入口；watch 按 cwd 排除如我会话线程，并支持 `CODEX_HOME`。
-- [验收记录](ruwo-embed-step0-20261031.zh-CN.md)：离线完整测试 903 通过、1 跳过；按真实规模（2280 个会话、1 万条结论）合成的库，冷启动后进程约 270–286MB，峰值 293MB 以下；追加一个会话只写约 35KB。未部署，未提交。
+- [验收记录](ruwo-embed-step0-20261031.zh-CN.md)：离线完整测试 903 通过、1 跳过；Windows CI 846 通过（顺带修掉 Windows 上 forget 删不掉持有中的锁文件）。按真实规模（2280 个会话、1 万条结论）合成的库，冷启动后进程约 270–286MB，峰值 293MB 以下；追加一个会话只写约 35KB。分支已推送，未合 main，未部署。
 
 ## 2026-10-30：异常恢复与完成标记的可靠性修复
 

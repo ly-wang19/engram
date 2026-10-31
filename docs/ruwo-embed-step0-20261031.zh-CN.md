@@ -6,7 +6,7 @@ Claude Code。方案见如我开发目录 `docs/design/engram-personal-memory-mo
 
 - 隔离 worktree：`.claude/worktrees/ruwo-embed-20261031`，分支 `claude/ruwo-embed-20261031`，基于 HEAD 267a850b。
 - 主工作区开工时的全部未提交改动（44 个已跟踪文件、108 个未跟踪文件，不含 results/）已原样带入，并暂存为基线（`git add -A`，未提交）。所以 `git diff` 显示的就是本轮改动。
-- 未提交、未推送、未部署，没有动主工作区、8456/8443 实例和本机 8766 服务。
+- 本人 10-31 同意“提交并推送跑 CI”：分支已推送（不开 PR，不合 main），基线快照单独一个提交（2841664f），本轮改动在其后。未部署，没有动主工作区、8456/8443 实例和本机 8766 服务。
 
 ## 关口 1
 
@@ -14,7 +14,7 @@ Claude Code。方案见如我开发目录 `docs/design/engram-personal-memory-mo
 |---|---|---|
 | 中文问题能搜到 | 通过 | `tests/test_cjk_tokenize.py`（5 项）；`test_audit_no_embedder_blind_on_hashing_chinese_store`（2 字词“熔断”命中）；`tests/test_embedded.py` 经 HTTP 用 2 字词“合同”召回命中 |
 | 单人库内存低于 300MB | 按当前规模通过 | 按本机真实规模合成：2280 个 Codex 会话，每个 24k 字窗口、2k 字摘要，另有 1 万条结论，盘上 141MB。冷启动打开后进程 270–286MB（含约 40MB Python 本体），召回加追加写的峰值 289–293MB。改动前同一数据为 368MB |
-| Windows CI 全绿 | 未验证 | 已加 windows-latest 任务，也去掉了已知的三处硬阻塞；本地无法运行 Windows，推送前没有结果 |
+| Windows CI 全绿 | 通过 | [run 41177893191](https://github.com/ly-wang19/engram/actions/runs/41177893191)：windows-latest 846 通过、51 跳过（POSIX 专属）；Linux 3.10/3.12、前端、容器全部通过 |
 | Engram 全量测试通过 | 通过 | 离线完整测试 903 通过、1 跳过（开工基线 878 通过）；zero-setup、release check 通过；ruff 与基线相同；前端 tsc 和两种构建通过 |
 
 ## 改了什么（按方案的七处硬伤）
@@ -46,6 +46,15 @@ Claude Code。方案见如我开发目录 `docs/design/engram-personal-memory-mo
   - 服务端：`ENGRAM_EMBEDDED=1` 时只允许同源 frame；`ENGRAM_UI_DIST`；`ENGRAM_NO_DOTENV`。
   - 前端：`VITE_BASE`、`VITE_API_BASE`、`VITE_EMBEDDED`。嵌入版不显示登录页、密钥框和退出按钮。
 - **启动器**：`python -m engram.embedded`。端口 0 加 announce 文件；生成 0600 密钥，单命名空间 `me`，忽略 `ENGRAM_OPEN`；随父进程退出。
+
+## Windows CI 发现并修掉的问题
+
+第一次跑 Windows 时 838 通过、8 失败，修完后全绿：
+
+- **清空记忆在 Windows 上做不了。** `forget` 在持有命名空间里 `.service.lock` 的同时整目录删除，Windows 拒绝删除被打开的文件（WinError 32）。改为先清空目录，释放锁后再删锁文件和目录。
+- **等待时间设为 0 仍然会等。** watch 的 `quiet_seconds=0` 本应不等待，但 Windows 上刚写的文件 mtime 可能比 `time.time()` 晚几毫秒，被当成“仍在写”。0 现在表示不等。
+- **测试没考虑 Windows。** zero-setup 输出的路径统一用 `/`；密钥文件测试改为比较 TOML 转义后的路径；forget 安全测试的替身接受关键字参数。
+- **CI 配置的两处疏漏。** 一是 `vite.config.ts` 读 `process.env` 时没有 Node 类型，本地能过只因为借用了主仓库的 node_modules，现改为局部声明；二是 Windows 任务漏装了 mcp 依赖组。
 
 ## 已知边界
 
